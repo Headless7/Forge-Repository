@@ -40,6 +40,8 @@ const schema = z.object({
 
   EMAIL_FROM: z.string().default("Forge <no-reply@forge.local>"),
   SMTP_URL: optional,
+  /** Sends through Resend's HTTPS API (preferred over SMTP_URL when both are set). */
+  RESEND_API_KEY: optional,
   REQUIRE_EMAIL_VERIFICATION: bool,
 
   DISCORD_CLIENT_ID: optional,

@@ -94,11 +94,14 @@ Create a **new** Open Cloud API key (creator dashboard → Open Cloud → API ke
    S3_SECRET_ACCESS_KEY=<R2 secret>
    STORAGE_PUBLIC_ORIGIN=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 
-   SMTP_URL=smtps://resend:<RESEND_API_KEY>@smtp.resend.com:465
+   RESEND_API_KEY=<Resend API key>
    EMAIL_FROM=Forge <noreply@forgedev.app>
 
    ROBLOX_OPEN_CLOUD_API_KEY=<new key>
    ```
+
+   Email goes through Resend's HTTPS API: Railway's Hobby plan blocks outbound SMTP
+   (ports 25/465/587), so an `SMTP_URL` there only times out.
 
    Random secrets: run `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
    twice and paste the results. The server refuses to start with weak or placeholder secrets.

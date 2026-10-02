@@ -40,7 +40,7 @@ export default async function DevOutboxPage({ searchParams }: { searchParams: Pr
     <main className="mx-auto max-w-3xl px-4 py-10">
       <h1 className="text-xl font-semibold">Dev outbox</h1>
       <p className="mt-1 text-[13px] text-fg-muted">
-        Emails are recorded here because no <code className="rounded bg-surface-3 px-1">SMTP_URL</code> is configured. Links work as in a real inbox.
+        Emails are recorded here because neither <code className="rounded bg-surface-3 px-1">RESEND_API_KEY</code> nor <code className="rounded bg-surface-3 px-1">SMTP_URL</code> is configured. Links work as in a real inbox.
       </p>
       <div className="mt-6 grid gap-3">
         {emails.length === 0 ? <p className="text-[13px] text-fg-muted">No emails yet.</p> : null}

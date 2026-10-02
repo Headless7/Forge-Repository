@@ -382,7 +382,7 @@ All settings live in `.env` (see `.env.example` for descriptions).
 | `MAX_*_UPLOAD_MB` | Upload size limits per kind (image, video, audio, Roblox, file) |
 | `ROBLOX_PUBLIC_ASSET_FETCH` | `true` (default): previews try Roblox's no-sign-in download for referenced meshes/textures (works for few, mostly older assets); `false` = never contact Roblox without a key |
 | `ROBLOX_OPEN_CLOUD_API_KEY` | Open Cloud key with `legacy-asset` → manage. Lets previews fetch referenced meshes, textures and UI images (public ones and the owner's private ones) |
-| `SMTP_URL`, `EMAIL_FROM` | Real email delivery (otherwise the dev outbox) |
+| `RESEND_API_KEY` or `SMTP_URL`, `EMAIL_FROM` | Real email delivery (otherwise the dev outbox). `RESEND_API_KEY` sends over HTTPS — use it where outbound SMTP is blocked (Railway below Pro) |
 | `DISCORD_CLIENT_ID/SECRET`, `GOOGLE_CLIENT_ID/SECRET` | Enable OAuth sign-in (redirect: `{APP_URL}/api/auth/oauth/{provider}/callback`) |
 | `REALTIME_DRIVER` | `postgres` (multi-instance) or `memory` |
 | `ENABLE_INPROCESS_JOBS`, `CRON_SECRET` | Due-date reminders / email delivery in-process, or via `GET /api/cron/due-dates` with `Authorization: Bearer $CRON_SECRET` |

@@ -42,7 +42,7 @@ if (prod && !fs.existsSync(".next/BUILD_ID")) {
 }
 
 log(`Starting Next.js (${prod ? "production" : "development"}) on http://localhost:${port}`);
-if (!prod && !process.env.SMTP_URL) {
+if (!prod && !process.env.SMTP_URL && !process.env.RESEND_API_KEY) {
   // Emails are kept in a local outbox; this link (only in this terminal) opens it without signing in.
   process.env.DEV_OUTBOX_KEY ??= crypto.randomBytes(18).toString("base64url");
   log(`Dev outbox (password resets, invites): http://localhost:${port}/dev/outbox?key=${process.env.DEV_OUTBOX_KEY}`);

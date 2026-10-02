@@ -4,5 +4,5 @@ import { env } from "@/server/env";
 export const metadata = { title: "Reset password" };
 
 export default function ForgotPasswordPage() {
-  return <ForgotPasswordForm devOutbox={env.NODE_ENV !== "production" && !env.SMTP_URL} />;
+  return <ForgotPasswordForm devOutbox={env.NODE_ENV !== "production" && !env.SMTP_URL && !env.RESEND_API_KEY} />;
 }

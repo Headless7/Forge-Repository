@@ -39,11 +39,40 @@ function renderText(message: EmailMessage): string {
   return [...message.lines, ...(message.action ? ["", `${message.action.label}: ${message.action.url}`] : [])].join("\n\n");
 }
 
-let transport: Transporter | null | undefined;
-function smtp(): Transporter | null {
-  if (transport !== undefined) return transport;
-  transport = env.SMTP_URL ? nodemailer.createTransport(env.SMTP_URL) : null;
-  return transport;
+interface OutgoingMail {
+  /** Outbox row id: a retry after an unrecorded success must not send twice. */
+  id: string;
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}
+type Sender = (mail: OutgoingMail) => Promise<void>;
+
+/** Resend's HTTPS API: works where outbound SMTP is blocked (e.g. Railway below the Pro plan). */
+function resendSender(apiKey: string): Sender {
+  return async (mail) => {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json", "idempotency-key": mail.id },
+      body: JSON.stringify({ from: env.EMAIL_FROM, to: [mail.to], subject: mail.subject, text: mail.text, html: mail.html }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) throw new Error(`Resend API ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}`);
+  };
+}
+
+function smtpSender(transport: Transporter): Sender {
+  return async (mail) => {
+    await transport.sendMail({ from: env.EMAIL_FROM, to: mail.to, subject: mail.subject, text: mail.text, html: mail.html });
+  };
+}
+
+let sender: Sender | null | undefined;
+function emailSender(): Sender | null {
+  if (sender !== undefined) return sender;
+  sender = env.RESEND_API_KEY ? resendSender(env.RESEND_API_KEY) : env.SMTP_URL ? smtpSender(nodemailer.createTransport(env.SMTP_URL)) : null;
+  return sender;
 }
 
 /**
@@ -51,7 +80,7 @@ function smtp(): Transporter | null {
  * only sent for work that actually committed. Delivery happens right after.
  */
 export async function sendEmail(ex: Executor, message: EmailMessage) {
-  const deliverable = Boolean(smtp());
+  const deliverable = Boolean(emailSender());
   await ex.insert(emailOutbox).values({
     to: message.to,
     subject: message.subject,
@@ -69,8 +98,8 @@ export async function sendEmail(ex: Executor, message: EmailMessage) {
 }
 
 export async function deliverOutbox() {
-  const transporter = smtp();
-  if (!transporter) return;
+  const send = emailSender();
+  if (!send) return;
   const pending = await db
     .select()
     .from(emailOutbox)
@@ -79,7 +108,7 @@ export async function deliverOutbox() {
     .limit(20);
   for (const email of pending) {
     try {
-      await transporter.sendMail({ from: env.EMAIL_FROM, to: email.to, subject: email.subject, text: email.textBody, html: email.htmlBody });
+      await send({ id: email.id, to: email.to, subject: email.subject, text: email.textBody, html: email.htmlBody });
       await db.update(emailOutbox).set({ status: "SENT", sentAt: now(), attempts: email.attempts + 1 }).where(eq(emailOutbox.id, email.id));
     } catch (error) {
       const attempts = email.attempts + 1;
