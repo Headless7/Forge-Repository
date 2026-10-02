@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+.next-verify/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# local runtime data (embedded postgres, uploaded media, dev mail)
+.data/
+
+# env files (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# test / verification artifacts
+coverage/
+test-results/
+.verify/
+
+# misc
+.DS_Store
+Thumbs.db
+npm-debug.log*
+
+# not part of the app (other tools and private documents live here) — never commit
+tmp/
+outputs/
+prompt.txt
