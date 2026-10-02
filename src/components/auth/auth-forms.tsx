@@ -29,8 +29,8 @@ async function postAuth(action: string, body: unknown) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  const json = (await res.json().catch(() => null)) as { error?: { message: string; details?: { issues?: Array<{ path: string; message: string }> } } } | null;
-  if (!res.ok) throw new Error(json?.error?.message ?? "Something went wrong. Please try again.");
+  const json = (await res.json().catch(() => null)) as { error?: { message: string; details?: { code?: string; issues?: Array<{ path: string; message: string }> } } } | null;
+  if (!res.ok) throw Object.assign(new Error(json?.error?.message ?? "Something went wrong. Please try again."), { code: json?.error?.details?.code });
   return json;
 }
 
@@ -124,6 +124,8 @@ export function SignInForm({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(error ?? null);
   const [loading, setLoading] = useState<string | null>(null);
+  // Set when sign-in was refused for an unconfirmed address: offers a fresh confirmation link.
+  const [unconfirmed, setUnconfirmed] = useState<{ email: string; resent: boolean } | null>(null);
   const target = safeNext(next);
 
   async function signIn(credentials: { email: string; password: string }, key: string) {
@@ -134,6 +136,7 @@ export function SignInForm({
     }
     setErrors({});
     setFormError(null);
+    setUnconfirmed(null);
     setLoading(key);
     try {
       await postAuth("sign-in", parsed.data);
@@ -141,6 +144,20 @@ export function SignInForm({
       router.refresh();
     } catch (e) {
       setFormError(errorMessage(e));
+      if ((e as { code?: string }).code === "EMAIL_NOT_VERIFIED") setUnconfirmed({ email: parsed.data.email, resent: false });
+      setLoading(null);
+    }
+  }
+
+  async function resendConfirmation(address: string) {
+    setLoading("resend");
+    try {
+      await postAuth("resend-verification", { email: address });
+      setFormError(null);
+      setUnconfirmed({ email: address, resent: true });
+    } catch (e) {
+      setFormError(errorMessage(e));
+    } finally {
       setLoading(null);
     }
   }
@@ -165,6 +182,15 @@ export function SignInForm({
     >
       {expired ? <Alert tone="info">Your session expired. Sign in again to continue where you left off.</Alert> : null}
       {formError ? <Alert>{formError}</Alert> : null}
+      {unconfirmed?.resent ? (
+        <Alert tone="success">
+          We sent a new confirmation link to <span className="font-medium">{unconfirmed.email}</span>. It can take a minute to arrive — check spam too.
+        </Alert>
+      ) : unconfirmed ? (
+        <Button type="button" variant="secondary" size="lg" className="mb-4 w-full" loading={loading === "resend"} onClick={() => void resendConfirmation(unconfirmed.email)}>
+          Send a new confirmation link
+        </Button>
+      ) : null}
       <OAuthButtons providers={providers} next={target} />
       <form onSubmit={onSubmit} noValidate className="grid gap-3.5">
         <div>

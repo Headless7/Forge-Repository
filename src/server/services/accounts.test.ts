@@ -68,6 +68,21 @@ describe("authentication", () => {
     await expectAppError(accounts.signIn({ email, password: "old password" }, meta), "UNAUTHORIZED");
     await expect(accounts.signIn({ email, password: "new password!" }, meta)).resolves.toHaveProperty("session");
   });
+
+  it("sends a signed-out, unconfirmed account a new confirmation link", async () => {
+    const email = `unconfirmed_${stamp()}@test.dev`;
+    const ip = { ip: `10.8.${Math.floor(Math.random() * 250)}.1`, userAgent: "vitest" };
+    await accounts.signUp({ email, password: "pass word 1", displayName: "Unconfirmed" }, ip);
+    const first = await latestLink(email, "verify-email");
+    await expect(accounts.resendVerificationByEmail({ email: email.toUpperCase() }, ip)).resolves.toEqual({ ok: true });
+    await expect(accounts.resendVerificationByEmail({ email: `ghost_${stamp()}@test.dev` }, ip)).resolves.toEqual({ ok: true });
+    const second = await latestLink(email, "verify-email");
+    expect(second).not.toBe(first);
+
+    await accounts.verifyEmail(second);
+    await accounts.resendVerificationByEmail({ email }, ip);
+    expect(await latestLink(email, "verify-email")).toBe(second);
+  });
 });
 
 describe("due-date reminders", () => {

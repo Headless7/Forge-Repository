@@ -179,13 +179,23 @@ export async function resendVerification(actor: Actor) {
   return { alreadyVerified: false };
 }
 
+/** Signed-out route to a new link (sign-in refuses unconfirmed accounts). Same answer whether or not the account exists. */
+export async function resendVerificationByEmail(input: { email: string }, meta: RequestMeta) {
+  const email = normalizeEmail(input.email);
+  if (meta.ip) await enforceSharedRateLimit(`verify-resend:ip:${meta.ip}`, 10, 60 * 60 * 1000);
+  await enforceSharedRateLimit(`verify-resend:email:${email}`, 5, 60 * 60 * 1000);
+  const [user] = await db.select().from(users).where(eq(users.email, email));
+  if (user && !user.emailVerifiedAt) await db.transaction((tx) => sendVerification(tx, user));
+  return { ok: true };
+}
+
 export async function verifyEmail(token: string) {
   const [row] = await db
     .select()
     .from(authTokens)
     .where(and(eq(authTokens.tokenHash, hashToken(token)), eq(authTokens.purpose, "EMAIL_VERIFICATION")));
   if (!row || row.usedAt || row.expiresAt.getTime() < now().getTime()) {
-    throw invalid("This confirmation link is invalid or has expired. Request a new one from your profile.");
+    throw invalid("This confirmation link is invalid or has expired. Sign in to get a new one.");
   }
   await db.transaction(async (tx) => {
     const claimed = await tx

@@ -53,6 +53,10 @@ export async function POST(req: Request, context: { params: Promise<{ action: st
         const input = forgotPasswordSchema.parse(body);
         return NextResponse.json(await accounts.requestPasswordReset(input, meta));
       }
+      case "resend-verification": {
+        const input = forgotPasswordSchema.parse(body);
+        return NextResponse.json(await accounts.resendVerificationByEmail(input, meta));
+      }
       case "reset-password": {
         const input = resetPasswordSchema.parse(body);
         const { session } = await accounts.resetPassword(input, meta);
