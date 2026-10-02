@@ -10,6 +10,11 @@
  *
  * The verification database is seeded with the demo studio on first start. To start over,
  * stop it and delete .data/verify (the database is recreated empty only if you drop it).
+ *
+ * VERIFY_STORAGE=r2 runs the same thing against a real Cloudflare R2 bucket instead of local
+ * files (database `<name>_staging`, bucket R2_STAGING_BUCKET or `forge-media-staging`, keys
+ * R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY from .env) — the production storage
+ * path, end to end, before going live.
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -19,8 +24,9 @@ import { loadEnv, requireEnv } from "./lib/env";
 import { ensureLocalDatabase } from "./lib/local-db";
 
 loadEnv(true);
+const useR2 = process.env.VERIFY_STORAGE === "r2";
 const base = new URL(requireEnv("DATABASE_URL"));
-const verifyName = `${base.pathname.replace(/^\//, "")}_verify`;
+const verifyName = `${base.pathname.replace(/^\//, "")}_${useR2 ? "staging" : "verify"}`;
 const verify = new URL(base);
 verify.pathname = `/${verifyName}`;
 if (verify.toString() === base.toString()) throw new Error("Refusing to run verification against the working database.");
@@ -30,15 +36,30 @@ const origin = `http://127.0.0.1:${port}`;
 const handle = await ensureLocalDatabase({ databaseUrl: base.toString(), extraDatabases: [verifyName], log });
 
 // Everything below — migrations, seed, the server — sees only the verification copy.
+const storageEnv: Record<string, string> = useR2
+  ? (() => {
+      const endpoint = `https://${requireEnv("R2_ACCOUNT_ID")}.r2.cloudflarestorage.com`;
+      return {
+        STORAGE_DRIVER: "s3",
+        S3_BUCKET: process.env.R2_STAGING_BUCKET ?? "forge-media-staging",
+        S3_REGION: "auto",
+        S3_ENDPOINT: endpoint,
+        S3_FORCE_PATH_STYLE: "true",
+        S3_ACCESS_KEY_ID: requireEnv("R2_ACCESS_KEY_ID"),
+        S3_SECRET_ACCESS_KEY: requireEnv("R2_SECRET_ACCESS_KEY"),
+        STORAGE_PUBLIC_ORIGIN: endpoint,
+      };
+    })()
+  : { STORAGE_DRIVER: "local", STORAGE_LOCAL_DIR: path.resolve(".data/verify/storage") };
+if (storageEnv.STORAGE_DRIVER === "s3" && storageEnv.S3_BUCKET === "forge-media") throw new Error("Refusing to test against the production bucket.");
 Object.assign(process.env, {
   DATABASE_URL: verify.toString(),
-  STORAGE_DRIVER: "local",
-  STORAGE_LOCAL_DIR: path.resolve(".data/verify/storage"),
+  ...storageEnv,
   APP_URL: origin,
   NEXT_DIST_DIR: ".next-verify",
   DEV_ALLOWED_ORIGINS: "127.0.0.1",
 });
-log(`Verification database: ${verifyName}; storage: .data/verify/storage`);
+log(`Verification database: ${verifyName}; storage: ${useR2 ? `R2 bucket ${storageEnv.S3_BUCKET}` : ".data/verify/storage"}`);
 await runMigrations(verify.toString());
 if (!(await isDatabaseSeeded(verify.toString()))) {
   log("Empty verification database — loading the demo studio.");
