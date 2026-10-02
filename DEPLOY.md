@@ -33,7 +33,7 @@ never into chat, tickets or git.
 ## 3. Cloudflare (domain + R2)
 
 1. Domain: buy one (Cloudflare Registrar sells at cost) or add an existing one to Cloudflare.
-   The app will live at e.g. `forge.yourdomain.com`.
+   The app lives at `forgedev.app`.
 2. R2 → **Create bucket** `forge-media` (location: automatic). Leave public access **off**.
    Create a second one, `forge-media-staging`, for testing before launch.
 3. R2 → bucket → Settings → **CORS policy** (replace the origin with yours; for the staging
@@ -42,7 +42,7 @@ never into chat, tickets or git.
    ```json
    [
      {
-       "AllowedOrigins": ["https://forge.yourdomain.com"],
+       "AllowedOrigins": ["https://forgedev.app"],
        "AllowedMethods": ["GET", "HEAD", "PUT"],
        "AllowedHeaders": ["content-type", "range"],
        "ExposeHeaders": ["ETag", "Content-Length", "Content-Range", "Accept-Ranges"],
@@ -58,7 +58,7 @@ never into chat, tickets or git.
 
 ## 4. Resend (email)
 
-1. Add your domain (e.g. `yourdomain.com`) and create the DNS records Resend lists (in
+1. Add your domain (`forgedev.app`) and create the DNS records Resend lists (in
    Cloudflare DNS). Wait until it shows *Verified*.
 2. Create an API key with *Sending access*.
 
@@ -74,7 +74,7 @@ Create a **new** Open Cloud API key (creator dashboard → Open Cloud → API ke
 3. App service → **Variables** (Raw editor), fill in your values:
 
    ```
-   APP_URL=https://forge.yourdomain.com
+   APP_URL=https://forgedev.app
    DATABASE_URL=${{Postgres.DATABASE_URL}}
    EMBEDDED_POSTGRES=false
    AUTH_SECRET=<48+ random characters>
@@ -95,14 +95,14 @@ Create a **new** Open Cloud API key (creator dashboard → Open Cloud → API ke
    STORAGE_PUBLIC_ORIGIN=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 
    SMTP_URL=smtps://resend:<RESEND_API_KEY>@smtp.resend.com:465
-   EMAIL_FROM=Forge <noreply@yourdomain.com>
+   EMAIL_FROM=Forge <noreply@forgedev.app>
 
    ROBLOX_OPEN_CLOUD_API_KEY=<new key>
    ```
 
    Random secrets: run `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
    twice and paste the results. The server refuses to start with weak or placeholder secrets.
-4. App service → Settings → **Networking → Custom domain** `forge.yourdomain.com`, then add the
+4. App service → Settings → **Networking → Custom domain** `forgedev.app`, then add the
    CNAME record Railway shows in Cloudflare DNS (*DNS only*, grey cloud). HTTPS is automatic.
 5. Deploy. The log shows `Database migrations are up to date`, then the health check passes.
    Production starts empty: open the site, **Sign up** — the first account creates its studio.
@@ -113,6 +113,6 @@ Create a **new** Open Cloud API key (creator dashboard → Open Cloud → API ke
   feedback; check the email for an invitation arrives.
 - Railway → Postgres → Backups: turn on scheduled backups. R2: keep a copy of important
   files elsewhere or enable object versioning when available.
-- Add an uptime check for `https://forge.yourdomain.com/api/health` (UptimeRobot / Better
+- Add an uptime check for `https://forgedev.app/api/health` (UptimeRobot / Better
   Stack free tier).
 - Keep one app instance: background media work and some limits live in that process.
