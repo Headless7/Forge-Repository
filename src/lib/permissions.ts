@@ -24,6 +24,26 @@ export const ROLE_DESCRIPTIONS: Record<Role, string> = {
 
 export const ROLE_RANK: Record<Role, number> = { OWNER: 50, ADMIN: 40, MANAGER: 30, MEMBER: 20, VIEWER: 10 };
 
+/** Membership scope: STUDIO = every project the role allows; PROJECTS = only projects the person was added to. */
+export const MEMBER_ACCESS = ["STUDIO", "PROJECTS"] as const;
+export type MemberAccess = (typeof MEMBER_ACCESS)[number];
+
+/** Owners and admins run the whole studio, so they are never limited to projects. */
+export function isStudioWideRole(role: string): boolean {
+  return role === "OWNER" || role === "ADMIN";
+}
+
+/**
+ * Whether a studio member can open a project — the one rule behind every project access check
+ * (mirrored in SQL by `accessibleProjectIds`). Owners/admins: every project. Project-only
+ * collaborators: the projects they were added to. Others: studio projects plus private ones they're on.
+ */
+export function memberCanOpenProject(member: { role: string; access: string }, project: { visibility: string }, isProjectMember: boolean): boolean {
+  if (isStudioWideRole(member.role)) return true;
+  if (member.access === "PROJECTS") return isProjectMember;
+  return project.visibility === "STUDIO" || isProjectMember;
+}
+
 export const PERMISSIONS = [
   "studio.update",
   "studio.delete",

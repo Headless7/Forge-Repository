@@ -164,9 +164,11 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
       <ul className="divide-y divide-border rounded-lg border border-border">
         {(access.data ?? []).map((m) => {
           const privileged = m.studioRole === "OWNER" || m.studioRole === "ADMIN";
+          // Private projects, and project-only collaborators anywhere, need to be added explicitly.
+          const explicit = p.visibility === "PRIVATE" || m.projectsOnly;
           return (
             <li key={m.userId} className="flex flex-wrap items-center gap-3 px-3 py-2">
-              {p.visibility === "PRIVATE" ? (
+              {explicit ? (
                 <Checkbox
                   checked={m.hasAccess}
                   disabled={!canEdit || privileged}
@@ -179,12 +181,13 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
                 <p className="truncate text-[13px] font-medium">{m.displayName}</p>
                 <p className="truncate text-[11.5px] text-fg-subtle">
                   @{m.username} · studio {ROLE_LABELS[m.studioRole]}
+                  {m.projectsOnly ? " · projects only" : ""}
                 </p>
               </div>
               <div className="w-56">
                 <Select<string>
                   aria-label={`Project role for ${m.displayName}`}
-                  disabled={!canEdit || privileged || (!m.hasAccess && p.visibility === "PRIVATE")}
+                  disabled={!canEdit || privileged || (!m.hasAccess && explicit)}
                   value={privileged ? m.studioRole : (m.projectRole ?? "INHERIT")}
                   onValueChange={(v) => setMember.mutate({ projectId: p.id, userId: m.userId, member: true, role: v === "INHERIT" ? null : (v as Role) })}
                   options={

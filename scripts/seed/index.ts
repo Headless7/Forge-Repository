@@ -159,7 +159,7 @@ export async function seed({ reset = false }: { reset?: boolean } = {}) {
   };
 
   // ── Studio & membership ──────────────────────────────────────────────────
-  const studio = await as("giorgos", T(28), (a) => studios.createStudio(a, { name: "Nightfall Studios", iconEmoji: "🌙" }));
+  const studio = await as("giorgos", T(28), (a) => studios.provisionStudio(a, { name: "Nightfall Studios", iconEmoji: "🌙" }));
   await as("giorgos", T(28), (a) => studios.updateStudio(a, { studioId: studio.id, slug: "nightfall" }));
   for (const account of DEMO_ACCOUNTS) {
     if (account.username === "giorgos" || account.username === "omar") {
@@ -524,7 +524,7 @@ export async function seed({ reset = false }: { reset?: boolean } = {}) {
   await as("giorgos", T(4), (a) => cards.createCard(a, { projectId: proto.id, columnId: testing.id, title: "Movement feel test (dash + double jump)", assigneeIds: [u.kenji!.id] }));
 
   // ── Second studio (isolation demo) ────────────────────────────────────────
-  const ember = await as("omar", T(15), (a) => studios.createStudio(a, { name: "Emberlight Games", iconEmoji: "🔥" }));
+  const ember = await as("omar", T(15), (a) => studios.provisionStudio(a, { name: "Emberlight Games", iconEmoji: "🔥" }));
   await as("omar", T(15), (a) => studios.updateStudio(a, { studioId: ember.id, slug: "emberlight" }));
   const sky = await as("omar", T(15), (a) =>
     projects.createProject(a, { studioId: ember.id, name: "Skyforge Tycoon", key: "SKY", icon: "☁️", color: "#22d3ee", template: "roblox" }),

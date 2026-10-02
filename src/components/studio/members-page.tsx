@@ -5,7 +5,7 @@ import { Copy, LogOut, MailPlus, RefreshCw, Trash2, UserMinus } from "lucide-rea
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import { canGrantRole, canManageMember, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLES, type Role } from "@/lib/permissions";
+import { canGrantRole, canManageMember, isStudioWideRole, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLES, type MemberAccess, type Role } from "@/lib/permissions";
 import { qk, useRpcMutation } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
 import type { MemberDTO } from "@/lib/types";
@@ -14,7 +14,7 @@ import { formatShortDate, timeAgo } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { useShell } from "../shell/shell-context";
 import { Button } from "../ui/button";
-import { Badge, Select } from "../ui/controls";
+import { Badge, Checkbox, Select } from "../ui/controls";
 import { ConfirmDialog, Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { FieldError, Input, Label } from "../ui/input";
 
@@ -23,8 +23,14 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("MEMBER");
+  const [access, setAccess] = useState<MemberAccess>("STUDIO");
+  const [projectIds, setProjectIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [projectError, setProjectError] = useState<string | null>(null);
   const [link, setLink] = useState<string | null>(null);
+  const projects = useQuery({ queryKey: qk.projects(studio.id), queryFn: () => rpc("project.list", { studioId: studio.id }), enabled: open, staleTime: 30_000 });
+  // Owners and admins run the whole studio, so a project-only invitation offers the other roles.
+  const roles = ROLES.filter((r) => canGrantRole(studio.role, r) && (access === "STUDIO" || !isStudioWideRole(r)));
   const invite = useRpcMutation("invitation.create", {
     onSuccess: (result) => {
       setLink(result.url);
@@ -40,7 +46,16 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       return;
     }
     setError(null);
-    invite.mutate({ studioId: studio.id, email: parsed.data, role });
+    if (access === "PROJECTS" && projectIds.length === 0) {
+      setProjectError("Choose at least one project.");
+      return;
+    }
+    setProjectError(null);
+    invite.mutate({ studioId: studio.id, email: parsed.data, role, access, projectIds: access === "PROJECTS" ? projectIds : undefined });
+  };
+  const chooseAccess = (value: MemberAccess) => {
+    setAccess(value);
+    if (value === "PROJECTS" && isStudioWideRole(role)) setRole("MEMBER");
   };
   const close = (value: boolean) => {
     onOpenChange(value);
@@ -48,6 +63,9 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       setLink(null);
       setEmail("");
       setRole("MEMBER");
+      setAccess("STUDIO");
+      setProjectIds([]);
+      setProjectError(null);
     }
   };
   return (
@@ -79,9 +97,51 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
               <FieldError>{error}</FieldError>
             </div>
             <div>
+              <Label>Access</Label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {(
+                  [
+                    ["STUDIO", "Whole studio", "Every project their role allows."],
+                    ["PROJECTS", "Only specific projects", "For freelancers and partners."],
+                  ] as const
+                ).map(([value, title, hint]) => (
+                  <label key={value} className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border-strong p-2.5 has-[:checked]:border-accent has-[:checked]:bg-accent-soft">
+                    <input type="radio" name="access" value={value} checked={access === value} onChange={() => chooseAccess(value)} className="mt-1 accent-[var(--accent)]" />
+                    <span>
+                      <span className="block text-[13px] font-medium">{title}</span>
+                      <span className="block text-[12px] text-fg-muted">{hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {access === "PROJECTS" ? (
+              <div>
+                <Label>Projects</Label>
+                <div className="scrollbar-thin grid max-h-40 gap-1 overflow-y-auto rounded-lg border border-border-strong p-2">
+                  {projects.data?.length ? (
+                    projects.data.map((p) => (
+                      <label key={p.id} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-[13px] hover:bg-surface-3">
+                        <Checkbox
+                          checked={projectIds.includes(p.id)}
+                          onCheckedChange={(checked) => setProjectIds((ids) => (checked ? [...ids, p.id] : ids.filter((id) => id !== p.id)))}
+                        />
+                        <span>{p.icon}</span>
+                        <span className="truncate">{p.name}</span>
+                      </label>
+                    ))
+                  ) : (
+                    <p className="px-1.5 py-1 text-[12px] text-fg-muted">{projects.isPending ? "Loading projects…" : "No projects yet."}</p>
+                  )}
+                </div>
+                <FieldError>{projectError}</FieldError>
+                <p className="mt-1 text-[11px] text-fg-subtle">They won&apos;t see other projects, studio-wide activity or the full member list.</p>
+              </div>
+            ) : null}
+            <div>
               <Label>Role</Label>
               <div className="grid gap-1.5">
-                {ROLES.filter((r) => canGrantRole(studio.role, r)).map((r) => (
+                {roles.map((r) => (
                   <label key={r} className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border-strong p-2.5 has-[:checked]:border-accent has-[:checked]:bg-accent-soft">
                     <input type="radio" name="role" value={r} checked={role === r} onChange={() => setRole(r)} className="mt-1 accent-[var(--accent)]" />
                     <span>
@@ -163,6 +223,7 @@ export function MembersPage({ initialMembers }: { initialMembers: MemberDTO[] })
                 <div className="min-w-0 flex-1">
                   <p className="flex items-center gap-2 truncate text-[13.5px] font-medium">
                     {m.displayName} {m.id === user.id ? <Badge>You</Badge> : null}
+                    {m.access === "PROJECTS" ? <Badge tone="warning">Projects only</Badge> : null}
                   </p>
                   <p className="truncate text-[12px] text-fg-subtle">
                     @{m.username}
@@ -178,6 +239,20 @@ export function MembersPage({ initialMembers }: { initialMembers: MemberDTO[] })
                   onBlur={(e) => e.target.value !== (m.title ?? "") && update.mutate({ studioId: studio.id, userId: m.id, title: e.target.value || null })}
                   className="h-8 w-44 rounded-md border border-transparent bg-transparent px-2 text-[12.5px] text-fg-muted outline-none hover:border-border-strong focus:border-accent focus:bg-surface-3 disabled:hover:border-transparent"
                 />
+                {manageable && !isStudioWideRole(m.role) ? (
+                  <div className="w-36">
+                    <Select<MemberAccess>
+                      aria-label={`Access for ${m.displayName}`}
+                      value={m.access}
+                      onValueChange={(access) => update.mutate({ studioId: studio.id, userId: m.id, access })}
+                      options={[
+                        { value: "STUDIO", label: "Whole studio" },
+                        { value: "PROJECTS", label: "Projects only" },
+                      ]}
+                      className="h-8"
+                    />
+                  </div>
+                ) : null}
                 <div className="w-32">
                   {manageable ? (
                     <Select<Role>
@@ -211,11 +286,25 @@ export function MembersPage({ initialMembers }: { initialMembers: MemberDTO[] })
                 {invitations.data.map((inv) => (
                   <li key={inv.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-[13px]">
                     <span className="min-w-0 flex-1 truncate font-medium">{inv.email}</span>
+                    {inv.access === "PROJECTS" ? (
+                      <span className="max-w-56 truncate text-[12px] text-fg-muted" title={inv.projects.map((p) => p.name).join(", ")}>
+                        Only {inv.projects.map((p) => p.name).join(", ") || "removed projects"}
+                      </span>
+                    ) : null}
                     <span className="text-fg-muted">{ROLE_LABELS[inv.role as Role] ?? inv.role}</span>
                     <span className="text-[12px] text-fg-subtle">
                       {inv.expired ? <span className="text-danger">expired</span> : `expires ${formatShortDate(inv.expiresAt)}`} · by {inv.invitedBy ?? "someone"} {timeAgo(inv.createdAt)}
                     </span>
-                    <Button size="xs" variant="ghost" loading={resend.isPending && resend.variables?.email === inv.email} onClick={() => resend.mutate({ studioId: studio.id, email: inv.email, role: inv.role as Role })}>
+                    <Button size="xs" variant="ghost" loading={resend.isPending && resend.variables?.email === inv.email} onClick={() =>
+                        resend.mutate({
+                          studioId: studio.id,
+                          email: inv.email,
+                          role: inv.role as Role,
+                          access: inv.access,
+                          projectIds: inv.access === "PROJECTS" ? inv.projects.map((p) => p.id) : undefined,
+                        })
+                      }
+                    >
                       <RefreshCw /> Resend
                     </Button>
                     <Button size="xs" variant="danger-ghost" onClick={() => revoke.mutate({ invitationId: inv.id })}>

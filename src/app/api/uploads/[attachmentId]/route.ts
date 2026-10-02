@@ -5,6 +5,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { NextResponse } from "next/server";
+import { requireCard } from "@/server/access";
 import { requireRouteSession } from "@/server/auth/route-session";
 import { AppError, forbidden, invalid, notFound } from "@/server/errors";
 import { errorResponse, isTrustedOrigin } from "@/server/http";
@@ -32,6 +33,8 @@ export async function PUT(req: Request, context: { params: Promise<{ attachmentI
     const attachment = await getPendingUpload(attachmentId);
     if (!attachment) throw notFound("Upload");
     if (attachment.uploadedById !== actor.userId) throw forbidden();
+    // Still has access to the card (not removed from the studio or project since starting).
+    await requireCard(actor.userId, attachment.cardId);
     if (attachment.status !== "PENDING") throw invalid("This upload was already completed.");
 
     const store = storage();

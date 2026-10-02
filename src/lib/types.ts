@@ -2,7 +2,7 @@
  * Data transfer objects shared by the server (producers) and the client (consumers).
  * Dates are ISO strings so every DTO is JSON-serialisable.
  */
-import type { CardPermissions, Permission, Role } from "./permissions";
+import type { CardPermissions, MemberAccess, Permission, Role } from "./permissions";
 
 export type CardState = "NOT_SUBMITTED" | "IN_PROGRESS" | "NEEDS_REVIEW" | "CHANGES_REQUESTED" | "APPROVED";
 export type Priority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
@@ -46,6 +46,8 @@ export interface MemberDTO extends UserDTO {
   role: Role;
   title: string | null;
   online: boolean;
+  /** PROJECTS: an external collaborator limited to the projects they were added to. */
+  access: MemberAccess;
 }
 
 export interface LabelDTO {

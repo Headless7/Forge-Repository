@@ -1,13 +1,13 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ShieldCheck } from "lucide-react";
+import { HardDrive, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useRpcMutation } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
-import { formatDateTime } from "@/lib/utils";
+import { formatBytes, formatDateTime } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { PROJECT_EMOJIS } from "../shell/create-project-dialog";
 import { useShell } from "../shell/shell-context";
@@ -27,6 +27,7 @@ const AUDIT_TEXT: Record<string, string> = {
   "project.member_set": "changed project access",
   "project.member_removed": "removed someone from a project",
   "member.role_changed": "changed a member's role",
+  "member.access_changed": "changed a member's access",
   "member.removed": "removed a member",
   "member.left": "left the studio",
   "invitation.created": "invited someone",
@@ -42,6 +43,7 @@ function auditDetail(data: Record<string, unknown>) {
   if (typeof data.key === "string") parts.push(`${data.key}${typeof data.title === "string" ? ` “${data.title}”` : ""}`);
   if (typeof data.from === "string" && typeof data.to === "string") parts.push(`${data.from} → ${data.to}`);
   if (typeof data.role === "string" && !data.from) parts.push(data.role.toLowerCase());
+  if (data.access === "PROJECTS" && !data.from) parts.push("projects only");
   return parts.join(" · ");
 }
 
@@ -59,6 +61,8 @@ export function StudioSettings() {
     },
   });
   const audit = useQuery({ queryKey: ["audit", studio.id], queryFn: () => rpc("audit.list", { studioId: studio.id }), enabled: can("audit.view") });
+  const storage = useQuery({ queryKey: ["storage", studio.id], queryFn: () => rpc("studio.storage", { studioId: studio.id }) });
+  const usedShare = storage.data ? Math.min(1, storage.data.usedBytes / storage.data.limitBytes) : 0;
 
   return (
     <div className="scrollbar-thin h-full overflow-y-auto">
@@ -96,6 +100,38 @@ export function StudioSettings() {
               </Button>
             </div>
           </div>
+        </section>
+
+        <section className="rounded-xl border border-border bg-surface-2 p-5">
+          <h2 className="flex items-center gap-2 text-[15px] font-semibold">
+            <HardDrive className="size-4 text-fg-muted" /> Storage
+          </h2>
+          <p className="mt-0.5 text-[12.5px] text-fg-muted">
+            Uploaded files count once each, including archived ones. Permanently deleting cards or projects frees their space.
+          </p>
+          {storage.data ? (
+            <div className="mt-4">
+              <div className="flex items-baseline justify-between text-[13px]">
+                <span>
+                  <strong>{formatBytes(storage.data.usedBytes)}</strong> of {formatBytes(storage.data.limitBytes)} used
+                </span>
+                <span className="text-fg-subtle">{Math.round(usedShare * 100)}%</span>
+              </div>
+              <div
+                role="meter"
+                aria-label="Studio storage used"
+                aria-valuemin={0}
+                aria-valuemax={storage.data.limitBytes}
+                aria-valuenow={storage.data.usedBytes}
+                className="mt-2 h-2 overflow-hidden rounded-full bg-surface-4"
+              >
+                <div className={cn("h-full rounded-full", usedShare >= 0.9 ? "bg-danger" : "bg-accent")} style={{ width: `${Math.max(usedShare * 100, usedShare > 0 ? 1 : 0)}%` }} />
+              </div>
+              {usedShare >= 0.9 ? <p className="mt-2 text-[12.5px] text-danger">Almost full — new uploads stop at the limit.</p> : null}
+            </div>
+          ) : (
+            <Skeleton className="mt-4 h-8" />
+          )}
         </section>
 
         {can("audit.view") ? (

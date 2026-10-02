@@ -11,12 +11,13 @@ import { realtime, type RealtimeEvent } from "@/server/realtime/bus";
 export const dynamic = "force-dynamic";
 
 const HEARTBEAT_MS = 25_000;
-const REVALIDATE_MS = 5 * 60_000;
+const REVALIDATE_MS = 60_000;
 
 /**
  * Server-Sent Events stream for one project board (plus the user's own
- * notification pings). Access is re-checked periodically so revoked members
- * stop receiving updates.
+ * notification pings). Access is re-checked at once when it changes (removal,
+ * role or scope change) and every minute regardless, so revoked members stop
+ * receiving updates.
  */
 export async function GET(req: Request) {
   try {
@@ -43,18 +44,8 @@ export async function GET(req: Request) {
         const touchPresence = () =>
           db.update(users).set({ lastSeenAt: new Date() }).where(eq(users.id, actor.userId)).catch(() => {});
 
-        const unsubscribe = realtime().subscribe((event: RealtimeEvent) => {
-          if (event.type === "project" && event.projectId === projectId) {
-            send(`event: project\ndata: ${JSON.stringify(event)}\n\n`);
-          } else if (event.type === "notification" && event.userId === actor.userId) {
-            send(`event: notification\ndata: {}\n\n`);
-          }
-        });
-        const heartbeat = setInterval(() => {
-          send(`: ping\n\n`);
-          void touchPresence();
-        }, HEARTBEAT_MS);
-        const revalidate = setInterval(async () => {
+        const recheck = async () => {
+          if (closed) return;
           const token = sessionTokenFrom(req);
           const session = token ? await validateSessionToken(token) : null;
           const stillAllowed = session && (!projectId || (await getProjectAccess(session.user.id, projectId)));
@@ -62,7 +53,21 @@ export async function GET(req: Request) {
             send(`event: revoked\ndata: {}\n\n`);
             close();
           }
-        }, REVALIDATE_MS);
+        };
+        const unsubscribe = realtime().subscribe((event: RealtimeEvent) => {
+          if (event.type === "project" && event.projectId === projectId) {
+            send(`event: project\ndata: ${JSON.stringify(event)}\n\n`);
+          } else if (event.type === "notification" && event.userId === actor.userId) {
+            send(`event: notification\ndata: {}\n\n`);
+          } else if (event.type === "access" && event.userId === actor.userId) {
+            void recheck().catch(() => close());
+          }
+        });
+        const heartbeat = setInterval(() => {
+          send(`: ping\n\n`);
+          void touchPresence();
+        }, HEARTBEAT_MS);
+        const revalidate = setInterval(() => void recheck().catch(() => close()), REVALIDATE_MS);
 
         function close() {
           if (closed) return;

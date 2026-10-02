@@ -1,9 +1,9 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
-import { isRole, type Role } from "@/lib/permissions";
+import { isRole, memberCanOpenProject, type MemberAccess, type Role } from "@/lib/permissions";
 import type { MemberDTO } from "@/lib/types";
-import { effectiveProjectRole, type ProjectRow } from "../access";
+import { accessibleProjectIds, effectiveProjectRole, type ProjectRow, type StudioAccess } from "../access";
 import { db, type Executor } from "../db";
-import { projectMembers, studioMembers, users } from "../db/schema";
+import { projectMembers, projects, studioMembers, users } from "../db/schema";
 import { avatarUrl } from "./users-lookup";
 
 const ONLINE_WINDOW_MS = 3 * 60 * 1000;
@@ -15,6 +15,7 @@ export function isOnline(lastSeenAt: Date | null): boolean {
 type MemberRow = {
   userId: string;
   role: string;
+  access: string;
   title: string | null;
   username: string;
   displayName: string;
@@ -33,6 +34,7 @@ async function toMemberDTO(row: MemberRow, role: Role): Promise<MemberDTO> {
     role,
     title: row.title,
     online: isOnline(row.lastSeenAt),
+    access: (row.access === "PROJECTS" && role !== "OWNER" && role !== "ADMIN" ? "PROJECTS" : "STUDIO") as MemberAccess,
   };
 }
 
@@ -41,6 +43,7 @@ async function studioMemberRows(studioId: string, ex: Executor = db): Promise<Me
     .select({
       userId: studioMembers.userId,
       role: studioMembers.role,
+      access: studioMembers.access,
       title: studioMembers.title,
       username: users.username,
       displayName: users.displayName,
@@ -59,6 +62,24 @@ export async function listStudioMembers(studioId: string): Promise<MemberDTO[]> 
   return Promise.all(rows.map((r) => toMemberDTO(r, isRole(r.role) ? r.role : "VIEWER")));
 }
 
+/** The studio's members as `viewer` may see them: project-only collaborators see just the people on their projects. */
+export async function listMembersFor(viewer: StudioAccess): Promise<MemberDTO[]> {
+  if (viewer.scope === "STUDIO") return listStudioMembers(viewer.studioId);
+  const projectIds = [...(await accessibleProjectIds(viewer.userId, viewer.studioId))];
+  const [rows, projectRows, onProjects] = await Promise.all([
+    studioMemberRows(viewer.studioId),
+    projectIds.length ? db.select().from(projects).where(inArray(projects.id, projectIds)) : Promise.resolve([]),
+    projectIds.length
+      ? db.select({ projectId: projectMembers.projectId, userId: projectMembers.userId }).from(projectMembers).where(inArray(projectMembers.projectId, projectIds))
+      : Promise.resolve([]),
+  ]);
+  const on = new Set(onProjects.map((o) => `${o.projectId}:${o.userId}`));
+  const visible = rows.filter(
+    (r) => r.userId === viewer.userId || projectRows.some((p) => memberCanOpenProject(r, p, on.has(`${p.id}:${r.userId}`))),
+  );
+  return Promise.all(visible.map((r) => toMemberDTO(r, isRole(r.role) ? r.role : "VIEWER")));
+}
+
 /** People who can open the project, with their effective project role. */
 export async function listProjectMembers(project: ProjectRow, ex: Executor = db): Promise<MemberDTO[]> {
   const [rows, overrides] = await Promise.all([
@@ -66,10 +87,7 @@ export async function listProjectMembers(project: ProjectRow, ex: Executor = db)
     ex.select().from(projectMembers).where(eq(projectMembers.projectId, project.id)),
   ]);
   const overrideMap = new Map(overrides.map((o) => [o.userId, o]));
-  const visible = rows.filter((r) => {
-    if (project.visibility === "STUDIO") return true;
-    return overrideMap.has(r.userId) || r.role === "OWNER" || r.role === "ADMIN";
-  });
+  const visible = rows.filter((r) => memberCanOpenProject(r, project, overrideMap.has(r.userId)));
   return Promise.all(
     visible.map((r) => {
       const studioRole: Role = isRole(r.role) ? r.role : "VIEWER";
@@ -82,14 +100,13 @@ export async function listProjectMembers(project: ProjectRow, ex: Executor = db)
 export async function filterProjectMembers(project: ProjectRow, userIds: string[], ex: Executor = db): Promise<string[]> {
   if (userIds.length === 0) return [];
   const members = await ex
-    .select({ userId: studioMembers.userId, role: studioMembers.role })
+    .select({ userId: studioMembers.userId, role: studioMembers.role, access: studioMembers.access })
     .from(studioMembers)
     .where(and(eq(studioMembers.studioId, project.studioId), inArray(studioMembers.userId, userIds)));
-  if (project.visibility === "STUDIO") return members.map((m) => m.userId);
   const overrides = await ex
     .select({ userId: projectMembers.userId })
     .from(projectMembers)
     .where(and(eq(projectMembers.projectId, project.id), inArray(projectMembers.userId, userIds)));
-  const allowed = new Set(overrides.map((o) => o.userId));
-  return members.filter((m) => allowed.has(m.userId) || m.role === "OWNER" || m.role === "ADMIN").map((m) => m.userId);
+  const onProject = new Set(overrides.map((o) => o.userId));
+  return members.filter((m) => memberCanOpenProject(m, project, onProject.has(m.userId))).map((m) => m.userId);
 }

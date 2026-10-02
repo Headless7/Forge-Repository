@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   doublePrecision,
   index,
@@ -40,6 +41,11 @@ export const studioMembers = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     /** Permission role (OWNER/ADMIN/MANAGER/MEMBER/VIEWER). Text so custom roles can be added later. */
     role: text().notNull(),
+    /**
+     * STUDIO: every project the role allows. PROJECTS: only projects the person was added to
+     * (external collaborators). Owners and admins are always studio-wide.
+     */
+    access: text({ enum: ["STUDIO", "PROJECTS"] }).notNull().default("STUDIO"),
     /** Studio job title shown on profiles, e.g. "VFX Artist". */
     title: text(),
     createdAt: createdAt(),
@@ -60,6 +66,10 @@ export const invitations = pgTable(
       .references(() => studios.id, { onDelete: "cascade" }),
     email: text().notNull(),
     role: text().notNull(),
+    /** Membership scope granted on acceptance (see studioMembers.access). */
+    access: text({ enum: ["STUDIO", "PROJECTS"] }).notNull().default("STUDIO"),
+    /** For PROJECTS access: the projects the invitee is added to. */
+    projectIds: uuid().array().notNull().default(sql`'{}'::uuid[]`),
     tokenHash: text().notNull(),
     invitedById: uuid().references(() => users.id, { onDelete: "set null" }),
     expiresAt: tsz().notNull(),
@@ -74,6 +84,32 @@ export const invitations = pgTable(
     index("invitations_studio_idx").on(t.studioId),
     index("invitations_email_idx").on(t.email),
   ],
+);
+
+/** One-time keys the site operator issues so a person can create their own studio. */
+export const activationKeys = pgTable(
+  "activation_keys",
+  {
+    id: pk(),
+    keyHash: text().notNull(),
+    /** Last characters of the key, so the operator can tell keys apart. */
+    hint: text().notNull(),
+    /** The operator's note: who the key is for. */
+    label: text().notNull(),
+    /** When set, only an account with this verified email can use the key. */
+    email: text(),
+    createdById: uuid().references(() => users.id, { onDelete: "set null" }),
+    expiresAt: tsz().notNull(),
+    /** The account that registered with the key; nobody else can use it afterwards. */
+    claimedById: uuid().references(() => users.id, { onDelete: "set null" }),
+    claimedAt: tsz(),
+    redeemedAt: tsz(),
+    /** The studio created with the key. */
+    studioId: uuid().references(() => studios.id, { onDelete: "set null" }),
+    revokedAt: tsz(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("activation_keys_hash_uq").on(t.keyHash)],
 );
 
 export const projects = pgTable(

@@ -20,6 +20,7 @@ import {
   passwordSchema,
   prioritySchema,
   projectNameSchema,
+  memberAccessSchema,
   roleSchema,
   studioNameSchema,
   usernameSchema,
@@ -41,7 +42,9 @@ import * as production from "../services/production";
 import * as projects from "../services/projects";
 import * as reviews from "../services/reviews";
 import * as roblox from "../services/roblox";
+import * as platform from "../services/platform";
 import { searchCards } from "../services/search";
+import { getStudioStorage } from "../services/storage-quota";
 import * as studios from "../services/studios";
 import { requireCard, requireProject, requireStudio, getProjectAccess } from "../access";
 import { proc } from "./procedure";
@@ -574,12 +577,17 @@ export const appRouter = {
     handler: ({ actor }) => studios.listStudiosForUser(actor.userId),
   }),
   "studio.create": proc({
-    input: z.object({ name: studioNameSchema, iconEmoji: emojiSchema.optional() }),
+    input: z.object({ name: studioNameSchema, iconEmoji: emojiSchema.optional(), activationKey: z.string().trim().max(60).optional() }),
+    limit: { max: 10, windowMs: 60 * 60_000 },
     handler: ({ actor }, i) => studios.createStudio(actor, i),
   }),
   "studio.update": proc({
     input: z.object({ studioId: idSchema, name: studioNameSchema.optional(), slug: z.string().trim().min(2).max(40).optional(), iconEmoji: emojiSchema.nullable().optional() }),
     handler: ({ actor }, i) => studios.updateStudio(actor, i),
+  }),
+  "studio.storage": proc({
+    input: z.object({ studioId: idSchema }),
+    handler: ({ actor }, i) => getStudioStorage(actor, i.studioId),
   }),
   "studio.home": proc({
     input: z.object({ studioId: idSchema }),
@@ -607,7 +615,13 @@ export const appRouter = {
     handler: ({ actor }, i) => studios.listMembers(actor, i.studioId),
   }),
   "member.update": proc({
-    input: z.object({ studioId: idSchema, userId: idSchema, role: roleSchema.optional(), title: z.string().trim().max(60).nullable().optional() }),
+    input: z.object({
+      studioId: idSchema,
+      userId: idSchema,
+      role: roleSchema.optional(),
+      access: memberAccessSchema.optional(),
+      title: z.string().trim().max(60).nullable().optional(),
+    }),
     handler: ({ actor }, i) => studios.updateMember(actor, i),
   }),
   "member.remove": proc({
@@ -619,7 +633,14 @@ export const appRouter = {
     handler: ({ actor }, i) => studios.listInvitations(actor, i.studioId),
   }),
   "invitation.create": proc({
-    input: z.object({ studioId: idSchema, email: emailSchema, role: roleSchema }),
+    input: z.object({
+      studioId: idSchema,
+      email: emailSchema,
+      role: roleSchema,
+      access: memberAccessSchema.optional(),
+      projectIds: z.array(idSchema).max(50).optional(),
+    }),
+    limit: { max: 60, windowMs: 60 * 60_000 },
     handler: ({ actor }, i) => studios.createInvitation(actor, i),
   }),
   "invitation.revoke": proc({
@@ -629,6 +650,29 @@ export const appRouter = {
   "invitation.accept": proc({
     input: z.object({ token: z.string().min(10).max(200) }),
     handler: ({ actor }, i) => studios.acceptInvitation(actor, i),
+  }),
+
+  // ── Site operator: activation keys ──────────────────────────────────────
+  "platform.status": proc({
+    input: z.object({}),
+    handler: ({ actor }) => platform.accessStatus(actor.userId),
+  }),
+  "platform.keys": proc({
+    input: z.object({}),
+    handler: ({ actor }) => platform.listActivationKeys(actor),
+  }),
+  "platform.issueKey": proc({
+    input: z.object({
+      label: z.string().trim().min(1, "Say who the key is for.").max(80),
+      email: emailSchema.nullable().optional(),
+      expiresInDays: z.number().int().min(1).max(90).optional(),
+    }),
+    limit: { max: 50, windowMs: 60 * 60_000 },
+    handler: ({ actor }, i) => platform.issueActivationKey(actor, i),
+  }),
+  "platform.revokeKey": proc({
+    input: z.object({ keyId: idSchema }),
+    handler: ({ actor }, i) => platform.revokeActivationKey(actor, i),
   }),
 
   // ── Notifications ─────────────────────────────────────────────────────────
@@ -686,8 +730,8 @@ export const appRouter = {
     handler: ({ actor }, i) => accounts.revokeSession(actor, i),
   }),
   "account.resendVerification": proc({
-    input: z.object({}),
-    handler: ({ actor }) => accounts.resendVerification(actor),
+    input: z.object({ next: z.string().regex(/^\/invite\/[A-Za-z0-9_-]{10,200}$/).optional() }),
+    handler: ({ actor }, i) => accounts.resendVerification(actor, i.next),
   }),
   "account.removeAvatar": proc({
     input: z.object({}),

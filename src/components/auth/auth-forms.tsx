@@ -251,7 +251,7 @@ export function SignUpForm({
   providers: { discord: boolean; google: boolean };
 }) {
   const router = useRouter();
-  const [values, setValues] = useState({ displayName: "", username: "", email: invite?.email ?? "", password: "" });
+  const [values, setValues] = useState({ displayName: "", username: "", email: invite?.email ?? "", password: "", activationKey: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -263,6 +263,7 @@ export function SignUpForm({
       ...values,
       username: values.username.trim() ? values.username : undefined,
       inviteToken: invite?.token,
+      activationKey: !invite && values.activationKey.trim() ? values.activationKey : undefined,
     });
     if (!parsed.success) {
       setErrors(issuesToErrors(parsed.error.issues));
@@ -273,12 +274,8 @@ export function SignUpForm({
     setLoading(true);
     try {
       await postAuth("sign-up", parsed.data);
-      if (invite) {
-        const { studioSlug } = await rpc("invitation.accept", { token: invite.token });
-        router.replace(`/${studioSlug}`);
-      } else {
-        router.replace(next ? safeNext(next) : "/onboarding");
-      }
+      // The invitation (or a new studio) waits until the email address is confirmed.
+      router.replace(invite ? `/invite/${invite.token}` : next ? safeNext(next) : "/onboarding");
       router.refresh();
     } catch (err) {
       setFormError(errorMessage(err));
@@ -289,7 +286,11 @@ export function SignUpForm({
   return (
     <AuthCard
       title={invite ? `Join ${invite.studioName}` : "Create your account"}
-      subtitle={invite ? `You were invited as ${invite.email}.` : "Set up your profile, then create or join a studio."}
+      subtitle={
+        invite
+          ? `You were invited as ${invite.email}.`
+          : "Forge is invitation-only. Use the link in your invitation email, or enter the activation key you were given."
+      }
       footer={
         <>
           Already have an account?{" "}
@@ -325,6 +326,22 @@ export function SignUpForm({
           <FieldError>{errors.password ?? null}</FieldError>
           {!errors.password ? <p className="mt-1 text-[11px] text-fg-subtle">At least 8 characters.</p> : null}
         </div>
+        {!invite ? (
+          <div>
+            <Label htmlFor="activationKey">Activation key</Label>
+            <Input
+              id="activationKey"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="FORGE-XXXXX-XXXXX-XXXXX-XXXXX"
+              value={values.activationKey}
+              onChange={set("activationKey")}
+              aria-invalid={Boolean(errors.activationKey)}
+              className="font-mono"
+            />
+            <FieldError>{errors.activationKey}</FieldError>
+          </div>
+        ) : null}
         <Button type="submit" variant="primary" size="lg" loading={loading} className="mt-1">
           {invite ? "Create account & join" : "Create account"}
         </Button>
@@ -444,7 +461,8 @@ export function ResetPasswordForm({ token }: { token: string }) {
   );
 }
 
-export function VerifyEmail({ token }: { token: string | null }) {
+/** `next`: where to continue once confirmed (e.g. the invitation the account was created from). */
+export function VerifyEmail({ token, next }: { token: string | null; next?: string | null }) {
   const [state, setState] = useState<"working" | "done" | "error">(token ? "working" : "error");
   const [message, setMessage] = useState<string>(token ? "" : "This link is missing its token.");
   useEffect(() => {
@@ -462,7 +480,7 @@ export function VerifyEmail({ token }: { token: string | null }) {
       {state === "done" ? <Alert tone="success">Your email is confirmed. You're all set.</Alert> : null}
       {state === "error" ? <Alert>{message}</Alert> : null}
       <Button asChild variant="primary" size="lg" className="w-full">
-        <Link href="/">Continue to Forge</Link>
+        <Link href={safeNext(next)}>{next?.startsWith("/invite/") ? "Continue to your invitation" : "Continue to Forge"}</Link>
       </Button>
     </AuthCard>
   );

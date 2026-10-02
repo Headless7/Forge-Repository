@@ -84,6 +84,8 @@ Create a **new** Open Cloud API key (creator dashboard → Open Cloud → API ke
    ENABLE_INPROCESS_JOBS=true
    DEMO_MODE=false
    REQUIRE_EMAIL_VERIFICATION=true
+   PLATFORM_ADMIN_EMAILS=<your email>
+   STUDIO_STORAGE_LIMIT_GB=200
 
    STORAGE_DRIVER=s3
    S3_BUCKET=forge-media
@@ -108,7 +110,11 @@ Create a **new** Open Cloud API key (creator dashboard → Open Cloud → API ke
 4. App service → Settings → **Networking → Custom domain** `forgedev.app`, then add the
    CNAME record Railway shows in Cloudflare DNS (*DNS only*, grey cloud). HTTPS is automatic.
 5. Deploy. The log shows `Database migrations are up to date`, then the health check passes.
-   Production starts empty: open the site, **Sign up** — the first account creates its studio.
+   Production starts empty and is invitation-only. Sign up with the address in
+   `PLATFORM_ADMIN_EMAILS`, confirm it from the email, then create your studio. Invite your
+   team from the studio's Members page (whole studio, or only specific projects for
+   freelancers); give someone an activation key from **Activation keys** (studio menu) only
+   if they should have a studio of their own.
 
 ## 7. Before inviting the team
 

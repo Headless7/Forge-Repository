@@ -27,7 +27,8 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   }
 
   const role = isRole(invite.role) ? ROLE_LABELS[invite.role] : invite.role;
-  const subtitle = `${invite.inviterName ?? "A teammate"} invited ${invite.email} to join as ${role}.`;
+  const scope = invite.access === "PROJECTS" && invite.projectNames.length ? ` — only on ${invite.projectNames.join(", ")}` : "";
+  const subtitle = `${invite.inviterName ?? "A teammate"} invited ${invite.email} to join as ${role}${scope}.`;
 
   if (!session) {
     return (
@@ -46,7 +47,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
 
   return (
     <AuthCard title={`Join ${invite.studioName}`} subtitle={subtitle}>
-      <AcceptInvitation token={token} invitedEmail={invite.email} currentEmail={session.user.email} />
+      <AcceptInvitation token={token} invitedEmail={invite.email} currentEmail={session.user.email} emailVerified={Boolean(session.user.emailVerifiedAt)} />
     </AuthCard>
   );
 }

@@ -6,12 +6,13 @@ import { now } from "../clock";
 import { db, type Executor } from "../db";
 import { authTokens, invitations, oauthAccounts, sessions, users } from "../db/schema";
 import { appOrigin, env } from "../env";
-import { AppError, conflict, invalid, isUniqueViolation, notFound, rateLimited } from "../errors";
+import { AppError, conflict, forbidden, invalid, isUniqueViolation, notFound, rateLimited } from "../errors";
 import { renderAvatar } from "../media/process";
 import { enforceSharedRateLimit, sharedRateLimiter } from "../rate-limit";
 import { avatarKey, storage } from "../storage";
 import type { Actor } from "./context";
 import { sendEmail } from "./email";
+import { claimKey, findUsableKey, isPlatformAdminEmail } from "./platform";
 import { avatarUrl } from "./users-lookup";
 
 const AVATAR_COLORS = ["#7c6cf2", "#3b82f6", "#06b6d4", "#10b981", "#f59e0b", "#ef4444", "#ec4899", "#8b5cf6", "#14b8a6", "#f97316"];
@@ -69,21 +70,23 @@ async function issueToken(ex: Executor, userId: string, email: string, purpose: 
   return token;
 }
 
-async function sendVerification(ex: Executor, user: { id: string; email: string; displayName: string }) {
+/** `next`: a path to continue to once confirmed (e.g. the invitation they signed up from). */
+async function sendVerification(ex: Executor, user: { id: string; email: string; displayName: string }, next?: string) {
   const token = await issueToken(ex, user.id, user.email, "EMAIL_VERIFICATION");
+  const after = next ? `&next=${encodeURIComponent(next)}` : "";
   await sendEmail(ex, {
     to: user.email,
     template: "verify-email",
     subject: "Confirm your email for Forge",
     lines: [`Hi ${user.displayName}, confirm this address so your studio can reach you.`, "The link expires in 48 hours."],
-    action: { label: "Confirm email", url: `${appOrigin()}/verify-email?token=${token}` },
+    action: { label: "Confirm email", url: `${appOrigin()}/verify-email?token=${token}${after}` },
   });
 }
 
 // ── Sign up / sign in ───────────────────────────────────────────────────────
 
 export async function signUp(
-  input: { email: string; password: string; displayName: string; username?: string; inviteToken?: string },
+  input: { email: string; password: string; displayName: string; username?: string; inviteToken?: string; activationKey?: string },
   meta: RequestMeta,
 ) {
   // Per address when the client's IP is known (TRUSTED_PROXY_HOPS); otherwise one shared, larger budget.
@@ -96,14 +99,20 @@ export async function signUp(
   const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, email));
   if (existing[0]) throw conflict("An account with this email already exists. Sign in instead.");
 
-  // An invitation link for this exact email proves ownership of the address.
-  let verifiedByInvite = false;
+  // Forge is private: an account needs an invitation to this address, an activation key, or an
+  // operator email. Either way the address still has to be confirmed before it unlocks anything.
+  let key: Awaited<ReturnType<typeof findUsableKey>> | null = null;
   if (input.inviteToken) {
     const [invite] = await db
       .select()
       .from(invitations)
       .where(and(eq(invitations.tokenHash, hashToken(input.inviteToken)), isNull(invitations.revokedAt), isNull(invitations.acceptedAt), gt(invitations.expiresAt, now())));
-    verifiedByInvite = invite?.email === email;
+    if (!invite) throw invalid("This invitation is no longer valid. Ask a studio admin for a new one.");
+    if (invite.email !== email) throw forbidden(`This invitation was sent to ${invite.email}. Create the account with that address.`);
+  } else if (input.activationKey) {
+    key = await findUsableKey(db, input.activationKey, email, null);
+  } else if (!isPlatformAdminEmail(email)) {
+    throw new AppError("FORBIDDEN", "You need an invitation or an activation key to create an account here.", { code: "INVITE_REQUIRED" });
   }
 
   const passwordHash = await hashPassword(input.password);
@@ -117,10 +126,10 @@ export async function signUp(
           displayName: input.displayName.trim(),
           passwordHash,
           avatarColor: pickAvatarColor(email),
-          emailVerifiedAt: verifiedByInvite ? now() : null,
         })
         .returning();
-      if (!verifiedByInvite) await sendVerification(tx, row!);
+      if (key) await claimKey(tx, key, row!.id);
+      await sendVerification(tx, row!, input.inviteToken ? `/invite/${input.inviteToken}` : undefined);
       return row!;
     });
     const session = await createSession(user.id, meta);
@@ -170,12 +179,13 @@ export async function signOut(sessionId: string) {
 
 // ── Email verification ──────────────────────────────────────────────────────
 
-export async function resendVerification(actor: Actor) {
+/** `next`: an invitation path to return to once confirmed. */
+export async function resendVerification(actor: Actor, next?: string) {
   await enforceSharedRateLimit(`verify-resend:${actor.userId}`, 5, 60 * 60 * 1000);
   const [user] = await db.select().from(users).where(eq(users.id, actor.userId));
   if (!user) throw notFound("User");
   if (user.emailVerifiedAt) return { alreadyVerified: true };
-  await db.transaction((tx) => sendVerification(tx, user));
+  await db.transaction((tx) => sendVerification(tx, user, next && /^\/invite\/[A-Za-z0-9_-]+$/.test(next) ? next : undefined));
   return { alreadyVerified: false };
 }
 
@@ -256,8 +266,10 @@ export async function resetPassword(input: { token: string; password: string }, 
       .where(and(eq(authTokens.id, row.id), isNull(authTokens.usedAt)))
       .returning({ id: authTokens.id });
     if (!claimed.length) throw invalid("This reset link has already been used. Request a new one.");
-    // Resetting via email also proves the address.
-    await tx.update(users).set({ passwordHash, emailVerifiedAt: now() }).where(eq(users.id, row.userId));
+    await tx.update(users).set({ passwordHash }).where(eq(users.id, row.userId));
+    // Resetting via email also proves the address — but only the address the link was sent to
+    // (the account's email may have changed since, and confirmed email is what grants access).
+    await tx.update(users).set({ emailVerifiedAt: now() }).where(and(eq(users.id, row.userId), eq(users.email, row.email), isNull(users.emailVerifiedAt)));
   });
   await invalidateUserSessions(row.userId);
   const session = await createSession(row.userId, meta);
@@ -324,6 +336,11 @@ export async function changeEmail(actor: Actor, input: { email: string; password
   try {
     await db.transaction(async (tx) => {
       await tx.update(users).set({ email, emailVerifiedAt: null }).where(eq(users.id, user.id));
+      // Reset links mailed to the old address stop working.
+      await tx
+        .update(authTokens)
+        .set({ usedAt: now() })
+        .where(and(eq(authTokens.userId, user.id), eq(authTokens.purpose, "PASSWORD_RESET"), isNull(authTokens.usedAt)));
       await sendVerification(tx, { ...user, email });
     });
   } catch (error) {

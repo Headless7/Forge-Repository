@@ -4,7 +4,7 @@ import { validateSessionToken } from "@/server/auth/session";
 import { pinClock } from "@/server/clock";
 import { db } from "@/server/db";
 import { authTokens, emailOutbox, notifications, users } from "@/server/db/schema";
-import { expectAppError, setupStudio } from "@/test/helpers";
+import { expectAppError, pendingInvite, setupStudio } from "@/test/helpers";
 import * as accounts from "./accounts";
 import * as cardService from "./cards";
 import { runDueDateReminders } from "./due-dates";
@@ -21,13 +21,14 @@ async function latestLink(email: string, template: string) {
 describe("authentication", () => {
   it("signs up with a hashed password, a session and a verification email", async () => {
     const email = `new_${stamp()}@test.dev`;
-    const { user, session } = await accounts.signUp({ email: email.toUpperCase(), password: "correct horse", displayName: "New Person" }, meta);
+    const inviteToken = await pendingInvite(email);
+    const { user, session } = await accounts.signUp({ email: email.toUpperCase(), password: "correct horse", displayName: "New Person", inviteToken }, meta);
     expect(user.email).toBe(email);
     expect(user.passwordHash).toMatch(/^scrypt\$/);
     expect(user.passwordHash).not.toContain("correct horse");
     expect(user.emailVerifiedAt).toBeNull();
     expect((await validateSessionToken(session.token))?.user.id).toBe(user.id);
-    await expectAppError(accounts.signUp({ email, password: "another pass", displayName: "Dup" }, meta), "CONFLICT");
+    await expectAppError(accounts.signUp({ email, password: "another pass", displayName: "Dup", inviteToken }, meta), "CONFLICT");
 
     const token = await latestLink(email, "verify-email");
     await accounts.verifyEmail(token);
@@ -38,7 +39,7 @@ describe("authentication", () => {
 
   it("rejects wrong passwords without revealing which emails exist", async () => {
     const email = `login_${stamp()}@test.dev`;
-    await accounts.signUp({ email, password: "right password", displayName: "Login" }, meta);
+    await accounts.signUp({ email, password: "right password", displayName: "Login", inviteToken: await pendingInvite(email) }, meta);
     await expectAppError(accounts.signIn({ email, password: "wrong password" }, meta), "UNAUTHORIZED");
     await expectAppError(accounts.signIn({ email: `nobody_${stamp()}@test.dev`, password: "whatever" }, meta), "UNAUTHORIZED");
     await expect(accounts.signIn({ email, password: "right password" }, meta)).resolves.toHaveProperty("session");
@@ -47,7 +48,7 @@ describe("authentication", () => {
   it("locks out repeated failures but never counts successful sign-ins", async () => {
     const email = `brute_${stamp()}@test.dev`;
     const ip = { ip: `10.9.${Math.floor(Math.random() * 250)}.1`, userAgent: "vitest" };
-    await accounts.signUp({ email, password: "real password", displayName: "Target" }, meta);
+    await accounts.signUp({ email, password: "real password", displayName: "Target", inviteToken: await pendingInvite(email) }, meta);
     for (let i = 0; i < 20; i++) await accounts.signIn({ email, password: "real password" }, ip);
     for (let i = 0; i < 10; i++) await expectAppError(accounts.signIn({ email, password: `guess ${i}` }, ip), "UNAUTHORIZED");
     await expectAppError(accounts.signIn({ email, password: "real password" }, ip), "RATE_LIMITED");
@@ -55,7 +56,7 @@ describe("authentication", () => {
 
   it("resets passwords with a single-use token and signs out other sessions", async () => {
     const email = `reset_${stamp()}@test.dev`;
-    const { session: old } = await accounts.signUp({ email, password: "old password", displayName: "Reset" }, meta);
+    const { session: old } = await accounts.signUp({ email, password: "old password", displayName: "Reset", inviteToken: await pendingInvite(email) }, meta);
     await accounts.requestPasswordReset({ email }, meta);
     await expect(accounts.requestPasswordReset({ email: `ghost_${stamp()}@test.dev` }, meta)).resolves.toEqual({ ok: true });
     const token = await latestLink(email, "password-reset");
@@ -72,7 +73,7 @@ describe("authentication", () => {
   it("sends a signed-out, unconfirmed account a new confirmation link", async () => {
     const email = `unconfirmed_${stamp()}@test.dev`;
     const ip = { ip: `10.8.${Math.floor(Math.random() * 250)}.1`, userAgent: "vitest" };
-    await accounts.signUp({ email, password: "pass word 1", displayName: "Unconfirmed" }, ip);
+    await accounts.signUp({ email, password: "pass word 1", displayName: "Unconfirmed", inviteToken: await pendingInvite(email) }, ip);
     const first = await latestLink(email, "verify-email");
     await expect(accounts.resendVerificationByEmail({ email: email.toUpperCase() }, ip)).resolves.toEqual({ ok: true });
     await expect(accounts.resendVerificationByEmail({ email: `ghost_${stamp()}@test.dev` }, ip)).resolves.toEqual({ ok: true });

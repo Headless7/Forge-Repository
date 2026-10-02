@@ -27,6 +27,7 @@ import type { Actor } from "./context";
 import { COVER_KINDS, recomputeCardRollup, recomputeDeliverableCover } from "./deliverables";
 import { Effects } from "./effects";
 import { notify } from "./notifications";
+import { ABANDONED_UPLOAD_MS, reserveStudioStorage } from "./storage-quota";
 
 export type UploadPurpose = "version" | "attachment" | "comment" | "resource" | "cover";
 
@@ -184,21 +185,25 @@ export async function createUpload(
     name: `original-${storageName(filename)}`,
   });
   const purpose = input.purpose === "version" ? "VERSION" : input.purpose === "comment" ? "COMMENT" : input.purpose === "resource" ? "RESOURCE" : input.purpose === "cover" ? "COVER" : "CARD";
-  await db.insert(attachments).values({
-    id,
-    cardId: ctx.card.id,
-    projectId: ctx.card.projectId,
-    versionId: input.purpose === "version" ? input.versionId! : null,
-    deliverableId,
-    purpose,
-    kind: classification.kind,
-    status: "PENDING",
-    storageKey: key,
-    filename,
-    mimeType: classification.mimeType,
-    sizeBytes: input.size,
-    uploadedById: actor.userId,
-    createdAt: now(),
+  await db.transaction(async (tx) => {
+    // Counts against the studio's storage limit from now on (until finished or abandoned).
+    await reserveStudioStorage(tx, ctx.access.studioId, input.size);
+    await tx.insert(attachments).values({
+      id,
+      cardId: ctx.card.id,
+      projectId: ctx.card.projectId,
+      versionId: input.purpose === "version" ? input.versionId! : null,
+      deliverableId,
+      purpose,
+      kind: classification.kind,
+      status: "PENDING",
+      storageKey: key,
+      filename,
+      mimeType: classification.mimeType,
+      sizeBytes: input.size,
+      uploadedById: actor.userId,
+      createdAt: now(),
+    });
   });
   const upload = await storage().createUploadTarget(key, { contentType: classification.mimeType, attachmentId: id, size: input.size });
   return { attachmentId: id, upload, maxBytes };
@@ -497,7 +502,6 @@ export async function setCoverMode(actor: Actor, input: { cardId: string; mode: 
 
 // ── Recovery after restarts ─────────────────────────────────────────────────
 
-const ABANDONED_UPLOAD_MS = 24 * 60 * 60 * 1000;
 const PLAYABLE_VIDEO = new Set(["video/mp4", "video/webm", "video/x-m4v"]);
 
 /**

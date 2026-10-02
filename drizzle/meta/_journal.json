@@ -43,6 +43,13 @@
       "when": 1790943201317,
       "tag": "0005_shared_rate_limits",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790977263965,
+      "tag": "0006_private_access",
+      "breakpoints": true
     }
   ]
 }

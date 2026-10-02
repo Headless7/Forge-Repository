@@ -47,11 +47,13 @@ export class S3StorageDriver implements StorageDriver {
 
   async createUploadTarget(key: string, options: { contentType: string; size: number }): Promise<UploadTarget> {
     // Content-Length is signed, so the bucket refuses a body of any other size (the size was
-    // checked against the upload limits when the intent was created).
+    // checked against the upload limits when the intent was created). The link only has to be
+    // valid when the upload starts, so it's short: it is also how long the uploader could
+    // overwrite the object after finishing (or after losing access).
     const url = await getSignedUrl(
       this.client,
       new PutObjectCommand({ Bucket: this.config.bucket, Key: key, ContentType: options.contentType, ContentLength: options.size }),
-      { expiresIn: 6 * 60 * 60, signableHeaders: new Set(["content-length", "content-type"]) },
+      { expiresIn: 60 * 60, signableHeaders: new Set(["content-length", "content-type"]) },
     );
     return { url, method: "PUT", headers: { "content-type": options.contentType } };
   }

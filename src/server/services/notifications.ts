@@ -1,6 +1,7 @@
-import { and, count, desc, eq, inArray, isNull, lt } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { NOTIFICATION_TYPES, type NotificationChannelId, type NotificationType } from "@/lib/notifications";
 import type { NotificationDTO } from "@/lib/types";
+import { accessibleProjectIds } from "../access";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
 import { cards, notificationPreferences, notifications, projects, studioMembers, studios } from "../db/schema";
@@ -110,11 +111,17 @@ function notificationHref(row: {
   return `/${row.studioSlug}`;
 }
 
+/** Notifications about projects the user can no longer open (removed, made private) stay hidden. */
+async function openProjectsOnly(userId: string) {
+  const ids = [...(await accessibleProjectIds(userId))];
+  return ids.length ? or(isNull(notifications.projectId), inArray(notifications.projectId, ids)) : isNull(notifications.projectId);
+}
+
 export async function listNotifications(
   actor: Actor,
   options: { unreadOnly?: boolean; before?: string; limit?: number } = {},
 ): Promise<{ items: NotificationDTO[]; unreadCount: number }> {
-  const conditions = [eq(notifications.userId, actor.userId)];
+  const conditions = [eq(notifications.userId, actor.userId), await openProjectsOnly(actor.userId)];
   if (options.unreadOnly) conditions.push(isNull(notifications.readAt));
   if (options.before) conditions.push(lt(notifications.createdAt, new Date(options.before)));
 
@@ -179,7 +186,7 @@ export async function unreadCount(userId: string): Promise<number> {
     .select({ value: count() })
     .from(notifications)
     .innerJoin(studioMembers, and(eq(studioMembers.studioId, notifications.studioId), eq(studioMembers.userId, userId)))
-    .where(and(eq(notifications.userId, userId), isNull(notifications.readAt)));
+    .where(and(eq(notifications.userId, userId), isNull(notifications.readAt), await openProjectsOnly(userId)));
   return rows[0]?.value ?? 0;
 }
 

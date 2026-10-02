@@ -30,6 +30,16 @@ const schema = z.object({
   MAX_FILE_UPLOAD_MB: z.coerce.number().positive().default(500),
   MAX_AUDIO_UPLOAD_MB: z.coerce.number().positive().default(200),
   MAX_ROBLOX_UPLOAD_MB: z.coerce.number().positive().default(150),
+  /** Total original-upload storage each studio may use. */
+  STUDIO_STORAGE_LIMIT_GB: z.coerce.number().positive().default(200),
+  /**
+   * The site operators (comma-separated emails). Once their email is confirmed they can create
+   * studios and issue activation keys; nobody else can create a studio without a key.
+   */
+  PLATFORM_ADMIN_EMAILS: z
+    .string()
+    .optional()
+    .transform((v) => (v ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)),
   /** Optional Open Cloud key (scope legacy-asset:manage) so the server can fetch meshes/textures a model references. */
   ROBLOX_OPEN_CLOUD_API_KEY: optional,
   /** Download public meshes/textures from Roblox's public asset endpoint (no key needed). On by default. */
@@ -88,6 +98,7 @@ export function productionWarnings(): string[] {
   if (!env.APP_URL.startsWith("https://")) warnings.push("APP_URL isn't https:// — session cookies aren't marked Secure and HSTS is off. Serve the app over HTTPS.");
   if (env.TRUSTED_PROXY_HOPS === undefined) warnings.push("TRUSTED_PROXY_HOPS is unset, so client IPs are unknown and per-IP rate limits fall back to shared budgets. Set it to the number of reverse proxies in front of the app (usually 1).");
   if (env.DEMO_MODE) warnings.push("DEMO_MODE is ignored in production (demo sign-in hints stay hidden).");
+  if (env.PLATFORM_ADMIN_EMAILS.length === 0) warnings.push("PLATFORM_ADMIN_EMAILS is unset: nobody can create studios or issue activation keys. Set it to the operator's email.");
   if (env.REALTIME_DRIVER === "memory") warnings.push("REALTIME_DRIVER=memory only reaches users on this one process; use postgres when running more than one instance.");
   if (env.STORAGE_DRIVER === "local") warnings.push("STORAGE_DRIVER=local keeps files on this machine's disk: back up STORAGE_LOCAL_DIR and don't run several instances against it.");
   return warnings;

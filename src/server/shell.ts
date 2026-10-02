@@ -4,6 +4,7 @@ import type { ProjectListItemDTO, StudioSummaryDTO } from "@/lib/types";
 import { getStudioAccessBySlug } from "./access";
 import type { ValidatedSession } from "./auth/session";
 import { unreadCount } from "./services/notifications";
+import { isPlatformAdmin } from "./services/platform";
 import { listProjects } from "./services/projects";
 import { listStudiosForUser, rememberStudio } from "./services/studios";
 import { avatarUrl } from "./services/users-lookup";
@@ -43,6 +44,7 @@ export async function loadShell(session: ValidatedSession, studioSlug: string | 
       avatarColor: session.user.avatarColor,
       emailVerified: Boolean(session.user.emailVerifiedAt),
       theme: session.user.themePreference,
+      platformAdmin: isPlatformAdmin(session.user),
     },
     studio: { id: access.studioId, slug: access.studioSlug, name: access.studioName, iconEmoji: target.iconEmoji, role: access.role },
     studios,

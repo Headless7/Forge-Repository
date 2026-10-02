@@ -8,6 +8,7 @@ import {
   ChevronsUpDown,
   House,
   Keyboard,
+  KeyRound,
   SquareKanban,
   LogOut,
   Monitor,
@@ -174,10 +175,17 @@ export function Sidebar({
                 {s.id === studio.id ? <Check className="!text-accent" /> : null}
               </DropdownMenuItem>
             ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => router.push("/onboarding")}>
-              <Plus /> Create a studio
-            </DropdownMenuItem>
+            {user.platformAdmin ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => router.push("/onboarding")}>
+                  <Plus /> Create a studio
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => router.push("/admin/keys")}>
+                  <KeyRound /> Activation keys
+                </DropdownMenuItem>
+              </>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
         {onToggleCollapsed ? (

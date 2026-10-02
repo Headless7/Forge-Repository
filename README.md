@@ -382,6 +382,8 @@ All settings live in `.env` (see `.env.example` for descriptions).
 | `MAX_*_UPLOAD_MB` | Upload size limits per kind (image, video, audio, Roblox, file) |
 | `ROBLOX_PUBLIC_ASSET_FETCH` | `true` (default): previews try Roblox's no-sign-in download for referenced meshes/textures (works for few, mostly older assets); `false` = never contact Roblox without a key |
 | `ROBLOX_OPEN_CLOUD_API_KEY` | Open Cloud key with `legacy-asset` → manage. Lets previews fetch referenced meshes, textures and UI images (public ones and the owner's private ones) |
+| `PLATFORM_ADMIN_EMAILS` | Site operators (comma-separated). With a confirmed email they create studios and issue activation keys at `/admin/keys`; nobody else can create a studio without a key |
+| `STUDIO_STORAGE_LIMIT_GB` | Total uploaded originals per studio (default 200). Uploads past it are refused; owners/admins see usage in Studio settings |
 | `RESEND_API_KEY` or `SMTP_URL`, `EMAIL_FROM` | Real email delivery (otherwise the dev outbox). `RESEND_API_KEY` sends over HTTPS — use it where outbound SMTP is blocked (Railway below Pro) |
 | `DISCORD_CLIENT_ID/SECRET`, `GOOGLE_CLIENT_ID/SECRET` | Enable OAuth sign-in (redirect: `{APP_URL}/api/auth/oauth/{provider}/callback`) |
 | `REALTIME_DRIVER` | `postgres` (multi-instance) or `memory` |
@@ -404,8 +406,9 @@ settings, and logs warnings for the rest:
   provider) and the bucket (versioning or replication); test a restore.
 - Monitor `GET /api/health` and the server logs (`[forge]` lines: failed jobs, unhandled
   errors, production-config warnings).
-- `npm start` never loads the demo studio; with an empty database, sign up to create the
-  first account. Keep `DEMO_MODE` off.
+- `npm start` never loads the demo studio. Forge is invitation-only: set
+  `PLATFORM_ADMIN_EMAILS` to your email, sign up with it and confirm it, then create the
+  studio (no account is ever made an owner just by registering first). Keep `DEMO_MODE` off.
 - The media queue is in memory and runs in one process: run a single worker with
   `ENABLE_INPROCESS_JOBS=true` (it re-queues interrupted work on start) and the others
   with `false`.

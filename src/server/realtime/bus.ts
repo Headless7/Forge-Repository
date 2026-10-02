@@ -18,7 +18,9 @@ export type RealtimeEvent =
       /** Browser tab that caused the change, so it can skip its own echo. */
       clientId?: string | null;
     }
-  | { type: "notification"; userId: string };
+  | { type: "notification"; userId: string }
+  /** The user's studio or project access changed: their open streams re-check it right away. */
+  | { type: "access"; userId: string };
 
 export interface RealtimeBus {
   publish(event: RealtimeEvent): Promise<void>;
@@ -98,4 +100,11 @@ export function emitNotifications(userIds: Iterable<string>) {
       .publish({ type: "notification", userId })
       .catch((error) => console.error("[forge] realtime publish failed", error));
   }
+}
+
+/** Tells the user's open streams to re-check their access now (removal, role or scope change). */
+export function announceAccessChange(userId: string) {
+  realtime()
+    .publish({ type: "access", userId })
+    .catch((error) => console.error("[forge] realtime publish failed", error));
 }

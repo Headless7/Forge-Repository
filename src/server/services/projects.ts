@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { ROBLOX_TEMPLATE } from "@/lib/column-icons";
-import { isRole, roleHas, type Role } from "@/lib/permissions";
+import { isRole, isStudioWideRole, memberCanOpenProject, roleHas, type Role } from "@/lib/permissions";
 import { POSITION_GAP } from "@/lib/positions";
 import { projectKeyFrom, RESERVED_PROJECT_SLUGS, slugify } from "@/lib/slugs";
 import type { CardDisplayMode, ProjectDTO, ProjectListItemDTO, ProjectSettings, ProjectVisibility } from "@/lib/types";
@@ -13,6 +13,7 @@ import { storage } from "../storage";
 import { audit, logActivity } from "./activity";
 import { projectToDTO } from "./board";
 import type { Actor } from "./context";
+import { announceAccessChange } from "../realtime/bus";
 import { Effects } from "./effects";
 import { avatarUrl } from "./users-lookup";
 
@@ -252,6 +253,7 @@ export async function listProjectAccess(actor: Actor, projectId: string) {
       .select({
         userId: studioMembers.userId,
         role: studioMembers.role,
+        access: studioMembers.access,
         title: studioMembers.title,
         displayName: users.displayName,
         username: users.username,
@@ -265,11 +267,13 @@ export async function listProjectAccess(actor: Actor, projectId: string) {
     db.select().from(projectMembers).where(eq(projectMembers.projectId, projectId)),
   ]);
   const overrideMap = new Map(overrides.map((o) => [o.userId, o]));
+  const rows = members.map((m) => ({ m, hasAccess: memberCanOpenProject(m, access.project, overrideMap.has(m.userId)) }));
+  // Project-only collaborators see the people on this project, not the whole studio roster.
+  const visible = access.scope === "PROJECTS" ? rows.filter((r) => r.hasAccess) : rows;
   return Promise.all(
-    members.map(async (m) => {
+    visible.map(async ({ m, hasAccess }) => {
       const override = overrideMap.get(m.userId);
       const studioRole: Role = isRole(m.role) ? m.role : "VIEWER";
-      const privileged = studioRole === "OWNER" || studioRole === "ADMIN";
       return {
         userId: m.userId,
         displayName: m.displayName,
@@ -278,9 +282,11 @@ export async function listProjectAccess(actor: Actor, projectId: string) {
         avatarColor: m.avatarColor,
         title: m.title,
         studioRole,
+        /** Project-only collaborator: sees only the projects they're on. */
+        projectsOnly: m.access === "PROJECTS" && !isStudioWideRole(studioRole),
         projectRole: (override?.role && isRole(override.role) ? override.role : null) as Role | null,
-        isProjectMember: Boolean(override) || privileged,
-        hasAccess: access.project.visibility === "STUDIO" || Boolean(override) || privileged,
+        isProjectMember: Boolean(override) || isStudioWideRole(studioRole),
+        hasAccess,
       };
     }),
   );
@@ -318,5 +324,6 @@ export async function setProjectMember(
     });
   });
   new Effects().project(access.project.id).flush(actor.clientId);
+  announceAccessChange(input.userId);
   return listProjectAccess(actor, input.projectId);
 }

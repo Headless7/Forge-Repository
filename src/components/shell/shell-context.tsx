@@ -13,6 +13,8 @@ export interface ShellUser {
   avatarColor: string;
   emailVerified: boolean;
   theme: "dark" | "light" | "system";
+  /** Site operator: creates studios and issues activation keys. */
+  platformAdmin: boolean;
 }
 
 export interface ShellStudio {

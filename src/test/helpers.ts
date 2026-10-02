@@ -7,7 +7,8 @@ import { expect } from "vitest";
 import { eq } from "drizzle-orm";
 import type { Role } from "@/lib/permissions";
 import { db } from "@/server/db";
-import { attachments, deliverables, studioMembers, users } from "@/server/db/schema";
+import { generateToken, hashToken } from "@/server/auth/crypto";
+import { attachments, deliverables, invitations, studioMembers, users } from "@/server/db/schema";
 import { AppError } from "@/server/errors";
 import * as board from "@/server/services/board";
 import type { Actor } from "@/server/services/context";
@@ -32,6 +33,22 @@ export async function createUser(name: string): Promise<TestUser> {
   const email = `${username}@test.dev`;
   const [row] = await db.insert(users).values({ email, username, displayName: name, emailVerifiedAt: new Date() }).returning();
   return { id: row!.id, username, email, actor: { userId: row!.id } };
+}
+
+/** A pending invitation for `email` (Forge sign-up needs one), returning its token. */
+export async function pendingInvite(email: string): Promise<string> {
+  const inviter = await createUser("Inviter");
+  const studio = await studios.provisionStudio(inviter.actor, { name: `Invites ${uid()}` });
+  const token = generateToken();
+  await db.insert(invitations).values({
+    studioId: studio.id,
+    email: email.toLowerCase(),
+    role: "MEMBER",
+    tokenHash: hashToken(token),
+    invitedById: inviter.id,
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+  });
+  return token;
 }
 
 export interface Fixture {
@@ -61,7 +78,7 @@ export async function setupStudio(): Promise<Fixture> {
     createUser("Viewer"),
     createUser("Outsider"),
   ]);
-  const studio = await studios.createStudio(owner.actor, { name: `Studio ${uid()}` });
+  const studio = await studios.provisionStudio(owner.actor, { name: `Studio ${uid()}` });
   const roles: Array<[TestUser, Role]> = [
     [admin, "ADMIN"],
     [manager, "MANAGER"],
@@ -74,7 +91,7 @@ export async function setupStudio(): Promise<Fixture> {
   const vfx = await board.createColumn(owner.actor, { projectId: project.id, name: "VFX", defaultCardMode: "VISUAL" });
   const ui = await board.createColumn(owner.actor, { projectId: project.id, name: "UI" });
 
-  const other = await studios.createStudio(outsider.actor, { name: `Other ${uid()}` });
+  const other = await studios.provisionStudio(outsider.actor, { name: `Other ${uid()}` });
   const otherProject = await projects.createProject(outsider.actor, { studioId: other.id, name: `Other ${uid()}`, template: "empty" });
   const otherColumn = await board.createColumn(outsider.actor, { projectId: otherProject.id, name: "Backlog" });
 

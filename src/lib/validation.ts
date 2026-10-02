@@ -1,7 +1,7 @@
 /** Validation schemas shared by forms (client) and procedures (server). */
 import { z } from "zod";
 import { NOTIFICATION_TYPES } from "./notifications";
-import { ROLES } from "./permissions";
+import { MEMBER_ACCESS, ROLES } from "./permissions";
 
 export const idSchema = z.uuid("Invalid id.");
 export const emailSchema = z.email("Enter a valid email address.").max(254);
@@ -23,6 +23,7 @@ export const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Invalid colour
 export const emojiSchema = z.string().trim().min(1).max(16);
 export const isoDateSchema = z.iso.datetime({ offset: true });
 export const roleSchema = z.enum(ROLES);
+export const memberAccessSchema = z.enum(MEMBER_ACCESS);
 export const cardStateSchema = z.enum(["NOT_SUBMITTED", "IN_PROGRESS", "NEEDS_REVIEW", "CHANGES_REQUESTED", "APPROVED"]);
 export const prioritySchema = z.enum(["LOW", "NORMAL", "HIGH", "URGENT"]);
 export const displayModeSchema = z.enum(["VISUAL", "COMPACT"]);
@@ -34,6 +35,7 @@ export const signUpSchema = z.object({
   displayName: displayNameSchema,
   username: usernameSchema.optional(),
   inviteToken: z.string().max(200).optional(),
+  activationKey: z.string().trim().max(60).optional(),
 });
 
 export const signInSchema = z.object({

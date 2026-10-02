@@ -11,7 +11,7 @@ import * as accounts from "@/server/services/accounts";
 import { recoverMediaJobs } from "@/server/services/media";
 import * as media from "@/server/services/media";
 import { storage } from "@/server/storage";
-import { expectAppError, setupStudio } from "@/test/helpers";
+import { expectAppError, pendingInvite, setupStudio } from "@/test/helpers";
 import * as cardService from "@/server/services/cards";
 
 const stamp = () => crypto.randomBytes(4).toString("hex");
@@ -43,7 +43,7 @@ describe("request bodies", () => {
 describe("sign-in throttling", () => {
   it("stops password guessing spread over many addresses", async () => {
     const email = `target_${stamp()}@test.dev`;
-    await accounts.signUp({ email, password: "the real password", displayName: "Target" }, { ip: "192.0.2.1", userAgent: "vitest" });
+    await accounts.signUp({ email, password: "the real password", displayName: "Target", inviteToken: await pendingInvite(email) }, { ip: "192.0.2.1", userAgent: "vitest" });
     // 30 wrong guesses, each from a different address (no per-address budget is ever reached).
     for (let i = 0; i < 30; i++) {
       await expectAppError(accounts.signIn({ email, password: `guess ${i}` }, { ip: `198.51.100.${i}`, userAgent: "vitest" }), "UNAUTHORIZED");
@@ -65,7 +65,7 @@ describe("one-time tokens", () => {
   it("lets only one of two simultaneous requests use a password-reset link", async () => {
     const email = `reset_${stamp()}@test.dev`;
     const meta = { ip: "192.0.2.2", userAgent: "vitest" };
-    await accounts.signUp({ email, password: "old password", displayName: "Reset" }, meta);
+    await accounts.signUp({ email, password: "old password", displayName: "Reset", inviteToken: await pendingInvite(email) }, meta);
     await accounts.requestPasswordReset({ email }, meta);
     const { emailOutbox } = await import("@/server/db/schema");
     const { and, desc } = await import("drizzle-orm");
@@ -83,8 +83,9 @@ describe("OAuth sign-in", () => {
   it("doesn't hand over an account someone pre-registered with an unverified address", async () => {
     const email = `victim_${stamp()}@test.dev`;
     const meta = { ip: "192.0.2.3", userAgent: "vitest" };
-    // The attacker registers the victim's address with their own password (never verified).
-    const { user, session } = await accounts.signUp({ email, password: "attacker password", displayName: "Squatter" }, meta);
+    // The attacker registers the victim's address with their own password (never verified),
+    // using the victim's invitation link (forwarded or leaked).
+    const { user, session } = await accounts.signUp({ email, password: "attacker password", displayName: "Squatter", inviteToken: await pendingInvite(email) }, meta);
     expect(user.emailVerifiedAt).toBeNull();
     // The victim signs in with Google, which verified the address.
     await completeOAuth("google", { id: `g-${stamp()}`, email, emailVerified: true, username: "victim", displayName: "Victim" }, null, meta);
@@ -95,7 +96,7 @@ describe("OAuth sign-in", () => {
     await expectAppError(accounts.signIn({ email, password: "attacker password" }, meta), "UNAUTHORIZED");
     // A normal verified account keeps its password when its owner links Google.
     const owner = `owner_${stamp()}@test.dev`;
-    const created = await accounts.signUp({ email: owner, password: "owner password", displayName: "Owner" }, meta);
+    const created = await accounts.signUp({ email: owner, password: "owner password", displayName: "Owner", inviteToken: await pendingInvite(owner) }, meta);
     await db.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, created.user.id));
     const ownerSession = await createSession(created.user.id, meta);
     await completeOAuth("google", { id: `g-${stamp()}`, email: owner, emailVerified: true, username: "owner", displayName: "Owner" }, null, meta);

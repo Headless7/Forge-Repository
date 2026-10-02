@@ -3,14 +3,16 @@
  * so a user can never reach another studio's data by guessing IDs: lookups always
  * join through the caller's studio membership and fail with NOT_FOUND otherwise.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { deliverablePermissions } from "@/lib/deliverables";
 import type { DeliverablePermissions } from "@/lib/types";
 import {
   cardPermissions,
   isRole,
+  memberCanOpenProject,
   roleHas,
   type CardPermissions,
+  type MemberAccess,
   type Permission,
   type Role,
 } from "@/lib/permissions";
@@ -28,6 +30,8 @@ export interface StudioAccess {
   studioSlug: string;
   studioName: string;
   role: Role;
+  /** PROJECTS = an external collaborator who only sees the projects they were added to. */
+  scope: MemberAccess;
 }
 
 export interface ProjectAccess extends StudioAccess {
@@ -59,28 +63,58 @@ export function has(access: { role: Role }, permission: Permission): boolean {
   return roleHas(access.role, permission);
 }
 
+function asScope(role: Role, access: string): MemberAccess {
+  return access === "PROJECTS" && role !== "OWNER" && role !== "ADMIN" ? "PROJECTS" : "STUDIO";
+}
+
+const studioAccessColumns = { studioId: studios.id, slug: studios.slug, name: studios.name, role: studioMembers.role, access: studioMembers.access };
+
+function toStudioAccess(userId: string, row: { studioId: string; slug: string; name: string; role: string; access: string }): StudioAccess {
+  const role = asRole(row.role);
+  return { userId, studioId: row.studioId, studioSlug: row.slug, studioName: row.name, role, scope: asScope(role, row.access) };
+}
+
 export async function getStudioAccess(userId: string, studioId: string, ex: Executor = db): Promise<StudioAccess | null> {
   const rows = await ex
-    .select({ studioId: studios.id, slug: studios.slug, name: studios.name, role: studioMembers.role })
+    .select(studioAccessColumns)
     .from(studioMembers)
     .innerJoin(studios, eq(studios.id, studioMembers.studioId))
     .where(and(eq(studioMembers.studioId, studioId), eq(studioMembers.userId, userId)))
     .limit(1);
-  const row = rows[0];
-  if (!row) return null;
-  return { userId, studioId: row.studioId, studioSlug: row.slug, studioName: row.name, role: asRole(row.role) };
+  return rows[0] ? toStudioAccess(userId, rows[0]) : null;
 }
 
 export async function getStudioAccessBySlug(userId: string, slug: string, ex: Executor = db): Promise<StudioAccess | null> {
   const rows = await ex
-    .select({ studioId: studios.id, slug: studios.slug, name: studios.name, role: studioMembers.role })
+    .select(studioAccessColumns)
     .from(studios)
     .innerJoin(studioMembers, and(eq(studioMembers.studioId, studios.id), eq(studioMembers.userId, userId)))
     .where(eq(studios.slug, slug))
     .limit(1);
-  const row = rows[0];
-  if (!row) return null;
-  return { userId, studioId: row.studioId, studioSlug: row.slug, studioName: row.name, role: asRole(row.role) };
+  return rows[0] ? toStudioAccess(userId, rows[0]) : null;
+}
+
+/**
+ * Every project the user can open (all studios, or one), in a single query: the SQL form of
+ * `memberCanOpenProject`, for lists that would otherwise check projects one by one.
+ */
+export async function accessibleProjectIds(userId: string, studioId?: string, ex: Executor = db): Promise<Set<string>> {
+  const rows = await ex
+    .select({ id: projects.id })
+    .from(projects)
+    .innerJoin(studioMembers, and(eq(studioMembers.studioId, projects.studioId), eq(studioMembers.userId, userId)))
+    .leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId)))
+    .where(
+      and(
+        studioId ? eq(projects.studioId, studioId) : undefined,
+        or(
+          inArray(studioMembers.role, ["OWNER", "ADMIN"]),
+          isNotNull(projectMembers.id),
+          and(eq(studioMembers.access, "STUDIO"), eq(projects.visibility, "STUDIO")),
+        ),
+      ),
+    );
+  return new Set(rows.map((r) => r.id));
 }
 
 export async function requireStudio(
@@ -108,6 +142,7 @@ async function loadProjectAccess(userId: string, lookup: ProjectLookup, ex: Exec
       studioSlug: studios.slug,
       studioName: studios.name,
       studioRole: studioMembers.role,
+      studioAccess: studioMembers.access,
       overrideRole: projectMembers.role,
       projectMemberId: projectMembers.id,
     })
@@ -120,8 +155,8 @@ async function loadProjectAccess(userId: string, lookup: ProjectLookup, ex: Exec
   const row = rows[0];
   if (!row) return null;
   const studioRole = asRole(row.studioRole);
-  const privileged = studioRole === "OWNER" || studioRole === "ADMIN";
-  if (row.project.visibility === "PRIVATE" && !row.projectMemberId && !privileged) return null;
+  const scope = asScope(studioRole, row.studioAccess);
+  if (!memberCanOpenProject({ role: studioRole, access: scope }, row.project, Boolean(row.projectMemberId))) return null;
   return {
     userId,
     studioId: row.project.studioId,
@@ -129,6 +164,7 @@ async function loadProjectAccess(userId: string, lookup: ProjectLookup, ex: Exec
     studioName: row.studioName,
     project: row.project,
     studioRole,
+    scope,
     role: effectiveProjectRole(studioRole, row.overrideRole),
   };
 }

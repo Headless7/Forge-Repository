@@ -8,9 +8,10 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 import { oauthAccounts, users } from "../db/schema";
 import { appOrigin, env } from "../env";
-import { conflict, invalid } from "../errors";
+import { conflict, forbidden, invalid } from "../errors";
 import { now } from "../clock";
 import { pickAvatarColor, suggestUsername } from "../services/accounts";
+import { hasPendingInvitation, isPlatformAdminEmail } from "../services/platform";
 import { generateToken, hmac, safeEqual } from "./crypto";
 import { createSession, invalidateUserSessions } from "./session";
 
@@ -145,7 +146,8 @@ export async function exchangeCode(provider: ProviderConfig, code: string, verif
  *  1. existing link → sign in
  *  2. signed-in user → link to them
  *  3. verified email matching an account → link and sign in
- *  4. otherwise create a new account
+ *  4. otherwise create a new account — only for an address with a pending invitation (or an
+ *     operator's), since Forge is private; activation keys go through email sign-up
  */
 export async function completeOAuth(
   providerId: OAuthProviderId,
@@ -178,6 +180,9 @@ export async function completeOAuth(
   if (!userId) {
     if (!profile.email || !profile.emailVerified) {
       throw invalid("Your account doesn't have a verified email address. Verify it with the provider, or sign up with email.");
+    }
+    if (!isPlatformAdminEmail(profile.email) && !(await hasPendingInvitation(profile.email))) {
+      throw forbidden("Forge is invitation-only. Ask a studio admin to invite this email address, or sign up with email and your activation key.");
     }
     const [created] = await db
       .insert(users)
