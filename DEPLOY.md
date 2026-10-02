@@ -17,9 +17,9 @@ never into chat, tickets or git.
 
 ## 1. Code (done)
 
-- `railway.json` — build `npm run build`, migrate before every release
-  (`npm run db:migrate:prod`), start `npm run start:next`, health check `/api/health`,
-  one instance.
+- `railway.json` — build `npm run build`, start `npm run start:prod` (applies database
+  migrations, then starts the server; a failed migration stops the release before it goes
+  live), health check `/api/health`, one instance.
 - `package.json` pins Node 24.
 - `.gitignore` keeps out `.env`, `.data/` (local database and uploads), and the unrelated
   `tmp/`, `outputs/` and `prompt.txt`.

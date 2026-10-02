@@ -11,6 +11,7 @@
     "build": "next build",
     "start": "tsx scripts/dev.ts --prod",
     "start:next": "next start",
+    "start:prod": "node scripts/migrate-prod.mjs && next start",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
