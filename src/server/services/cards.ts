@@ -15,6 +15,7 @@ import {
   assetVersions,
   attachments,
   boardColumns,
+  boards,
   cardAssignees,
   cardLabels,
   cardReviewers,
@@ -32,13 +33,15 @@ import {
 import { conflict, forbidden, invalid, notFound } from "../errors";
 import { storage } from "../storage";
 import { audit, logActivity } from "./activity";
-import { defaultBoardId, nextCardPosition } from "./board";
+import { nextCardPosition } from "./board";
 import { loadCardDetail, summarizeCards } from "./card-dto";
 import type { Actor } from "./context";
 import { createPrimaryDeliverable, recomputeCardRollup, recomputeDeliverableCover } from "./deliverables";
 import { Effects } from "./effects";
 import { filterProjectMembers } from "./members-query";
-import { notify } from "./notifications";
+import { inboxAudience, notify, NotificationBatch } from "./notifications";
+import { loadCardWork } from "./workflow";
+import { purgeOne } from "./purge";
 import { nextProductionPosition } from "./production";
 
 async function summaryOf(card: CardRow, access: ProjectAccess): Promise<CardSummaryDTO> {
@@ -57,14 +60,16 @@ async function nextCardNumber(tx: Executor, projectId: string): Promise<number> 
 
 async function assertActiveColumn(tx: Executor, columnId: string, projectId: string) {
   const rows = await tx
-    .select()
+    .select({ column: boardColumns, boardName: boards.name, boardArchivedAt: boards.archivedAt })
     .from(boardColumns)
+    .innerJoin(boards, eq(boards.id, boardColumns.boardId))
     .where(and(eq(boardColumns.id, columnId), eq(boardColumns.projectId, projectId)))
     .limit(1);
-  const column = rows[0];
-  if (!column) throw notFound("Column");
-  if (column.archivedAt) throw invalid("That column is archived. Restore it before adding cards.");
-  return column;
+  const row = rows[0];
+  if (!row) throw notFound("Column");
+  if (row.column.archivedAt) throw invalid("That column is archived. Restore it before adding cards.");
+  if (row.boardArchivedAt) throw invalid(`The board “${row.boardName}” is archived. Restore it before adding cards.`);
+  return { ...row.column, boardName: row.boardName };
 }
 
 export async function touchCard(tx: Executor, cardId: string, actorId: string, bumpRevision = true) {
@@ -329,17 +334,24 @@ export async function updateCard(actor: Actor, input: UpdateCardInput): Promise<
       });
     }
     if (significant) {
-      fx.notify(
-        await notify(tx, {
-          recipientIds: await watcherIds(tx, card.id),
+      const batch = new NotificationBatch();
+      const data = cardNotificationData(access, { ...card, ...patch });
+      if (patch.dueAt !== undefined) {
+        // Card assignees, and whoever works on deliverables that follow the card's deadline.
+        const work = await loadCardWork(tx, card.id);
+        const inheriting = work.deliverables.filter((d) => !d.archived && !d.dueAt && d.state !== "APPROVED").flatMap((d) => work.teams.get(d.id)?.ids ?? []);
+        batch.add({
+          recipientIds: [...work.assigneeIds, ...inheriting],
           actorId: actor.userId,
-          type: "WATCHED_CARD",
+          type: "DUE_CHANGED",
           studioId: access.studioId,
           projectId: card.projectId,
           cardId: card.id,
-          data: { ...cardNotificationData(access, { ...card, ...patch }), change: significant },
-        }),
-      );
+          data: { ...data, dueAt: patch.dueAt?.toISOString() ?? null, previousDueAt: card.dueAt?.toISOString() ?? null },
+        });
+      }
+      batch.add({ recipientIds: await watcherIds(tx, card.id), actorId: actor.userId, type: "WATCHED_CARD", studioId: access.studioId, projectId: card.projectId, cardId: card.id, data: { ...data, change: significant } });
+      fx.notify(await batch.send(tx));
     }
     fx.card(card.projectId, card.id);
   });
@@ -371,7 +383,8 @@ export async function moveCard(actor: Actor, input: MoveCardInput): Promise<{ id
   const fx = new Effects();
   const result = await db.transaction(async (tx) => {
     const target = await assertActiveColumn(tx, input.toColumnId, card.projectId);
-    if (target.boardId !== card.boardId) throw invalid("Cards can only move within the same board.");
+    // Moving to another board of the same project carries the card's whole history with it.
+    const boardChanged = target.boardId !== card.boardId;
     let list = await columnCards(tx, target.id, card.id);
     const index = resolveInsertIndex(list, { afterId: input.afterCardId, beforeId: input.beforeCardId, index: input.index });
     let position = positionBetween(list[index - 1]?.position, list[index]?.position);
@@ -388,6 +401,7 @@ export async function moveCard(actor: Actor, input: MoveCardInput): Promise<{ id
       .update(cards)
       .set({
         columnId: target.id,
+        boardId: target.boardId,
         position,
         revision: sql`${cards.revision} + 1`,
         ...(columnChanged ? { lastActivityAt: now(), lastActivityById: actor.userId } : {}),
@@ -401,7 +415,13 @@ export async function moveCard(actor: Actor, input: MoveCardInput): Promise<{ id
         cardId: card.id,
         actorId: actor.userId,
         type: "card.moved",
-        data: { fromColumnId: card.columnId, fromName: from?.name ?? null, toColumnId: target.id, toName: target.name },
+        data: {
+          fromColumnId: card.columnId,
+          fromName: from?.name ?? null,
+          toColumnId: target.id,
+          toName: target.name,
+          ...(boardChanged ? { fromBoardId: card.boardId, toBoardId: target.boardId, toBoardName: target.boardName } : {}),
+        },
       });
       fx.notify(
         await notify(tx, {
@@ -411,7 +431,7 @@ export async function moveCard(actor: Actor, input: MoveCardInput): Promise<{ id
           studioId: access.studioId,
           projectId: card.projectId,
           cardId: card.id,
-          data: { ...cardNotificationData(access, card), change: `moved it to ${target.name}` },
+          data: { ...cardNotificationData(access, card), change: boardChanged ? `moved it to ${target.name} on the ${target.boardName} board` : `moved it to ${target.name}` },
         }),
       );
     }
@@ -420,6 +440,20 @@ export async function moveCard(actor: Actor, input: MoveCardInput): Promise<{ id
   });
   fx.flush(actor.clientId);
   return result;
+}
+
+/** Moves a card to another board of the same project, at the top of that board's first column. */
+export async function moveCardToBoard(actor: Actor, input: { cardId: string; boardId: string }) {
+  const { card } = await requireCard(actor.userId, input.cardId);
+  const [column] = await db
+    .select({ id: boardColumns.id })
+    .from(boardColumns)
+    .innerJoin(boards, eq(boards.id, boardColumns.boardId))
+    .where(and(eq(boards.id, input.boardId), eq(boards.projectId, card.projectId), isNull(boards.archivedAt), isNull(boardColumns.archivedAt)))
+    .orderBy(asc(boardColumns.position))
+    .limit(1);
+  if (!column) throw invalid("That board has no columns yet. Add a column to it first.");
+  return moveCard(actor, { cardId: card.id, toColumnId: column.id, index: 0 });
 }
 
 // ── Archive / delete ────────────────────────────────────────────────────────
@@ -459,6 +493,22 @@ export async function setCardArchived(actor: Actor, input: { cardId: string; arc
       actorId: actor.userId,
       type: input.archived ? "card.archived" : "card.restored",
     });
+    // Everyone working on the card or its deliverables.
+    const work = await loadCardWork(tx, card.id);
+    const people = [...work.assigneeIds, ...work.deliverables.filter((d) => !d.archived).flatMap((d) => work.teams.get(d.id)?.ids ?? [])];
+    fx.notify(
+      await notify(tx, {
+        recipientIds: people,
+        actorId: actor.userId,
+        type: "WORK_ARCHIVED",
+        studioId: access.studioId,
+        projectId: card.projectId,
+        cardId: card.id,
+        data: { ...cardNotificationData(access, card), restored: !input.archived },
+      }),
+    );
+    // The card's notifications (and its deliverables') leave or rejoin inboxes and unread counts now.
+    fx.notify(await inboxAudience(tx, { cardId: card.id }));
     fx.card(card.projectId, card.id);
     return row!;
   });
@@ -466,7 +516,10 @@ export async function setCardArchived(actor: Actor, input: { cardId: string; arc
   return summaryOf(updated, access);
 }
 
-/** Irreversible. Only archived cards can be deleted, and the caller must type the card key. */
+/**
+ * Irreversible. Only archived cards can be deleted, and the caller must type the card key. Files
+ * another card still uses (a duplicate) are kept; the rest are removed by the durable cleanup.
+ */
 export async function deleteCardPermanently(actor: Actor, input: { cardId: string; confirm: string }) {
   const { card, access, perms } = await requireCard(actor.userId, input.cardId);
   if (!perms.canDelete) throw forbidden("Only studio owners and admins can permanently delete cards.");
@@ -475,29 +528,7 @@ export async function deleteCardPermanently(actor: Actor, input: { cardId: strin
   if (input.confirm.trim().toUpperCase() !== key.toUpperCase()) {
     throw invalid(`Type ${key} to confirm permanent deletion.`);
   }
-  const files = await db.select().from(attachments).where(eq(attachments.cardId, card.id));
-  await db.transaction(async (tx) => {
-    await audit(tx, actor, {
-      studioId: access.studioId,
-      action: "card.deleted",
-      targetType: "card",
-      targetId: card.id,
-      data: { key, title: card.title, projectId: card.projectId },
-    });
-    await tx.delete(cards).where(eq(cards.id, card.id));
-  });
-  // Remove stored objects that no other attachment (e.g. a duplicate) still references.
-  const keys = new Set(files.flatMap((f) => [f.storageKey, f.thumbnailKey, f.previewKey, f.playbackKey]).filter(Boolean) as string[]);
-  if (keys.size) {
-    const stillUsed = await db
-      .select({ storageKey: attachments.storageKey, thumbnailKey: attachments.thumbnailKey })
-      .from(attachments)
-      .where(inArray(attachments.storageKey, [...keys]));
-    const used = new Set(stillUsed.flatMap((r) => [r.storageKey, r.thumbnailKey]));
-    for (const k of keys) if (!used.has(k)) await storage().delete(k).catch(() => {});
-  }
-  new Effects().card(card.projectId, card.id).flush(actor.clientId);
-  return { ok: true };
+  return purgeOne(actor, { type: "card", id: card.id });
 }
 
 // ── Duplicate ───────────────────────────────────────────────────────────────
@@ -604,6 +635,8 @@ export async function duplicateCardInTx(
         dueAt: d.dueAt,
         canvasX: d.canvasX,
         canvasY: d.canvasY,
+        canvasW: d.canvasW,
+        canvasH: d.canvasH,
         position: d.position,
         createdById: actor.userId,
         createdAt,
@@ -639,7 +672,7 @@ export async function duplicateCardInTx(
   for (const l of sourceLinks) {
     const fromId = idMap.get(l.fromId);
     const toId = idMap.get(l.toId);
-    if (fromId && toId) await tx.insert(deliverableLinks).values({ cardId: copyId, fromId, toId, type: l.type, note: l.note, createdById: actor.userId });
+    if (fromId && toId) await tx.insert(deliverableLinks).values({ cardId: copyId, fromId, toId, type: l.type, fromPoint: l.fromPoint, toPoint: l.toPoint, note: l.note, createdById: actor.userId });
   }
   if (options.include.attachments) {
     const loose = await tx
@@ -714,19 +747,13 @@ export async function setAssignees(actor: Actor, input: { cardId: string; add?: 
       await logActivity(tx, { studioId: access.studioId, projectId: card.projectId, cardId: card.id, actorId: actor.userId, type: "card.assignee_removed", data: { userId } });
     }
     await touchCard(tx, card.id, actor.userId);
-    if (valid.length) {
-      fx.notify(
-        await notify(tx, {
-          recipientIds: valid,
-          actorId: actor.userId,
-          type: "ASSIGNED",
-          studioId: access.studioId,
-          projectId: card.projectId,
-          cardId: card.id,
-          data: cardNotificationData(access, card),
-        }),
-      );
-    }
+    const where = { actorId: actor.userId, studioId: access.studioId, projectId: card.projectId, cardId: card.id };
+    fx.notify(
+      await new NotificationBatch()
+        .add({ ...where, recipientIds: valid, type: "ASSIGNED", data: { ...cardNotificationData(access, card), role: "responsible" } })
+        .add({ ...where, recipientIds: remove, type: "UNASSIGNED", data: cardNotificationData(access, card) })
+        .send(tx),
+    );
     fx.card(card.projectId, card.id);
   });
   fx.flush(actor.clientId);
@@ -738,7 +765,9 @@ export async function setReviewers(actor: Actor, input: { cardId: string; add?: 
   assertCard(perms, "canAssign", "Only managers can choose reviewers.");
   const fx = new Effects();
   await db.transaction(async (tx) => {
-    const add = await filterProjectMembers(access.project, input.add ?? [], tx);
+    const current = new Set((await tx.select({ userId: cardReviewers.userId }).from(cardReviewers).where(eq(cardReviewers.cardId, card.id))).map((r) => r.userId));
+    const add = (await filterProjectMembers(access.project, input.add ?? [], tx)).filter((id) => !current.has(id));
+    const removed = (input.remove ?? []).filter((id) => current.has(id));
     if (add.length) {
       await tx.insert(cardReviewers).values(add.map((userId) => ({ cardId: card.id, userId, createdAt: now() }))).onConflictDoNothing();
       await addWatchers(tx, card.id, add);
@@ -749,10 +778,18 @@ export async function setReviewers(actor: Actor, input: { cardId: string; add?: 
     for (const userId of add) {
       await logActivity(tx, { studioId: access.studioId, projectId: card.projectId, cardId: card.id, actorId: actor.userId, type: "card.reviewer_added", data: { userId } });
     }
-    for (const userId of input.remove ?? []) {
+    for (const userId of removed) {
       await logActivity(tx, { studioId: access.studioId, projectId: card.projectId, cardId: card.id, actorId: actor.userId, type: "card.reviewer_removed", data: { userId } });
     }
     await touchCard(tx, card.id, actor.userId);
+    const where = { actorId: actor.userId, studioId: access.studioId, projectId: card.projectId, cardId: card.id };
+    const data = { ...cardNotificationData(access, card), role: "reviewer" };
+    fx.notify(
+      await new NotificationBatch()
+        .add({ ...where, recipientIds: add, type: "REVIEWER_ASSIGNED", data })
+        .add({ ...where, recipientIds: removed, type: "UNASSIGNED", data })
+        .send(tx),
+    );
     fx.card(card.projectId, card.id, false);
   });
   fx.flush(actor.clientId);
@@ -789,14 +826,4 @@ export async function setLabels(actor: Actor, input: { cardId: string; labelIds:
   return getCardDetail(actor, card.id);
 }
 
-/** New cards default to the first column of the project's main board. */
-export async function firstColumnId(projectId: string): Promise<string | null> {
-  const boardId = await defaultBoardId(projectId);
-  const rows = await db
-    .select({ id: boardColumns.id })
-    .from(boardColumns)
-    .where(and(eq(boardColumns.boardId, boardId), isNull(boardColumns.archivedAt)))
-    .orderBy(asc(boardColumns.position))
-    .limit(1);
-  return rows[0]?.id ?? null;
-}
+

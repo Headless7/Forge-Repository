@@ -1,5 +1,5 @@
 import { and, asc, count, desc, eq, gt, inArray, isNull } from "drizzle-orm";
-import { canGrantRole, canManageMember, isRole, isStudioWideRole, type MemberAccess, type Role } from "@/lib/permissions";
+import { canGrantRole, canManageMember, isStudioWideRole, normalizeRole, type MemberAccess, type Role } from "@/lib/permissions";
 import { RESERVED_STUDIO_SLUGS, slugify } from "@/lib/slugs";
 import type { StudioSummaryDTO } from "@/lib/types";
 import { requireProject, requireStudio } from "../access";
@@ -32,7 +32,7 @@ export async function listStudiosForUser(userId: string): Promise<StudioSummaryD
     slug: r.studio.slug,
     iconEmoji: r.studio.iconEmoji,
     accentColor: r.studio.accentColor,
-    role: isRole(r.role) ? r.role : "VIEWER",
+    role: normalizeRole(r.role) ?? "VIEWER",
   }));
 }
 
@@ -428,7 +428,7 @@ export async function acceptInvitation(actor: Actor, input: { token: string }) {
     throw new AppError("FORBIDDEN", `Confirm your email address first — we sent a link to ${user.email}.`, { code: "EMAIL_NOT_VERIFIED" });
   }
 
-  const role: Role = isRole(invitation.role) ? invitation.role : "MEMBER";
+  const role: Role = normalizeRole(invitation.role) ?? "CONTRIBUTOR";
   const scope: MemberAccess = invitation.access === "PROJECTS" && !isStudioWideRole(role) ? "PROJECTS" : "STUDIO";
   const [studio] = await db.select().from(studios).where(eq(studios.id, invitation.studioId));
   await db.transaction(async (tx) => {

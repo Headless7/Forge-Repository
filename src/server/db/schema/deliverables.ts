@@ -55,6 +55,9 @@ export const deliverables = pgTable(
     /** Position on the card's deliverable canvas. */
     canvasX: real().notNull().default(0),
     canvasY: real().notNull().default(0),
+    /** Node size on the canvas; null = the default size (see lib/canvas-points). */
+    canvasW: real(),
+    canvasH: real(),
     /** Order in list view. */
     position: doublePrecision().notNull(),
     createdById: uuid().references(() => users.id, { onDelete: "set null" }),
@@ -91,6 +94,9 @@ export const deliverableLinks = pgTable(
       .notNull()
       .references(() => deliverables.id, { onDelete: "cascade" }),
     type: text({ enum: DELIVERABLE_LINK_TYPES }).notNull(),
+    /** Connection points the arrow leaves from / arrives at (e.g. "r-50"); null = the default sides. */
+    fromPoint: text(),
+    toPoint: text(),
     note: text().notNull().default(""),
     createdById: uuid().references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
@@ -99,6 +105,25 @@ export const deliverableLinks = pgTable(
     uniqueIndex("deliverable_links_pair_uq").on(t.fromId, t.toId, t.type),
     index("deliverable_links_card_idx").on(t.cardId),
   ],
+);
+
+/**
+ * People who work on a deliverable alongside its responsible person (ownerId). They can upload,
+ * submit and resolve feedback on that deliverable only; responsibility stays with the owner.
+ */
+export const deliverableContributors = pgTable(
+  "deliverable_contributors",
+  {
+    deliverableId: uuid()
+      .notNull()
+      .references((): AnyPgColumn => deliverables.id, { onDelete: "cascade" }),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    addedById: uuid().references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.deliverableId, t.userId] }), index("deliverable_contributors_user_idx").on(t.userId)],
 );
 
 /** Append-only production history (completed / published / reopened) with what was included. */

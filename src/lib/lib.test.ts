@@ -30,7 +30,7 @@ describe("permissions", () => {
   it("maps roles to capabilities", () => {
     expect(roleHas("VIEWER", "project.view")).toBe(true);
     expect(roleHas("VIEWER", "comment.create")).toBe(false);
-    expect(roleHas("MEMBER", "card.review")).toBe(false);
+    expect(roleHas("CONTRIBUTOR", "card.review")).toBe(false);
     expect(roleHas("MANAGER", "card.review")).toBe(true);
     expect(roleHas("MANAGER", "project.update")).toBe(false);
     expect(roleHas("ADMIN", "studio.delete")).toBe(false);
@@ -40,9 +40,9 @@ describe("permissions", () => {
 
   it("derives card-level permissions from ownership", () => {
     const base = { userId: "u1", allowSelfApproval: false };
-    const member = cardPermissions({ ...base, role: "MEMBER", card: { createdById: "x", assigneeIds: ["u1"] } });
+    const member = cardPermissions({ ...base, role: "CONTRIBUTOR", card: { createdById: "x", assigneeIds: ["u1"] } });
     expect(member).toMatchObject({ canEdit: true, canMove: true, canSubmit: true, canReview: false, canAssign: false, canSelfAssign: true });
-    const stranger = cardPermissions({ ...base, role: "MEMBER", card: { createdById: "x", assigneeIds: [] } });
+    const stranger = cardPermissions({ ...base, role: "CONTRIBUTOR", card: { createdById: "x", assigneeIds: [] } });
     expect(stranger).toMatchObject({ canEdit: false, canMove: false, canSubmit: false, canComment: true, canUpload: false });
     const managerOnOwnWork = cardPermissions({ ...base, role: "MANAGER", card: { createdById: "x", assigneeIds: ["u1"] } });
     expect(managerOnOwnWork.canReview).toBe(false);
@@ -54,7 +54,7 @@ describe("permissions", () => {
     expect(canGrantRole("ADMIN", "OWNER")).toBe(false);
     expect(canGrantRole("OWNER", "OWNER")).toBe(true);
     expect(canGrantRole("ADMIN", "MANAGER")).toBe(true);
-    expect(canGrantRole("MANAGER", "MEMBER")).toBe(false);
+    expect(canGrantRole("MANAGER", "CONTRIBUTOR")).toBe(false);
     expect(canManageMember("ADMIN", "OWNER")).toBe(false);
     expect(canManageMember("ADMIN", "ADMIN")).toBe(true);
   });
@@ -96,6 +96,7 @@ describe("board filters", () => {
     dueAt: null,
     milestoneId: null,
     assigneeIds: [],
+    deliverableAssigneeIds: [],
     labelIds: [],
     cover: null,
     coverMode: "AUTO",
@@ -123,6 +124,13 @@ describe("board filters", () => {
     expect(matchesFilters(card({ assigneeIds: ["me"], state: "NEEDS_REVIEW", hasVideo: true }), f, ctx)).toBe(true);
     expect(matchesFilters(card({ assigneeIds: ["me"], state: "NEEDS_REVIEW", hasVideo: false }), f, ctx)).toBe(false);
     expect(matchesFilters(card({ assigneeIds: ["other"], state: "NEEDS_REVIEW", hasVideo: true }), f, ctx)).toBe(false);
+  });
+
+  it("counts work on a deliverable as yours", () => {
+    const onDeliverable = card({ assigneeIds: ["lead"], deliverableAssigneeIds: ["me"] });
+    expect(matchesFilters(onDeliverable, { ...EMPTY_FILTERS, mine: true }, ctx)).toBe(true);
+    expect(matchesFilters(onDeliverable, { ...EMPTY_FILTERS, assignees: ["me"] }, ctx)).toBe(true);
+    expect(matchesFilters(card({ assigneeIds: ["lead"] }), { ...EMPTY_FILTERS, mine: true }, ctx)).toBe(false);
   });
 
   it("handles due-date and text filters", () => {

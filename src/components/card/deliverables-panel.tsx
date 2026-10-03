@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useCardMutation } from "@/lib/queries";
 import { rpc, errorMessage } from "@/lib/rpc-client";
 import type { DeliverableDTO, DeliverableLinkType } from "@/lib/types";
+import { roleHas } from "@/lib/permissions";
 import { cn, formatShortDate } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/queries";
@@ -19,6 +20,7 @@ import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Input, Textarea } from "../ui/input";
 import { Tooltip } from "../ui/menu";
 import type { CanvasActions } from "./deliverable-canvas";
+import { DeliverableWork } from "./deliverable-work";
 import { useWorkspace } from "./workspace-context";
 
 const DeliverableCanvas = dynamic(() => import("./deliverable-canvas"), {
@@ -57,6 +59,8 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
   const [assetType, setAssetType] = useState("");
   const [required, setRequired] = useState(true);
   const [ownerId, setOwnerId] = useState<string>("none");
+  const [reviewerId, setReviewerId] = useState<string>("none");
+  const [dueAt, setDueAt] = useState("");
   const [dependsOn, setDependsOn] = useState<string>(linkFrom?.id ?? "none");
   const [description, setDescription] = useState("");
   const create = useCardMutation("deliverable.create", card.id, card.projectId);
@@ -67,6 +71,8 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
     setAssetType("");
     setRequired(true);
     setOwnerId("none");
+    setReviewerId("none");
+    setDueAt("");
     setDescription("");
   };
   const submit = async (openAfter: boolean) => {
@@ -80,6 +86,8 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
         required,
         description: description.trim() || undefined,
         ownerId: ownerId === "none" ? null : ownerId,
+        reviewerId: reviewerId === "none" ? null : reviewerId,
+        dueAt: dueAt ? new Date(dueAt).toISOString() : null,
         canvasX: last ? last.canvasX + 300 : 0,
         canvasY: last ? last.canvasY : 0,
         linkFrom: dependsOn !== "none" ? { id: dependsOn, type: linkFrom?.type ?? "DEPENDENCY" } : null,
@@ -120,11 +128,34 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
                 value={ownerId}
                 onValueChange={setOwnerId}
                 options={[
-                  { value: "none", label: "Card assignees" },
-                  ...members.filter((m) => canAssign || m.id === viewerId).map((m) => ({ value: m.id, label: m.displayName })),
+                  { value: "none", label: "Card assignees (inherited)" },
+                  ...members.filter((m) => roleHas(m.role, "attachment.upload") && (canAssign || m.id === viewerId)).map((m) => ({ value: m.id, label: m.displayName })),
                 ]}
               />
             </div>
+            {canAssign ? (
+              <div className="grid gap-1 text-[12px] font-medium text-fg-muted">
+                Reviewer
+                <Select
+                  aria-label="Reviewer"
+                  value={reviewerId}
+                  onValueChange={setReviewerId}
+                  options={[{ value: "none", label: "Card reviewers (inherited)" }, ...members.filter((m) => roleHas(m.role, "card.review")).map((m) => ({ value: m.id, label: m.displayName }))]}
+                />
+              </div>
+            ) : null}
+            {card.permissions.canEdit ? (
+              <label className="grid gap-1 text-[12px] font-medium text-fg-muted">
+                Due (optional)
+                <input
+                  type="datetime-local"
+                  value={dueAt}
+                  onChange={(e) => setDueAt(e.target.value)}
+                  className="h-8 min-w-0 rounded-md border border-border-strong/70 bg-surface-3/60 px-2.5 text-sm text-fg outline-none focus:border-accent [color-scheme:dark] light:[color-scheme:light]"
+                />
+                <span className="text-[11px] font-normal text-fg-subtle">Empty: it follows the card&apos;s deadline.</span>
+              </label>
+            ) : null}
           </div>
           {deliverables.length ? (
             <div className="grid gap-1 text-[12px] font-medium text-fg-muted">
@@ -159,8 +190,7 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
 }
 
 function DeliverableRow({ d, index, total, canEdit, onMove }: { d: DeliverableDTO; index: number; total: number; canEdit: boolean; onMove: (d: DeliverableDTO, dir: -1 | 1) => void }) {
-  const { membersById, openDeliverable, deliverables } = useWorkspace();
-  const owner = d.ownerId ? membersById.get(d.ownerId) : undefined;
+  const { openDeliverable, deliverables } = useWorkspace();
   const kind = d.kinds.find((k) => k !== "FILE") ?? d.kinds[0];
   const KindIcon = kind ? KIND_ICONS[kind] : Layers;
   const blockedNames = d.blockedBy.map((id) => deliverables.find((x) => x.id === id)?.name ?? "?");
@@ -178,13 +208,14 @@ function DeliverableRow({ d, index, total, canEdit, onMove }: { d: DeliverableDT
           <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-fg-muted">
             <span>{d.assetType || "Deliverable"}</span>
             <span>{d.versionCount ? `V${d.versionCount}` : "no files"}</span>
-            {d.dueAt ? <span>due {formatShortDate(d.dueAt)}</span> : null}
             {blockedNames.length ? (
               <span className="inline-flex items-center gap-0.5 text-state-review">
                 <Lock className="size-3" /> waiting on {blockedNames.join(", ")}
               </span>
             ) : null}
           </span>
+          {d.description.trim() ? <span className="mt-0.5 line-clamp-2 whitespace-pre-wrap break-words text-[11.5px] text-fg-muted">{d.description}</span> : null}
+          <DeliverableWork d={d} className="mt-0.5" />
         </span>
         {d.openFeedback ? (
           <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-state-changes" title={`${d.openFeedback} open feedback`}>
@@ -192,15 +223,15 @@ function DeliverableRow({ d, index, total, canEdit, onMove }: { d: DeliverableDT
           </span>
         ) : null}
         <StatePill state={d.state} size="sm" />
-        {owner ? <UserAvatar user={owner} size="xs" /> : null}
-        <ChevronRight className="size-4 text-fg-subtle" />
+        <ChevronRight className="size-4 shrink-0 text-fg-subtle" />
       </button>
       {canEdit ? (
-        <span className="flex flex-col opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          <button type="button" aria-label={`Move ${d.name} up`} disabled={index === 0} onClick={() => onMove(d, -1)} className="text-fg-subtle hover:text-fg disabled:opacity-30">
+        // Always visible (no hover on touch screens); dragging isn't needed to reorder.
+        <span className="flex flex-col">
+          <button type="button" aria-label={`Move ${d.name} up`} disabled={index === 0} onClick={() => onMove(d, -1)} className="flex size-7 items-center justify-center rounded text-fg-subtle hover:bg-surface-4 hover:text-fg disabled:opacity-30">
             <ArrowUp className="size-3.5" />
           </button>
-          <button type="button" aria-label={`Move ${d.name} down`} disabled={index === total - 1} onClick={() => onMove(d, 1)} className="text-fg-subtle hover:text-fg disabled:opacity-30">
+          <button type="button" aria-label={`Move ${d.name} down`} disabled={index === total - 1} onClick={() => onMove(d, 1)} className="flex size-7 items-center justify-center rounded text-fg-subtle hover:bg-surface-4 hover:text-fg disabled:opacity-30">
             <ArrowDown className="size-3.5" />
           </button>
         </span>
@@ -226,15 +257,18 @@ export function DeliverablesPanel() {
   const archived = card.deliverables.filter((d) => d.archivedAt);
 
   const actions: CanvasActions = {
-    layout: (positions) => {
-      rpc("deliverable.layout", { cardId: card.id, positions }).catch((error) => {
-        toast.error(`Couldn't save the layout — ${errorMessage(error)}`);
-        refresh();
-      });
-    },
+    layout: (changes) =>
+      rpc("deliverable.layout", { cardId: card.id, positions: changes })
+        // A new size can move arrows whose point no longer exists: pick up those changes.
+        .then(() => changes.some((c) => c.w !== undefined || c.h !== undefined) && refresh())
+        .catch((error) => {
+          toast.error(`Couldn't save the layout — ${errorMessage(error)}`);
+          refresh();
+        }),
     link: (input) => link.mutateAsync({ cardId: card.id, ...input }).catch(() => {}),
     unlink: (linkId) => unlink.mutate({ linkId }),
     reverse: (linkId) => updateLink.mutate({ linkId, reverse: true }),
+    setPoints: (linkId, points) => updateLink.mutate({ linkId, ...points }),
   };
 
   const onMove = (d: DeliverableDTO, dir: -1 | 1) => {

@@ -107,7 +107,7 @@ export function ProjectActivity({
                         </time>
                       </div>
                       {e.card ? (
-                        <Link href={`/${studioSlug}/${projectSlug}?card=${encodeURIComponent(e.card.key)}`} className="shrink-0 rounded-md border border-border px-1.5 py-0.5 font-mono text-[11px] text-fg-muted hover:border-border-strong hover:text-fg">
+                        <Link href={`/${studioSlug}/${projectSlug}?card=${encodeURIComponent(e.card.key)}`} className="inline-flex min-h-6 shrink-0 items-center rounded-md border border-border px-1.5 font-mono text-[11px] text-fg-muted hover:border-border-strong hover:text-fg">
                           {e.card.key}
                         </Link>
                       ) : null}

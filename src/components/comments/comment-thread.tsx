@@ -43,7 +43,7 @@ function Reactions({ comment, canReact }: { comment: CommentDTO; canReact: boole
       {canReact ? (
         <Popover>
           <PopoverTrigger asChild>
-            <button type="button" aria-label="Add reaction" className="flex h-6 w-7 items-center justify-center rounded-full text-fg-subtle opacity-0 hover:bg-surface-3 hover:text-fg group-hover/comment:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100">
+            <button type="button" aria-label="Add reaction" className="hover-reveal flex h-6 w-7 items-center justify-center rounded-full text-fg-subtle opacity-0 hover:bg-surface-3 hover:text-fg group-hover/comment:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100">
               <SmilePlus className="size-3.5" />
             </button>
           </PopoverTrigger>
@@ -94,7 +94,7 @@ function CommentBody({
               type="button"
               onClick={() => focusComment(comment)}
               className={cn(
-                "inline-flex h-5 items-center gap-1 rounded px-1.5 font-mono text-[11px] font-semibold",
+                "touch-target inline-flex h-5 items-center gap-1 rounded px-1.5 font-mono text-[11px] font-semibold",
                 comment.resolvedAt ? "bg-state-approved/15 text-state-approved" : "bg-state-changes/15 text-state-changes",
               )}
               title={anchor.kind === "time" ? "Jump to this moment" : "Show this spot"}
@@ -181,7 +181,7 @@ function CommentBody({
             {(own && perms.canComment) || perms.canModerate ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button size="icon-xs" variant="ghost" aria-label="Comment actions" className="ml-auto opacity-0 group-hover/comment:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100">
+                  <Button size="icon-xs" variant="ghost" aria-label="Comment actions" className="hover-reveal ml-auto opacity-0 group-hover/comment:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100">
                     <Ellipsis />
                   </Button>
                 </DropdownMenuTrigger>

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AuthCard } from "@/components/auth/auth-forms";
 import { AcceptInvitation } from "@/components/auth/accept-invitation";
 import { Button } from "@/components/ui/button";
-import { ROLE_LABELS, isRole } from "@/lib/permissions";
+import { roleLabel } from "@/lib/permissions";
 import { getSession } from "@/server/auth/current";
 import { previewInvitation } from "@/server/services/studios";
 
@@ -26,7 +26,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
     );
   }
 
-  const role = isRole(invite.role) ? ROLE_LABELS[invite.role] : invite.role;
+  const role = roleLabel(invite.role);
   const scope = invite.access === "PROJECTS" && invite.projectNames.length ? ` — only on ${invite.projectNames.join(", ")}` : "";
   const subtitle = `${invite.inviterName ?? "A teammate"} invited ${invite.email} to join as ${role}${scope}.`;
 

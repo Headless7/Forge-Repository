@@ -1,9 +1,11 @@
-import { and, asc, eq, lt } from "drizzle-orm";
+import { and, asc, eq, lte, sql } from "drizzle-orm";
 import nodemailer, { type Transporter } from "nodemailer";
 import { now } from "../clock";
+import { accessibleProjectIds } from "../access";
 import { db, type Executor } from "../db";
 import { emailOutbox } from "../db/schema";
 import { env } from "../env";
+import type { NotificationType } from "@/lib/notifications";
 
 export interface EmailMessage {
   to: string;
@@ -79,9 +81,21 @@ function emailSender(): Sender | null {
  * Records the email in the outbox inside the caller's transaction, so emails are
  * only sent for work that actually committed. Delivery happens right after.
  */
-export async function sendEmail(ex: Executor, message: EmailMessage) {
+/** Whether real email can be sent (otherwise emails are only recorded/logged). */
+export function emailDeliveryConfigured(): boolean {
+  return Boolean(emailSender());
+}
+
+/**
+ * `about`: for notification emails, whose they are and which project — re-checked when sending,
+ * so someone who lost access in the meantime isn't emailed.
+ */
+export async function sendEmail(ex: Executor, message: EmailMessage, about: { userId?: string | null; projectId?: string | null; notificationId?: string | null } = {}) {
   const deliverable = Boolean(emailSender());
   await ex.insert(emailOutbox).values({
+    userId: about.userId ?? null,
+    projectId: about.projectId ?? null,
+    notificationId: about.notificationId ?? null,
     to: message.to,
     subject: message.subject,
     template: message.template,
@@ -91,30 +105,67 @@ export async function sendEmail(ex: Executor, message: EmailMessage) {
     createdAt: now(),
   });
   if (deliverable) {
-    setTimeout(() => void deliverOutbox().catch((error) => console.error("[forge] email delivery failed", error)), 200);
+    // Shortly after the caller commits (the per-minute job picks up anything this misses). Tests
+    // deliver explicitly so they control the timing.
+    if (env.NODE_ENV !== "test") setTimeout(() => void deliverOutbox().catch((error) => console.error("[forge] email delivery failed", error)), 200);
   } else if (env.NODE_ENV !== "test") {
     console.log(`\n\x1b[36m[email]\x1b[0m to ${message.to} — ${message.subject}${message.action ? `\n        ${message.action.url}` : ""}\n`);
   }
 }
 
+/** Retries back off: 1 min, 5 min, 15 min, 1 h, 3 h, 6 h, 12 h, then give up after ~1 day. */
+const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000, 3 * 60 * 60_000, 6 * 60 * 60_000, 12 * 60 * 60_000];
+export const MAX_EMAIL_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
+
+/**
+ * Sends due outbox emails. Each row is claimed before sending (several workers can run this at
+ * once), uses the row id as the provider's idempotency key, and retries with backoff on failure.
+ */
 export async function deliverOutbox() {
   const send = emailSender();
   if (!send) return;
   const pending = await db
     .select()
     .from(emailOutbox)
-    .where(and(eq(emailOutbox.status, "QUEUED"), lt(emailOutbox.attempts, 5)))
+    .where(and(eq(emailOutbox.status, "QUEUED"), lte(emailOutbox.nextAttemptAt, sql`now()`)))
     .orderBy(asc(emailOutbox.createdAt))
     .limit(20);
   for (const email of pending) {
+    // Claim: push the next attempt out so a concurrent worker skips this row.
+    const [claimed] = await db
+      .update(emailOutbox)
+      .set({ nextAttemptAt: new Date(now().getTime() + 2 * 60_000) })
+      .where(and(eq(emailOutbox.id, email.id), eq(emailOutbox.status, "QUEUED"), lte(emailOutbox.nextAttemptAt, sql`now()`)))
+      .returning({ id: emailOutbox.id });
+    if (!claimed) continue;
+    if (email.userId && email.projectId && !(await accessibleProjectIds(email.userId)).has(email.projectId)) {
+      await db.update(emailOutbox).set({ status: "SKIPPED", error: "Recipient no longer has access." }).where(eq(emailOutbox.id, email.id));
+      continue;
+    }
+    if (email.notificationId) {
+      // Like device notifications: not for archived work, and not if the person switched emails for this type off.
+      const { channelEnabled, notificationStillDeliverable } = await import("./notifications");
+      const n = await notificationStillDeliverable(db, email.notificationId);
+      const reason = !n ? "The work was archived or removed, or access was lost." : !(await channelEnabled(db, n.userId, n.type as NotificationType, "EMAIL")) ? "Emails for this type were switched off." : null;
+      if (reason) {
+        await db.update(emailOutbox).set({ status: "SKIPPED", error: reason }).where(eq(emailOutbox.id, email.id));
+        continue;
+      }
+    }
     try {
       await send({ id: email.id, to: email.to, subject: email.subject, text: email.textBody, html: email.htmlBody });
       await db.update(emailOutbox).set({ status: "SENT", sentAt: now(), attempts: email.attempts + 1 }).where(eq(emailOutbox.id, email.id));
     } catch (error) {
       const attempts = email.attempts + 1;
+      const delay = RETRY_DELAYS_MS[attempts - 1];
       await db
         .update(emailOutbox)
-        .set({ attempts, status: attempts >= 5 ? "FAILED" : "QUEUED", error: String(error).slice(0, 500) })
+        .set({
+          attempts,
+          status: delay === undefined ? "FAILED" : "QUEUED",
+          nextAttemptAt: new Date(now().getTime() + (delay ?? 0)),
+          error: String(error).slice(0, 500),
+        })
         .where(eq(emailOutbox.id, email.id));
     }
   }

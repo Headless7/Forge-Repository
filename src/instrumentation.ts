@@ -17,6 +17,8 @@ export async function register() {
   const { evictStaleRobloxAssets } = await import("./server/services/roblox");
   const { recoverMediaJobs } = await import("./server/services/media");
   const { sharedRateLimiter } = await import("./server/rate-limit");
+  const { processStorageDeletions } = await import("./server/services/purge");
+  const { processPushDeliveries } = await import("./server/services/push");
 
   const safely = (name: string, fn: () => Promise<unknown>) => () =>
     fn().catch((error) => console.error(`[forge] scheduled job "${name}" failed`, error));
@@ -27,8 +29,14 @@ export async function register() {
   setTimeout(safely("due-dates", runDueDateReminders), 15_000);
   setInterval(safely("due-dates", runDueDateReminders), 5 * 60_000);
   setInterval(safely("email-outbox", deliverOutbox), 60_000);
+  // Device notifications go out right after each event; this catches retries and anything missed.
+  setTimeout(safely("push-delivery", () => processPushDeliveries()), 20_000);
+  setInterval(safely("push-delivery", () => processPushDeliveries()), 60_000);
   // Roblox assets fetched for previews are freed after 7 days without being requested.
   setTimeout(safely("roblox-cache", evictStaleRobloxAssets), 60_000);
   setInterval(safely("roblox-cache", evictStaleRobloxAssets), 60 * 60_000);
   setInterval(safely("rate-limits", () => sharedRateLimiter.sweep()), 60 * 60_000);
+  // Files freed by permanent deletions: removed once unreferenced, retried until it succeeds.
+  setTimeout(safely("storage-cleanup", processStorageDeletions), 30_000);
+  setInterval(safely("storage-cleanup", processStorageDeletions), 5 * 60_000);
 }

@@ -120,7 +120,7 @@ function LinksEditor({ links, canEdit, onChange }: { links: CardLink[]; canEdit:
             {l.label || l.url.replace(/^https?:\/\//, "")}
           </a>
           {canEdit ? (
-            <button type="button" aria-label="Remove link" onClick={() => onChange(links.filter((x) => x.id !== l.id))} className="text-fg-subtle opacity-0 hover:text-fg group-hover:opacity-100">
+            <button type="button" aria-label="Remove link" onClick={() => onChange(links.filter((x) => x.id !== l.id))} className="hover-reveal text-fg-subtle opacity-0 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100">
               <X className="size-3.5" />
             </button>
           ) : null}
@@ -141,7 +141,7 @@ function LinksEditor({ links, canEdit, onChange }: { links: CardLink[]; canEdit:
           </div>
         </div>
       ) : canEdit ? (
-        <button type="button" onClick={() => setAdding(true)} className="flex items-center gap-1 text-[12px] text-fg-subtle hover:text-fg">
+        <button type="button" onClick={() => setAdding(true)} className="flex min-h-6 items-center gap-1 text-[12px] text-fg-subtle hover:text-fg">
           <Link2 className="size-3.5" /> Add link
         </button>
       ) : null}
@@ -296,7 +296,7 @@ export function CardSidebar({ onApprove, onRequestChanges, onSubmit, onUploadVer
             {perms.canEdit ? (
               <Popover>
                 <PopoverTrigger asChild>
-                  <button type="button" aria-label="Edit labels" className="flex h-[18px] items-center rounded border border-dashed border-border-strong px-1 text-fg-subtle hover:text-fg">
+                  <button type="button" aria-label="Edit labels" className="touch-target flex h-[18px] items-center rounded border border-dashed border-border-strong px-1 text-fg-subtle hover:text-fg">
                     <Plus className="size-3" />
                   </button>
                 </PopoverTrigger>

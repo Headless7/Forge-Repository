@@ -97,7 +97,7 @@ export function ReviewBanner({
               return (
                 <li key={c.id} className="flex items-start gap-2.5 px-4 py-2">
                   <Checkbox className="mt-0.5" checked={false} disabled={!perms.canResolveFeedback} onCheckedChange={() => comments.resolve(c.id, true)} aria-label="Mark resolved" />
-                  <button type="button" onClick={() => focusComment(c)} className="min-w-0 flex-1 text-left text-[13px] hover:text-fg">
+                  <button type="button" onClick={() => focusComment(c)} className="min-h-6 min-w-0 flex-1 text-left text-[13px] hover:text-fg">
                     {c.annotation?.type === "TIMESTAMP" && c.annotation.timestampMs != null ? (
                       <span className="mr-1.5 rounded bg-state-changes/15 px-1 font-mono text-[11px] font-semibold text-state-changes">{formatTimecode(c.annotation.timestampMs)}</span>
                     ) : null}
@@ -176,7 +176,7 @@ export function FeedbackSummary() {
   const unresolved = feedback.filter((c) => !c.resolvedAt).length;
   const resolved = feedback.length - unresolved;
   return (
-    <button type="button" onClick={() => scrollTo("feedback")} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-fg-muted hover:text-fg">
+    <button type="button" onClick={() => scrollTo("feedback")} className="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-fg-muted hover:text-fg">
       <span className={cn("font-semibold", unresolved ? "text-state-changes" : "text-fg-muted")}>{unresolved} unresolved feedback</span>
       <span>·</span>
       <span className="text-state-approved">{resolved} resolved</span>

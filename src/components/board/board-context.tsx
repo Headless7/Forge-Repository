@@ -27,6 +27,10 @@ export interface BoardContextValue {
   renameCard: (card: CardSummaryDTO, title: string) => void;
   setCardState: (card: CardSummaryDTO, state: CardState) => void;
   setProductionStage: (card: CardSummaryDTO, status: ProductionStatus) => void;
+  /** Moves a card to the end of another column (the no-drag alternative). */
+  moveCardToColumn: (card: CardSummaryDTO, columnId: string) => void;
+  /** Moves a card to another board of the project (top of its first column). */
+  moveCardToBoard: (card: CardSummaryDTO, boardId: string) => void;
   toggleAssignee: (card: CardSummaryDTO, userId: string) => void;
   archiveCard: (card: CardSummaryDTO) => void;
   duplicateCard: (card: CardSummaryDTO) => void;

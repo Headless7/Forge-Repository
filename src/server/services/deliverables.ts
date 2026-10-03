@@ -1,18 +1,22 @@
-import { and, asc, desc, eq, inArray, isNull, max, ne, sql } from "drizzle-orm";
-import { rollupState, wouldCreateCycle } from "@/lib/deliverables";
+import { and, asc, desc, eq, inArray, isNull, max, ne, or, sql } from "drizzle-orm";
+import { clampSize, DEFAULT_FROM_POINT, DEFAULT_TO_POINT, isValidPoint, NODE_DEFAULT, nodeSize, remapPoint } from "@/lib/canvas-points";
+import { deliverableTeam, rollupState, wouldCreateCycle } from "@/lib/deliverables";
+import { roleHas } from "@/lib/permissions";
 import { positionBetween, POSITION_GAP } from "@/lib/positions";
 import type { CardDetailDTO, DeliverableLinkType } from "@/lib/types";
-import { assertCard, requireCard, requireDeliverable, type CardAccess, type CardRow } from "../access";
+import { assertCard, loadContributors, requireCard, requireDeliverable, type CardAccess, type CardRow } from "../access";
 import { now } from "../clock";
 import { db, type Executor, type Tx } from "../db";
-import { attachments, cards, deliverableLinks, deliverables } from "../db/schema";
-import { conflict, invalid, notFound } from "../errors";
+import { attachments, cards, deliverableContributors, deliverableLinks, deliverables } from "../db/schema";
+import { conflict, forbidden, invalid, notFound } from "../errors";
 import { logActivity } from "./activity";
 import { loadCardDetail } from "./card-dto";
-import { touchCard } from "./cards";
+import { cardNotificationData, touchCard } from "./cards";
 import type { Actor } from "./context";
 import { Effects } from "./effects";
-import { filterProjectMembers } from "./members-query";
+import { listProjectMembers } from "./members-query";
+import { inboxAudience, NotificationBatch } from "./notifications";
+import { addDependencyNotifications, dependencyChanges, loadCardWork, type CardWork } from "./workflow";
 
 const VISUAL_KINDS = ["IMAGE", "VIDEO", "AUDIO", "ROBLOX"] as const;
 /** What someone can choose (or upload) as a card's cover. */
@@ -133,14 +137,89 @@ async function detail(actor: Actor, cardId: string): Promise<CardDetailDTO> {
   return loadCardDetail(await requireCard(actor.userId, cardId));
 }
 
-async function assertPeople(ctx: CardAccess, actorId: string, input: { ownerId?: string | null; reviewerId?: string | null }, ex: Executor) {
-  for (const key of ["ownerId", "reviewerId"] as const) {
-    const id = input[key];
-    if (!id) continue;
-    const valid = await filterProjectMembers(ctx.access.project, [id], ex);
-    if (!valid.length) throw invalid("That person isn't a member of this project.");
-    const selfAssign = key === "ownerId" && id === actorId && ctx.perms.canSelfAssign;
-    if (!ctx.perms.canAssign && !selfAssign) throw invalid("You don't have permission to assign people.");
+interface People {
+  ownerId: string | null;
+  contributorIds: string[];
+  reviewerId: string | null;
+}
+
+/**
+ * Checks a change to who works on / reviews a deliverable. People who work on it must be able to
+ * upload in this project (a viewer can't), a reviewer must be able to review, and nobody reviews
+ * their own work unless the project allows it. Putting others on (or taking them off) needs the
+ * assign permission; anyone who can create cards may put themselves on or take themselves off.
+ */
+async function assertPeople(ctx: CardAccess, actorId: string, before: People, next: People, ex: Executor) {
+  const workersBefore = new Set([before.ownerId, ...before.contributorIds].filter(Boolean) as string[]);
+  const workersNext = new Set([next.ownerId, ...next.contributorIds].filter(Boolean) as string[]);
+  const added = [...workersNext].filter((id) => !workersBefore.has(id));
+  const removed = [...workersBefore].filter((id) => !workersNext.has(id));
+  const ownerChanged = before.ownerId !== next.ownerId;
+  const reviewerChanged = before.reviewerId !== next.reviewerId;
+  if (!added.length && !removed.length && !ownerChanged && !reviewerChanged) return;
+
+  const team = new Map((await listProjectMembers(ctx.access.project, ex)).map((m) => [m.id, m]));
+  for (const id of added) {
+    const m = team.get(id);
+    if (!m) throw invalid("That person isn't a member of this project.");
+    if (!roleHas(m.role, "attachment.upload")) throw invalid(`${m.displayName} can only view this project, so they can't work on deliverables.`);
+  }
+  if (reviewerChanged && next.reviewerId) {
+    const m = team.get(next.reviewerId);
+    if (!m) throw invalid("That person isn't a member of this project.");
+    if (!roleHas(m.role, "card.review")) throw invalid(`${m.displayName} can't review work in this project.`);
+  }
+  if (next.reviewerId && workersNext.has(next.reviewerId) && !ctx.access.project.settings.allowSelfApproval) {
+    throw invalid("The reviewer can't also work on this deliverable: this project doesn't allow approving your own work.");
+  }
+  const othersTouched = [...added, ...removed].some((id) => id !== actorId) || (ownerChanged && [before.ownerId, next.ownerId].some((id) => id && id !== actorId));
+  if ((othersTouched || reviewerChanged) && !ctx.perms.canAssign) throw forbidden("Only managers can assign other people.");
+  if (!ctx.perms.canAssign && !ctx.perms.canSelfAssign) throw forbidden("You don't have permission to take on work in this project.");
+}
+
+/** Who to tell about a change to a deliverable's people, reviewer and deadline. */
+function addPeopleNotifications(
+  batch: NotificationBatch,
+  before: People & { dueAt: Date | null },
+  next: People & { dueAt: Date | null },
+  base: { actorId: string; studioId: string; projectId: string; cardId: string; deliverableId: string; data: Record<string, unknown> },
+  team: string[],
+) {
+  const { data, ...where } = base;
+  const workersBefore = new Set([before.ownerId, ...before.contributorIds].filter(Boolean) as string[]);
+  if (next.ownerId && next.ownerId !== before.ownerId) batch.add({ ...where, recipientIds: [next.ownerId], type: "ASSIGNED", data: { ...data, role: "responsible" } });
+  const newContributors = next.contributorIds.filter((id) => !workersBefore.has(id) && id !== next.ownerId);
+  if (newContributors.length) batch.add({ ...where, recipientIds: newContributors, type: "ASSIGNED", data: { ...data, role: "contributor" } });
+  const stillOn = new Set([next.ownerId, ...next.contributorIds].filter(Boolean) as string[]);
+  const takenOff = [...workersBefore].filter((id) => !stillOn.has(id));
+  if (takenOff.length) batch.add({ ...where, recipientIds: takenOff, type: "UNASSIGNED", data });
+  if (next.reviewerId && next.reviewerId !== before.reviewerId) batch.add({ ...where, recipientIds: [next.reviewerId], type: "REVIEWER_ASSIGNED", data: { ...data, role: "reviewer" } });
+  if (before.reviewerId && before.reviewerId !== next.reviewerId) batch.add({ ...where, recipientIds: [before.reviewerId], type: "UNASSIGNED", data: { ...data, role: "reviewer" } });
+  if ((before.dueAt?.getTime() ?? null) !== (next.dueAt?.getTime() ?? null)) {
+    batch.add({ ...where, recipientIds: team, type: "DUE_CHANGED", data: { ...data, dueAt: next.dueAt?.toISOString() ?? null, previousDueAt: before.dueAt?.toISOString() ?? null } });
+  }
+}
+
+/** Notifies the teams of deliverables a change made ready or made wait again. */
+async function sendDependencyNotifications(tx: Executor, ctx: CardAccess, actorId: string, before: CardWork, ignore: string[] = []) {
+  const after = await loadCardWork(tx, ctx.card.id);
+  const changes = dependencyChanges(before, after, undefined, ignore);
+  if (!changes.length) return [];
+  const batch = new NotificationBatch();
+  addDependencyNotifications(batch, after, changes, {
+    actorId,
+    studioId: ctx.access.studioId,
+    projectId: ctx.card.projectId,
+    cardId: ctx.card.id,
+    cardData: cardNotificationData(ctx.access, ctx.card),
+  });
+  return batch.send(tx);
+}
+
+async function setContributors(tx: Executor, deliverableId: string, userIds: string[], actorId: string) {
+  await tx.delete(deliverableContributors).where(eq(deliverableContributors.deliverableId, deliverableId));
+  if (userIds.length) {
+    await tx.insert(deliverableContributors).values(userIds.map((userId) => ({ deliverableId, userId, addedById: actorId, createdAt: now() }))).onConflictDoNothing();
   }
 }
 
@@ -152,6 +231,8 @@ export interface DeliverableInput {
   assetType?: string;
   required?: boolean;
   ownerId?: string | null;
+  /** Everyone working on it alongside the responsible person (replaces the current list). */
+  contributorIds?: string[];
   reviewerId?: string | null;
   dueAt?: string | null;
 }
@@ -164,9 +245,13 @@ export async function createDeliverable(
   assertCard(ctx.perms, "canEdit", "You don't have permission to add deliverables to this card.");
   const name = input.name.trim();
   if (!name) throw invalid("Give the deliverable a name.");
+  const contributorIds = [...new Set(input.contributorIds ?? [])].filter((id) => id !== input.ownerId);
   const fx = new Effects();
   await db.transaction(async (tx) => {
-    await assertPeople(ctx, actor.userId, input, tx);
+    const none: People = { ownerId: null, contributorIds: [], reviewerId: null };
+    const people: People = { ownerId: input.ownerId ?? null, contributorIds, reviewerId: input.reviewerId ?? null };
+    await assertPeople(ctx, actor.userId, none, people, tx);
+    const before = await loadCardWork(tx, ctx.card.id);
     const number = await nextNumber(tx, ctx.card.id);
     const [last] = await tx
       .select({ position: deliverables.position, x: deliverables.canvasX, y: deliverables.canvasY })
@@ -202,6 +287,7 @@ export async function createDeliverable(
       if (!source) throw notFound("Deliverable");
       await tx.insert(deliverableLinks).values({ cardId: ctx.card.id, fromId: source.id, toId: row!.id, type: input.linkFrom.type, createdById: actor.userId });
     }
+    await setContributors(tx, row!.id, contributorIds, actor.userId);
     await recomputeCardRollup(tx, ctx.card.id);
     await touchCard(tx, ctx.card.id, actor.userId);
     await logActivity(tx, {
@@ -212,6 +298,17 @@ export async function createDeliverable(
       type: "deliverable.created",
       data: { deliverableId: row!.id, name, required: row!.required },
     });
+    const batch = new NotificationBatch();
+    addPeopleNotifications(
+      batch,
+      { ...none, dueAt: row!.dueAt },
+      { ...people, dueAt: row!.dueAt },
+      { actorId: actor.userId, studioId: ctx.access.studioId, projectId: ctx.card.projectId, cardId: ctx.card.id, deliverableId: row!.id, data: { ...cardNotificationData(ctx.access, ctx.card), deliverable: name, deliverableNumber: number } },
+      [],
+    );
+    fx.notify(await batch.send(tx));
+    // A new deliverable only matters to dependants already on the card (it can't have any yet).
+    fx.notify(await sendDependencyNotifications(tx, ctx, actor.userId, before, [row!.id]));
     fx.card(ctx.card.projectId, ctx.card.id);
   });
   fx.flush(actor.clientId);
@@ -222,7 +319,7 @@ export async function updateDeliverable(actor: Actor, input: DeliverableInput & 
   const ctx = await requireDeliverable(actor.userId, input.deliverableId);
   const d = ctx.deliverable;
   if (d.archivedAt) throw conflict("This deliverable is archived. Restore it to make changes.");
-  const onlyPeople = Object.keys(input).every((k) => k === "deliverableId" || k === "ownerId" || k === "reviewerId");
+  const onlyPeople = Object.keys(input).every((k) => k === "deliverableId" || k === "ownerId" || k === "reviewerId" || k === "contributorIds");
   if (!onlyPeople) assertCard(ctx.perms, "canEdit", "You don't have permission to edit this deliverable.");
   const patch: Partial<typeof deliverables.$inferInsert> = {};
   const changed: string[] = [];
@@ -258,11 +355,31 @@ export async function updateDeliverable(actor: Actor, input: DeliverableInput & 
     patch.reviewerId = input.reviewerId;
     changed.push("reviewer");
   }
+  const nextOwner = patch.ownerId !== undefined ? patch.ownerId : d.ownerId;
+  let contributorIds = ctx.contributorIds;
+  if (input.contributorIds !== undefined) {
+    const next = [...new Set(input.contributorIds)].filter((id) => id !== nextOwner);
+    if (next.length !== ctx.contributorIds.length || next.some((id) => !ctx.contributorIds.includes(id))) {
+      contributorIds = next;
+      changed.push("contributors");
+    }
+  } else if (nextOwner && ctx.contributorIds.includes(nextOwner)) {
+    // Becoming responsible replaces being a contributor.
+    contributorIds = ctx.contributorIds.filter((id) => id !== nextOwner);
+  }
   if (!changed.length) return loadCardDetail(ctx);
+  const before: People & { dueAt: Date | null } = { ownerId: d.ownerId, contributorIds: ctx.contributorIds, reviewerId: d.reviewerId, dueAt: d.dueAt };
+  const next: People & { dueAt: Date | null } = {
+    ownerId: nextOwner ?? null,
+    contributorIds,
+    reviewerId: patch.reviewerId !== undefined ? (patch.reviewerId ?? null) : d.reviewerId,
+    dueAt: patch.dueAt !== undefined ? (patch.dueAt ?? null) : d.dueAt,
+  };
   const fx = new Effects();
   await db.transaction(async (tx) => {
-    await assertPeople(ctx, actor.userId, { ownerId: patch.ownerId, reviewerId: patch.reviewerId }, tx);
-    await tx.update(deliverables).set(patch).where(eq(deliverables.id, d.id));
+    await assertPeople(ctx, actor.userId, before, next, tx);
+    if (Object.keys(patch).length) await tx.update(deliverables).set(patch).where(eq(deliverables.id, d.id));
+    if (contributorIds !== ctx.contributorIds) await setContributors(tx, d.id, contributorIds, actor.userId);
     if (patch.required !== undefined) await recomputeCardRollup(tx, ctx.card.id);
     await touchCard(tx, ctx.card.id, actor.userId);
     await logActivity(tx, {
@@ -273,6 +390,22 @@ export async function updateDeliverable(actor: Actor, input: DeliverableInput & 
       type: "deliverable.updated",
       data: { deliverableId: d.id, name: patch.name ?? d.name, changed, ownerId: patch.ownerId, reviewerId: patch.reviewerId },
     });
+    const batch = new NotificationBatch();
+    addPeopleNotifications(
+      batch,
+      before,
+      next,
+      {
+        actorId: actor.userId,
+        studioId: ctx.access.studioId,
+        projectId: ctx.card.projectId,
+        cardId: ctx.card.id,
+        deliverableId: d.id,
+        data: { ...cardNotificationData(ctx.access, ctx.card), deliverable: patch.name ?? d.name, deliverableNumber: d.number },
+      },
+      deliverableTeam(next, ctx.assigneeIds).ids,
+    );
+    fx.notify(await batch.send(tx));
     fx.card(ctx.card.projectId, ctx.card.id);
   });
   fx.flush(actor.clientId);
@@ -287,6 +420,7 @@ export async function setDeliverableArchived(actor: Actor, input: { deliverableI
   if (Boolean(d.archivedAt) === input.archived) return loadCardDetail(ctx);
   const fx = new Effects();
   await db.transaction(async (tx) => {
+    const before = await loadCardWork(tx, ctx.card.id);
     if (input.archived) {
       const [active] = await tx
         .select({ n: sql<number>`count(*)`.mapWith(Number) })
@@ -308,34 +442,101 @@ export async function setDeliverableArchived(actor: Actor, input: { deliverableI
       type: input.archived ? "deliverable.archived" : "deliverable.restored",
       data: { deliverableId: d.id, name: d.name },
     });
+    const notified = await new NotificationBatch()
+      .add({
+        recipientIds: deliverableTeam({ ownerId: d.ownerId, contributorIds: ctx.contributorIds }, ctx.assigneeIds).ids,
+        actorId: actor.userId,
+        type: "WORK_ARCHIVED",
+        studioId: ctx.access.studioId,
+        projectId: ctx.card.projectId,
+        cardId: ctx.card.id,
+        deliverableId: d.id,
+        data: { ...cardNotificationData(ctx.access, ctx.card), deliverable: d.name, deliverableNumber: d.number, restored: !input.archived },
+      })
+      .send(tx);
+    // Archiving an unfinished prerequisite frees what waits on it; restoring it blocks them again.
+    fx.notify([...notified, ...(await sendDependencyNotifications(tx, ctx, actor.userId, before))]);
+    // Only this deliverable's notifications leave or rejoin inboxes; the card's others stay.
+    fx.notify(await inboxAudience(tx, { deliverableId: d.id }));
     fx.card(ctx.card.projectId, ctx.card.id);
   });
   fx.flush(actor.clientId);
   return detail(actor, ctx.card.id);
 }
 
-/** Persists canvas node positions (one call per drag, possibly several nodes). */
-export async function layoutDeliverables(actor: Actor, input: { cardId: string; positions: Array<{ id: string; x: number; y: number }> }) {
+export interface NodeLayout {
+  id: string;
+  x?: number;
+  y?: number;
+  /** New size; null resets to the default. */
+  w?: number | null;
+  h?: number | null;
+}
+
+/**
+ * Persists canvas layout (one call per drag or resize, possibly several nodes). Only the fields
+ * sent are written, so two people arranging different nodes — or one moving a node while another
+ * resizes it — never overwrite each other. When a node shrinks, arrows attached to a point it no
+ * longer has move to the nearest point on the same side; the relationship itself never changes.
+ */
+export async function layoutDeliverables(actor: Actor, input: { cardId: string; positions: NodeLayout[] }) {
   const ctx = await requireCard(actor.userId, input.cardId);
   assertCard(ctx.perms, "canEdit", "You don't have permission to arrange this card's deliverables.");
   const ids = input.positions.map((p) => p.id);
   const fx = new Effects();
   await db.transaction(async (tx) => {
     const owned = await tx
-      .select({ id: deliverables.id })
+      .select({ id: deliverables.id, archivedAt: deliverables.archivedAt, canvasW: deliverables.canvasW, canvasH: deliverables.canvasH })
       .from(deliverables)
       .where(and(eq(deliverables.cardId, ctx.card.id), inArray(deliverables.id, ids)));
     if (owned.length !== new Set(ids).size) throw notFound("Deliverable");
+    if (owned.some((d) => d.archivedAt)) throw conflict("Archived deliverables can't be moved or resized. Restore them first.");
+    const resized: Array<{ id: string; size: { w: number; h: number } }> = [];
     for (const p of input.positions) {
-      await tx
-        .update(deliverables)
-        .set({ canvasX: Math.round(p.x * 10) / 10, canvasY: Math.round(p.y * 10) / 10 })
-        .where(eq(deliverables.id, p.id));
+      const patch: Partial<typeof deliverables.$inferInsert> = {};
+      if (p.x !== undefined) patch.canvasX = Math.round(p.x * 10) / 10;
+      if (p.y !== undefined) patch.canvasY = Math.round(p.y * 10) / 10;
+      if (p.w !== undefined || p.h !== undefined) {
+        const current = owned.find((d) => d.id === p.id)!;
+        const w = p.w === undefined ? current.canvasW : p.w;
+        const h = p.h === undefined ? current.canvasH : p.h;
+        const size = clampSize(w ?? NODE_DEFAULT.w, h ?? NODE_DEFAULT.h);
+        patch.canvasW = w === null ? null : size.w;
+        patch.canvasH = h === null ? null : size.h;
+        resized.push({ id: p.id, size: nodeSize({ canvasW: patch.canvasW, canvasH: patch.canvasH }) });
+      }
+      if (Object.keys(patch).length) await tx.update(deliverables).set(patch).where(eq(deliverables.id, p.id));
+    }
+    for (const { id, size } of resized) {
+      const attached = await tx
+        .select()
+        .from(deliverableLinks)
+        .where(and(eq(deliverableLinks.cardId, ctx.card.id), or(eq(deliverableLinks.fromId, id), eq(deliverableLinks.toId, id))));
+      for (const l of attached) {
+        const patch: Partial<typeof deliverableLinks.$inferInsert> = {};
+        if (l.fromId === id && l.fromPoint) {
+          const next = remapPoint(l.fromPoint, size, DEFAULT_FROM_POINT);
+          if (next !== l.fromPoint) patch.fromPoint = next;
+        }
+        if (l.toId === id && l.toPoint) {
+          const next = remapPoint(l.toPoint, size, DEFAULT_TO_POINT);
+          if (next !== l.toPoint) patch.toPoint = next;
+        }
+        if (Object.keys(patch).length) await tx.update(deliverableLinks).set(patch).where(eq(deliverableLinks.id, l.id));
+      }
     }
     fx.card(ctx.card.projectId, ctx.card.id, false);
   });
   fx.flush(actor.clientId);
   return { ok: true };
+}
+
+/** An arrow end's point, valid for the node's current size (null keeps the default side). */
+async function pointFor(ex: Executor, deliverableId: string, point: string | null | undefined, fallback: string): Promise<string | null> {
+  if (!point) return null;
+  if (!isValidPoint(point)) throw invalid("Unknown connection point.");
+  const [d] = await ex.select({ canvasW: deliverables.canvasW, canvasH: deliverables.canvasH }).from(deliverables).where(eq(deliverables.id, deliverableId));
+  return d ? remapPoint(point, nodeSize(d), fallback) : null;
 }
 
 /** List-view ordering. */
@@ -375,13 +576,14 @@ export async function moveDeliverable(actor: Actor, input: { deliverableId: stri
 
 export async function linkDeliverables(
   actor: Actor,
-  input: { cardId: string; fromId: string; toId: string; type: DeliverableLinkType; note?: string },
+  input: { cardId: string; fromId: string; toId: string; type: DeliverableLinkType; note?: string; fromPoint?: string | null; toPoint?: string | null },
 ): Promise<CardDetailDTO> {
   const ctx = await requireCard(actor.userId, input.cardId);
   assertCard(ctx.perms, "canEdit", "You don't have permission to connect this card's deliverables.");
   if (input.fromId === input.toId) throw invalid("A deliverable can't be connected to itself.");
   const fx = new Effects();
   await db.transaction(async (tx) => {
+    const before = await loadCardWork(tx, ctx.card.id);
     const pair = await tx
       .select({ id: deliverables.id, name: deliverables.name, archivedAt: deliverables.archivedAt })
       .from(deliverables)
@@ -405,6 +607,8 @@ export async function linkDeliverables(
       fromId: input.fromId,
       toId: input.toId,
       type: input.type,
+      fromPoint: await pointFor(tx, input.fromId, input.fromPoint, DEFAULT_FROM_POINT),
+      toPoint: await pointFor(tx, input.toId, input.toPoint, DEFAULT_TO_POINT),
       note: input.note?.trim() ?? "",
       createdById: actor.userId,
     });
@@ -421,13 +625,21 @@ export async function linkDeliverables(
         to: pair.find((p) => p.id === input.toId)!.name,
       },
     });
+    fx.notify(await sendDependencyNotifications(tx, ctx, actor.userId, before));
     fx.card(ctx.card.projectId, ctx.card.id);
   });
   fx.flush(actor.clientId);
   return detail(actor, ctx.card.id);
 }
 
-export async function updateLink(actor: Actor, input: { linkId: string; note?: string; reverse?: boolean }): Promise<CardDetailDTO> {
+/**
+ * Edits a connection: its note, its direction (reverse), or where its arrow attaches. Moving the
+ * ends to other points of the same two deliverables never changes what the connection means.
+ */
+export async function updateLink(
+  actor: Actor,
+  input: { linkId: string; note?: string; reverse?: boolean; fromPoint?: string | null; toPoint?: string | null },
+): Promise<CardDetailDTO> {
   const [link] = await db.select().from(deliverableLinks).where(eq(deliverableLinks.id, input.linkId));
   if (!link) throw notFound("Connection");
   const ctx = await requireCard(actor.userId, link.cardId).catch(() => {
@@ -436,8 +648,11 @@ export async function updateLink(actor: Actor, input: { linkId: string; note?: s
   assertCard(ctx.perms, "canEdit");
   const fx = new Effects();
   await db.transaction(async (tx) => {
+    const before = await loadCardWork(tx, ctx.card.id);
     const patch: Partial<typeof deliverableLinks.$inferInsert> = {};
     if (input.note !== undefined) patch.note = input.note.trim();
+    if (input.fromPoint !== undefined) patch.fromPoint = await pointFor(tx, link.fromId, input.fromPoint, DEFAULT_FROM_POINT);
+    if (input.toPoint !== undefined) patch.toPoint = await pointFor(tx, link.toId, input.toPoint, DEFAULT_TO_POINT);
     if (input.reverse) {
       if (link.type === "DEPENDENCY") {
         const others = (await tx.select().from(deliverableLinks).where(eq(deliverableLinks.cardId, link.cardId))).filter((l) => l.id !== link.id);
@@ -445,8 +660,13 @@ export async function updateLink(actor: Actor, input: { linkId: string; note?: s
       }
       patch.fromId = link.toId;
       patch.toId = link.fromId;
+      // The arrow keeps its attachment spots on each deliverable.
+      patch.fromPoint = link.toPoint;
+      patch.toPoint = link.fromPoint;
     }
+    if (!Object.keys(patch).length) return;
     await tx.update(deliverableLinks).set(patch).where(eq(deliverableLinks.id, link.id));
+    if (input.reverse) fx.notify(await sendDependencyNotifications(tx, ctx, actor.userId, before));
     fx.card(ctx.card.projectId, ctx.card.id);
   });
   fx.flush(actor.clientId);
@@ -463,6 +683,7 @@ export async function unlinkDeliverables(actor: Actor, input: { linkId: string }
   assertCard(ctx.perms, "canEdit");
   const fx = new Effects();
   await db.transaction(async (tx) => {
+    const before = await loadCardWork(tx, ctx.card.id);
     const names = await tx.select({ id: deliverables.id, name: deliverables.name }).from(deliverables).where(inArray(deliverables.id, [link.fromId, link.toId]));
     await tx.delete(deliverableLinks).where(eq(deliverableLinks.id, link.id));
     await touchCard(tx, ctx.card.id, actor.userId);
@@ -474,6 +695,7 @@ export async function unlinkDeliverables(actor: Actor, input: { linkId: string }
       type: "deliverable.unlinked",
       data: { type: link.type, from: names.find((n) => n.id === link.fromId)?.name, to: names.find((n) => n.id === link.toId)?.name },
     });
+    fx.notify(await sendDependencyNotifications(tx, ctx, actor.userId, before));
     fx.card(ctx.card.projectId, ctx.card.id);
   });
   fx.flush(actor.clientId);

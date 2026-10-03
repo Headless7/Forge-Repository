@@ -11,6 +11,8 @@ export const metadata: Metadata = {
   title: { default: "Forge", template: "%s · Forge" },
   description: "Production boards and media review for Roblox game studios.",
   robots: { index: false, follow: false },
+  appleWebApp: { capable: true, title: "Forge", statusBarStyle: "black-translucent" },
+  icons: { apple: "/icons/apple-touch-icon.png" },
 };
 
 export const viewport: Viewport = {

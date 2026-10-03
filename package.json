@@ -22,7 +22,8 @@
     "test:watch": "vitest",
     "verify:flows": "tsx scripts/verify-flows.ts",
     "verify:server": "tsx scripts/verify-server.ts",
-    "db:migrate:prod": "node scripts/migrate-prod.mjs"
+    "db:migrate:prod": "node scripts/migrate-prod.mjs",
+    "push:keys": "tsx scripts/push-keys.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1143.0",

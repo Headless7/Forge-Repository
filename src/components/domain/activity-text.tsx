@@ -19,7 +19,11 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
     case "card.created":
       return <>created {card ?? "this card"}{d.columnName ? <> in <strong className="font-medium text-fg">{s(d.columnName)}</strong></> : null}</>;
     case "card.moved":
-      return <>moved {it} from <strong className="font-medium text-fg">{s(d.fromName)}</strong> to <strong className="font-medium text-fg">{s(d.toName)}</strong></>;
+      return d.toBoardName ? (
+        <>moved {it} to <strong className="font-medium text-fg">{s(d.toName)}</strong> on the <strong className="font-medium text-fg">{s(d.toBoardName)}</strong> board</>
+      ) : (
+        <>moved {it} from <strong className="font-medium text-fg">{s(d.fromName)}</strong> to <strong className="font-medium text-fg">{s(d.toName)}</strong></>
+      );
     case "card.renamed":
       return <>renamed {withCard ? "a card" : "this card"} from “{s(d.from)}” to “{s(d.to)}”</>;
     case "card.archived":
@@ -80,8 +84,16 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
       return <>restored the category {s(d.columnName)}</>;
     case "column.duplicated":
       return <>duplicated a category as {s(d.columnName)}</>;
+    case "board.created":
+      return <>created the board <strong className="font-medium text-fg">{s(d.boardName)}</strong></>;
+    case "board.renamed":
+      return <>renamed the board {s(d.from)} to {s(d.to)}</>;
+    case "board.archived":
+      return <>archived the board {s(d.boardName)}</>;
+    case "board.restored":
+      return <>restored the board {s(d.boardName)}</>;
     case "project.created":
-      return <>created the project</>;
+      return d.template ? <>created the project from {s(d.template)}</> : <>created the project</>;
     default:
       return <>{event.type.replace(/[._]/g, " ")}</>;
   }

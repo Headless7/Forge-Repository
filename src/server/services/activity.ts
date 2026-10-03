@@ -51,6 +51,10 @@ export type ActivityType =
   | "column.archived"
   | "column.restored"
   | "column.duplicated"
+  | "board.created"
+  | "board.renamed"
+  | "board.archived"
+  | "board.restored"
   | "project.created"
   | "project.updated";
 
@@ -67,6 +71,9 @@ const PROJECT_FEED_TYPES: ActivityType[] = [
   "production.changed",
   "column.created",
   "column.archived",
+  "board.created",
+  "board.archived",
+  "board.restored",
   "project.created",
 ];
 

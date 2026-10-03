@@ -2,6 +2,7 @@
  * Data transfer objects shared by the server (producers) and the client (consumers).
  * Dates are ISO strings so every DTO is JSON-serialisable.
  */
+import type { NotificationType } from "./notifications";
 import type { CardPermissions, MemberAccess, Permission, Role } from "./permissions";
 
 export type CardState = "NOT_SUBMITTED" | "IN_PROGRESS" | "NEEDS_REVIEW" | "CHANGES_REQUESTED" | "APPROVED";
@@ -141,6 +142,8 @@ export interface CardSummaryDTO {
   dueAt: string | null;
   milestoneId: string | null;
   assigneeIds: string[];
+  /** People responsible for, or contributing to, the card's active deliverables. */
+  deliverableAssigneeIds: string[];
   labelIds: string[];
   cover: MediaRefDTO | null;
   /** AUTO: follows the first deliverable's current file. MANUAL: someone chose it. NONE: no cover. */
@@ -177,9 +180,55 @@ export interface ViewerDTO {
   permissions: Permission[];
 }
 
+/** What creating a project from a template would copy (and leave out). */
+export interface ProjectTemplatePreviewDTO {
+  source: { id: string; name: string; icon: string; color: string; key: string };
+  boards: Array<{ name: string; description: string; columns: Array<{ name: string; icon: string | null; color: string | null }> }>;
+  labels: Array<{ name: string; color: string }>;
+  settings: {
+    visibility: ProjectVisibility;
+    defaultCardMode: CardDisplayMode;
+    background: string;
+    allowSelfApproval: boolean;
+    requireFeedbackForChanges: boolean;
+    defaultReviewers: number;
+  };
+  /** Explicit members of the template: copied unless `excluded` says why not. */
+  people: Array<{
+    userId: string;
+    displayName: string;
+    username: string;
+    avatarUrl: string | null;
+    avatarColor: string;
+    studioRole: Role;
+    projectRole: Role | null;
+    /** Project-only collaborator: copying gives them this new project too. */
+    projectsOnly: boolean;
+    excluded: string | null;
+    note: string | null;
+  }>;
+  notCopied: string[];
+}
+
+/** A board in the project's switcher — light: no columns or cards. */
+export interface BoardSummaryDTO {
+  id: string;
+  /** Stable address inside the project: /studio/project/b/<number>. */
+  number: number;
+  name: string;
+  description: string;
+  position: number;
+  /** Active cards on the board. */
+  cards: number;
+}
+
 export interface BoardDTO {
   project: ProjectDTO;
   boardId: string;
+  /** The board being shown. */
+  board: BoardSummaryDTO;
+  /** Every active board of the project, in switcher order (the first is the default). */
+  boards: BoardSummaryDTO[];
   columns: ColumnDTO[];
   cards: CardSummaryDTO[];
   members: MemberDTO[];
@@ -331,13 +380,21 @@ export interface DeliverableDTO {
   assetType: string;
   required: boolean;
   state: CardState;
+  /** Responsible person; with no one set (and no contributors) the card's assignees are. */
   ownerId: string | null;
+  /** People working on it alongside the responsible person. */
+  contributorIds: string[];
+  /** Reviewer; with no one set the card's reviewers review it. */
   reviewerId: string | null;
+  /** Own deadline; with none set the card's deadline applies. */
   dueAt: string | null;
   currentVersionId: string | null;
   approvedVersionId: string | null;
   canvasX: number;
   canvasY: number;
+  /** Node size on the canvas; null = default (see lib/canvas-points). */
+  canvasW: number | null;
+  canvasH: number | null;
   position: number;
   createdById: string | null;
   createdAt: string;
@@ -359,6 +416,9 @@ export interface DeliverableLinkDTO {
   fromId: string;
   toId: string;
   type: DeliverableLinkType;
+  /** Connection points ("r-50"); null = the default sides. */
+  fromPoint: string | null;
+  toPoint: string | null;
   note: string;
   createdById: string | null;
   createdAt: string;
@@ -412,11 +472,16 @@ export interface CardDetailDTO extends CardSummaryDTO {
 
 export interface NotificationDTO {
   id: string;
-  type: string;
+  type: NotificationType;
   actor: UserDTO | null;
   studio: { id: string; slug: string; name: string };
   project: { id: string; slug: string; name: string; icon: string } | null;
+  /** The board the card is on. */
+  board: { number: number; name: string } | null;
   card: { id: string; key: string; title: string } | null;
+  /** The deliverable (and revision) it's about, when it's about one. */
+  deliverable: { id: string; number: number; name: string } | null;
+  versionNumber: number | null;
   commentId: string | null;
   data: Record<string, unknown>;
   readAt: string | null;
@@ -448,6 +513,8 @@ export interface ProjectListItemDTO {
 export interface SearchResultDTO {
   card: CardSummaryDTO;
   project: { id: string; slug: string; name: string; icon: string; key: string };
+  /** The board the card is on (results open there). */
+  board: { id: string; number: number; name: string };
   columnName: string;
   matchedIn: Array<"title" | "description" | "comment" | "label" | "assignee" | "column" | "key">;
   snippet: string | null;

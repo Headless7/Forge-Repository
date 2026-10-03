@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { deliverableTeam } from "@/lib/deliverables";
 import { roleHas } from "@/lib/permissions";
 import type { CardDetailDTO, CardState } from "@/lib/types";
 import { assertDeliverable, requireCard, requireDeliverable, type DeliverableAccess } from "../access";
@@ -13,7 +14,8 @@ import type { Actor } from "./context";
 import { recomputeCardRollup } from "./deliverables";
 import { Effects } from "./effects";
 import { listProjectMembers } from "./members-query";
-import { notify } from "./notifications";
+import { NotificationBatch } from "./notifications";
+import { addDependencyNotifications, dependencyChanges, loadCardWork, type CardWork } from "./workflow";
 
 type VersionRow = typeof assetVersions.$inferSelect;
 
@@ -51,11 +53,27 @@ async function reviewerRecipients(tx: Tx, ctx: DeliverableAccess): Promise<strin
   return members.filter((m) => roleHas(m.role, "card.review")).map((m) => m.id);
 }
 
-/** People who own the work: the deliverable owner, card assignees, and whoever submitted/created the revision. */
+/** Who works on this deliverable (its own team, or the card's assignees when it inherits). */
+function team(ctx: DeliverableAccess): string[] {
+  return deliverableTeam({ ownerId: ctx.deliverable.ownerId, contributorIds: ctx.contributorIds }, ctx.assigneeIds).ids;
+}
+
+/** People a decision is for: whoever works on the deliverable, plus whoever submitted/created the revision. */
 function workOwners(ctx: DeliverableAccess, version: VersionRow | null): string[] {
-  return [ctx.deliverable.ownerId, ...ctx.assigneeIds, version?.submittedById, version?.createdById, ctx.card.createdById].filter(
-    (id): id is string => Boolean(id),
-  );
+  return [...team(ctx), version?.submittedById, version?.createdById].filter((id): id is string => Boolean(id));
+}
+
+/** Adds notices for dependants that became ready, got closer, or are waiting again after a change. */
+async function addDependants(batch: NotificationBatch, tx: Tx, ctx: DeliverableAccess, actorId: string, before: CardWork, approvedId?: string) {
+  const after = await loadCardWork(tx, ctx.card.id);
+  addDependencyNotifications(batch, after, dependencyChanges(before, after, approvedId), {
+    actorId,
+    studioId: ctx.access.studioId,
+    projectId: ctx.card.projectId,
+    cardId: ctx.card.id,
+    cardData: cardNotificationData(ctx.access, ctx.card),
+  });
+  return batch;
 }
 
 async function scopeLabel(tx: Tx, ctx: DeliverableAccess): Promise<string | undefined> {
@@ -114,28 +132,31 @@ export async function submitForReview(
       data: { versionNumber: version?.versionNumber ?? null, note: input.note?.trim() || undefined, deliverable: deliverableName, deliverableId: ctx.deliverable.id },
     });
 
-    const data = { ...cardNotificationData(ctx.access, ctx.card), versionNumber: version?.versionNumber ?? null, deliverable: deliverableName, deliverableNumber: ctx.deliverable.number };
-    const reviewers = await reviewerRecipients(tx, ctx);
-    const notified = await notify(tx, {
-      recipientIds: reviewers,
-      actorId: actor.userId,
-      type: "REVIEW_REQUESTED",
-      studioId: ctx.access.studioId,
-      projectId: ctx.card.projectId,
-      cardId: ctx.card.id,
-      data,
-    });
-    const watchers = (await watcherIds(tx, ctx.card.id)).filter((id) => !reviewers.includes(id));
-    const watched = await notify(tx, {
-      recipientIds: watchers,
-      actorId: actor.userId,
-      type: "WATCHED_CARD",
-      studioId: ctx.access.studioId,
-      projectId: ctx.card.projectId,
-      cardId: ctx.card.id,
-      data: { ...data, change: deliverableName ? `submitted ${deliverableName} for review` : "submitted it for review" },
-    });
-    fx.notify([...notified, ...watched]).card(ctx.card.projectId, ctx.card.id);
+    // A resubmission follows a change request on this deliverable.
+    const [earlier] = await tx
+      .select({ id: reviews.id })
+      .from(reviews)
+      .where(and(eq(reviews.deliverableId, ctx.deliverable.id), eq(reviews.action, "CHANGES_REQUESTED")))
+      .limit(1);
+    const data = {
+      ...cardNotificationData(ctx.access, ctx.card),
+      versionNumber: version?.versionNumber ?? null,
+      deliverable: deliverableName,
+      deliverableNumber: ctx.deliverable.number,
+      resubmission: Boolean(earlier),
+    };
+    const where = { studioId: ctx.access.studioId, projectId: ctx.card.projectId, cardId: ctx.card.id, deliverableId: ctx.deliverable.id, versionId: version?.id ?? null };
+    const notified = await new NotificationBatch()
+      .add({ ...where, recipientIds: await reviewerRecipients(tx, ctx), actorId: actor.userId, type: "REVIEW_REQUESTED", data })
+      .add({
+        ...where,
+        recipientIds: await watcherIds(tx, ctx.card.id),
+        actorId: actor.userId,
+        type: "WATCHED_CARD",
+        data: { ...data, change: deliverableName ? `submitted ${deliverableName} for review` : "submitted it for review" },
+      })
+      .send(tx);
+    fx.notify(notified).card(ctx.card.projectId, ctx.card.id);
   });
   fx.flush(actor.clientId);
   return detail(actor, ctx.card.id);
@@ -175,7 +196,7 @@ export async function withdrawSubmission(actor: Actor, input: { deliverableId: s
 // ── Decisions ───────────────────────────────────────────────────────────────
 
 function reviewDenied(ctx: DeliverableAccess, actorId: string) {
-  const own = ctx.assigneeIds.includes(actorId) || ctx.deliverable.ownerId === actorId;
+  const own = team(ctx).includes(actorId);
   return own
     ? "You're responsible for this work, and this project doesn't allow approving your own work."
     : "You don't have permission to review work in this project.";
@@ -191,6 +212,7 @@ export async function approve(
 
   const fx = new Effects();
   await db.transaction(async (tx) => {
+    const before = await loadCardWork(tx, ctx.card.id);
     const version = await currentVersion(tx, ctx);
     const at = now();
     const [review] = await tx
@@ -243,26 +265,18 @@ export async function approve(
       deliverable: deliverableName,
       deliverableNumber: ctx.deliverable.number,
     };
-    const owners = workOwners(ctx, version);
-    const notified = await notify(tx, {
-      recipientIds: owners,
-      actorId: actor.userId,
-      type: "APPROVED",
-      studioId: ctx.access.studioId,
-      projectId: ctx.card.projectId,
-      cardId: ctx.card.id,
-      data,
-    });
-    const watched = await notify(tx, {
-      recipientIds: (await watcherIds(tx, ctx.card.id)).filter((id) => !owners.includes(id)),
+    const where = { studioId: ctx.access.studioId, projectId: ctx.card.projectId, cardId: ctx.card.id, deliverableId: ctx.deliverable.id, versionId: version?.id ?? null };
+    const batch = new NotificationBatch().add({ ...where, recipientIds: workOwners(ctx, version), actorId: actor.userId, type: "APPROVED", data });
+    // Dependants that are now ready (or one step closer).
+    await addDependants(batch, tx, ctx, actor.userId, before, ctx.deliverable.id);
+    batch.add({
+      ...where,
+      recipientIds: await watcherIds(tx, ctx.card.id),
       actorId: actor.userId,
       type: "WATCHED_CARD",
-      studioId: ctx.access.studioId,
-      projectId: ctx.card.projectId,
-      cardId: ctx.card.id,
       data: { ...data, change: deliverableName ? `approved ${deliverableName}` : "approved it" },
     });
-    fx.notify([...notified, ...watched]).card(ctx.card.projectId, ctx.card.id);
+    fx.notify(await batch.send(tx)).card(ctx.card.projectId, ctx.card.id);
   });
   fx.flush(actor.clientId);
   return detail(actor, ctx.card.id);
@@ -279,6 +293,7 @@ export async function requestChanges(
 
   const fx = new Effects();
   await db.transaction(async (tx) => {
+    const before = await loadCardWork(tx, ctx.card.id);
     const version = await currentVersion(tx, ctx);
     // Feedback already left on this revision (or on the deliverable) becomes part of the decision.
     const pending = await tx
@@ -358,26 +373,18 @@ export async function requestChanges(
       deliverable: deliverableName,
       deliverableNumber: ctx.deliverable.number,
     };
-    const owners = workOwners(ctx, version);
-    const notified = await notify(tx, {
-      recipientIds: owners,
-      actorId: actor.userId,
-      type: "CHANGES_REQUESTED",
-      studioId: ctx.access.studioId,
-      projectId: ctx.card.projectId,
-      cardId: ctx.card.id,
-      data,
-    });
-    const watched = await notify(tx, {
-      recipientIds: (await watcherIds(tx, ctx.card.id)).filter((id) => !owners.includes(id)),
+    const where = { studioId: ctx.access.studioId, projectId: ctx.card.projectId, cardId: ctx.card.id, deliverableId: ctx.deliverable.id, versionId: version?.id ?? null };
+    const batch = new NotificationBatch().add({ ...where, recipientIds: workOwners(ctx, version), actorId: actor.userId, type: "CHANGES_REQUESTED", data });
+    // If this work had been approved, what depends on it is waiting again.
+    await addDependants(batch, tx, ctx, actor.userId, before);
+    batch.add({
+      ...where,
+      recipientIds: await watcherIds(tx, ctx.card.id),
       actorId: actor.userId,
       type: "WATCHED_CARD",
-      studioId: ctx.access.studioId,
-      projectId: ctx.card.projectId,
-      cardId: ctx.card.id,
       data: { ...data, change: deliverableName ? `requested changes on ${deliverableName}` : "requested changes" },
     });
-    fx.notify([...notified, ...watched]).card(ctx.card.projectId, ctx.card.id);
+    fx.notify(await batch.send(tx)).card(ctx.card.projectId, ctx.card.id);
   });
   fx.flush(actor.clientId);
   return detail(actor, ctx.card.id);
@@ -408,7 +415,9 @@ export async function setDeliverableState(actor: Actor, input: { deliverableId: 
   if (!(ctx.dperms.canEdit || ctx.dperms.canUpload || (reopening && ctx.dperms.canReview))) {
     assertDeliverable(ctx.dperms, "canEdit");
   }
+  const fx = new Effects();
   await db.transaction(async (tx) => {
+    const before = await loadCardWork(tx, ctx.card.id);
     if (reopening) {
       const version = await currentVersion(tx, ctx);
       await tx.insert(reviews).values({
@@ -433,8 +442,11 @@ export async function setDeliverableState(actor: Actor, input: { deliverableId: 
       type: reopening && from === "APPROVED" ? "review.reopened" : "card.state_changed",
       data: { from, to: input.state, deliverable: await scopeLabel(tx, ctx) },
     });
+    // Reopening approved work makes what depends on it wait again.
+    const batch = await addDependants(new NotificationBatch(), tx, ctx, actor.userId, before);
+    fx.notify(await batch.send(tx)).card(ctx.card.projectId, ctx.card.id);
   });
-  new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
+  fx.flush(actor.clientId);
   return detail(actor, ctx.card.id);
 }
 

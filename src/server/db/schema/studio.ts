@@ -39,7 +39,7 @@ export const studioMembers = pgTable(
     userId: uuid()
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    /** Permission role (OWNER/ADMIN/MANAGER/MEMBER/VIEWER). Text so custom roles can be added later. */
+    /** Permission role (OWNER/ADMIN/MANAGER/DEVELOPER/CONTRIBUTOR/VIEWER). Text so custom roles can be added later. */
     role: text().notNull(),
     /**
      * STUDIO: every project the role allows. PROJECTS: only projects the person was added to
@@ -135,6 +135,8 @@ export const projects = pgTable(
       defaultReviewerIds: [],
     }),
     cardCounter: integer().notNull().default(0),
+    /** Last board number handed out (boards are numbered per project for stable URLs: /b/2). */
+    boardCounter: integer().notNull().default(0),
     archivedAt: tsz(),
     createdById: uuid().references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
@@ -166,6 +168,10 @@ export const projectMembers = pgTable(
   ],
 );
 
+/**
+ * Separate spaces for organising a project's work, each with its own columns and cards. Access,
+ * members, labels, milestones and card numbers stay project-wide.
+ */
 export const boards = pgTable(
   "boards",
   {
@@ -173,12 +179,19 @@ export const boards = pgTable(
     projectId: uuid()
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    /** Sequential per project, never reused: the board's address (/studio/project/b/2). */
+    number: integer().notNull(),
     name: text().notNull().default("Board"),
+    description: text().notNull().default(""),
+    /** Order in the board switcher; the first board is the project's default. */
+    position: doublePrecision().notNull().default(0),
     archivedAt: tsz(),
+    archivedById: uuid().references(() => users.id, { onDelete: "set null" }),
+    createdById: uuid().references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("boards_project_idx").on(t.projectId)],
+  (t) => [index("boards_project_idx").on(t.projectId, t.position), uniqueIndex("boards_project_number_uq").on(t.projectId, t.number)],
 );
 
 export const boardColumns = pgTable(

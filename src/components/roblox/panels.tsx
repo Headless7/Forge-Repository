@@ -119,7 +119,7 @@ export function ExplorerPanel({
             {n.n !== n.c ? <span className="hidden truncate text-[10.5px] text-fg-subtle xl:inline">{n.c}</span> : null}
           </button>
           {renderable.has(i) ? (
-            <button type="button" aria-label={hidden.has(i) ? `Show ${n.n}` : `Hide ${n.n}`} onClick={() => onToggleHidden(i)} className="text-fg-subtle opacity-0 hover:text-fg group-hover:opacity-100 focus:opacity-100">
+            <button type="button" aria-label={hidden.has(i) ? `Show ${n.n}` : `Hide ${n.n}`} onClick={() => onToggleHidden(i)} className="hover-reveal text-fg-subtle opacity-0 hover:text-fg group-hover:opacity-100 focus:opacity-100">
               {hidden.has(i) ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
             </button>
           ) : null}

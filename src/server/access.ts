@@ -8,8 +8,9 @@ import { deliverablePermissions } from "@/lib/deliverables";
 import type { DeliverablePermissions } from "@/lib/types";
 import {
   cardPermissions,
-  isRole,
   memberCanOpenProject,
+  normalizeRole,
+  PRIVATE_ACCESS_ROLES,
   roleHas,
   type CardPermissions,
   type MemberAccess,
@@ -17,7 +18,7 @@ import {
   type Role,
 } from "@/lib/permissions";
 import { db, type Executor } from "./db";
-import { cardAssignees, cards, deliverables, projectMembers, projects, studioMembers, studios } from "./db/schema";
+import { boards, cardAssignees, cards, deliverableContributors, deliverables, projectMembers, projects, studioMembers, studios } from "./db/schema";
 import { forbidden, notFound } from "./errors";
 
 export type ProjectRow = typeof projects.$inferSelect;
@@ -46,17 +47,18 @@ export interface CardAccess {
   card: CardRow;
   assigneeIds: string[];
   perms: CardPermissions;
+  /** The card's board is archived: the card is read-only until the board is restored. */
+  boardArchived: boolean;
 }
 
-function asRole(value: string): Role {
-  return isRole(value) ? value : "VIEWER";
+export function asRole(value: string): Role {
+  return normalizeRole(value) ?? "VIEWER";
 }
 
 /** Owners/admins always keep their studio role; others may be promoted/demoted per project. */
 export function effectiveProjectRole(studioRole: Role, override: string | null): Role {
   if (studioRole === "OWNER" || studioRole === "ADMIN") return studioRole;
-  if (override && isRole(override)) return override;
-  return studioRole;
+  return normalizeRole(override) ?? studioRole;
 }
 
 export function has(access: { role: Role }, permission: Permission): boolean {
@@ -110,7 +112,7 @@ export async function accessibleProjectIds(userId: string, studioId?: string, ex
         or(
           inArray(studioMembers.role, ["OWNER", "ADMIN"]),
           isNotNull(projectMembers.id),
-          and(eq(studioMembers.access, "STUDIO"), eq(projects.visibility, "STUDIO")),
+          and(eq(studioMembers.access, "STUDIO"), or(eq(projects.visibility, "STUDIO"), inArray(studioMembers.role, [...PRIVATE_ACCESS_ROLES]))),
         ),
       ),
     );
@@ -177,7 +179,7 @@ export function getProjectAccessBySlug(userId: string, studioSlug: string, proje
   return loadProjectAccess(userId, { studioSlug, projectSlug }, ex);
 }
 
-const ARCHIVED_ALLOWED: Permission[] = ["project.view", "project.update", "project.delete", "members.view"];
+const ARCHIVED_ALLOWED: Permission[] = ["project.view", "project.update", "project.archive", "project.delete", "members.view"];
 
 export async function requireProject(
   userId: string,
@@ -191,6 +193,14 @@ export async function requireProject(
   return access;
 }
 
+/**
+ * Archiving, restoring and deleting projects belong to the studio owner. Checked against the
+ * studio role itself, so no project-level role can grant it.
+ */
+export function assertStudioOwner(access: ProjectAccess, action = "archive or delete projects") {
+  if (access.studioRole !== "OWNER") throw forbidden(`Only the studio owner can ${action}.`);
+}
+
 export function assertProjectPermission(access: ProjectAccess, permission?: Permission) {
   if (!permission) return;
   if (access.project.archivedAt && !ARCHIVED_ALLOWED.includes(permission)) {
@@ -200,9 +210,15 @@ export function assertProjectPermission(access: ProjectAccess, permission?: Perm
 }
 
 export async function requireCard(userId: string, cardId: string, ex: Executor = db): Promise<CardAccess> {
-  const cardRows = await ex.select().from(cards).where(eq(cards.id, cardId)).limit(1);
-  const card = cardRows[0];
+  const cardRows = await ex
+    .select({ card: cards, boardArchivedAt: boards.archivedAt })
+    .from(cards)
+    .innerJoin(boards, eq(boards.id, cards.boardId))
+    .where(eq(cards.id, cardId))
+    .limit(1);
+  const card = cardRows[0]?.card;
   if (!card) throw notFound("Card");
+  const boardArchived = Boolean(cardRows[0]!.boardArchivedAt);
   const access = await getProjectAccess(userId, card.projectId, ex);
   if (!access) throw notFound("Card");
   const assigneeRows = await ex
@@ -210,19 +226,19 @@ export async function requireCard(userId: string, cardId: string, ex: Executor =
     .from(cardAssignees)
     .where(eq(cardAssignees.cardId, cardId));
   const assigneeIds = assigneeRows.map((r) => r.userId);
-  const perms = computeCardPermissions(access, card, assigneeIds);
-  return { access, card, assigneeIds, perms };
+  const perms = computeCardPermissions(access, card, assigneeIds, boardArchived);
+  return { access, card, assigneeIds, perms, boardArchived };
 }
 
-export function computeCardPermissions(access: ProjectAccess, card: CardRow, assigneeIds: string[]): CardPermissions {
+export function computeCardPermissions(access: ProjectAccess, card: CardRow, assigneeIds: string[], boardArchived = false): CardPermissions {
   const base = cardPermissions({
     role: access.role,
     userId: access.userId,
     card: { createdById: card.createdById, assigneeIds },
     allowSelfApproval: access.project.settings.allowSelfApproval,
   });
-  if (!access.project.archivedAt && !card.archivedAt) return base;
-  // Archived cards/projects are read-only apart from restore/delete.
+  if (!access.project.archivedAt && !card.archivedAt && !boardArchived) return base;
+  // Archived cards, boards and projects are read-only apart from restore/delete.
   return {
     ...base,
     canEdit: false,
@@ -235,7 +251,7 @@ export function computeCardPermissions(access: ProjectAccess, card: CardRow, ass
     canComment: false,
     canResolveFeedback: false,
     canPublish: false,
-    canArchive: base.canArchive && !access.project.archivedAt,
+    canArchive: base.canArchive && !access.project.archivedAt && !boardArchived,
   };
 }
 
@@ -247,18 +263,39 @@ export function assertCard(perms: CardPermissions, key: keyof CardPermissions, m
 
 export interface DeliverableAccess extends CardAccess {
   deliverable: DeliverableRow;
+  /** People working on it alongside its responsible person. */
+  contributorIds: string[];
   dperms: DeliverablePermissions;
 }
 
-export function computeDeliverablePermissions(ctx: CardAccess, deliverable: Pick<DeliverableRow, "ownerId" | "archivedAt">): DeliverablePermissions {
+export function computeDeliverablePermissions(
+  ctx: CardAccess,
+  deliverable: Pick<DeliverableRow, "ownerId" | "archivedAt">,
+  contributorIds: readonly string[] = [],
+): DeliverablePermissions {
   return deliverablePermissions({
     card: ctx.perms,
     role: ctx.access.role,
     userId: ctx.access.userId,
     ownerId: deliverable.ownerId,
+    contributorIds,
+    cardAssignee: ctx.assigneeIds.includes(ctx.access.userId),
     allowSelfApproval: ctx.access.project.settings.allowSelfApproval,
-    readOnly: Boolean(ctx.card.archivedAt || ctx.access.project.archivedAt || deliverable.archivedAt),
+    readOnly: Boolean(ctx.card.archivedAt || ctx.boardArchived || ctx.access.project.archivedAt || deliverable.archivedAt),
   });
+}
+
+/** Contributors of several deliverables at once. */
+export async function loadContributors(ex: Executor, deliverableIds: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (!deliverableIds.length) return out;
+  const rows = await ex
+    .select({ deliverableId: deliverableContributors.deliverableId, userId: deliverableContributors.userId })
+    .from(deliverableContributors)
+    .where(inArray(deliverableContributors.deliverableId, deliverableIds))
+    .orderBy(deliverableContributors.createdAt);
+  for (const r of rows) out.set(r.deliverableId, [...(out.get(r.deliverableId) ?? []), r.userId]);
+  return out;
 }
 
 /** Resolves a deliverable through the caller's card access (NOT_FOUND outside it). */
@@ -269,7 +306,8 @@ export async function requireDeliverable(userId: string, deliverableId: string, 
   const ctx = await requireCard(userId, deliverable.cardId, ex).catch(() => {
     throw notFound("Deliverable");
   });
-  return { ...ctx, deliverable, dperms: computeDeliverablePermissions(ctx, deliverable) };
+  const contributorIds = (await loadContributors(ex, [deliverable.id])).get(deliverable.id) ?? [];
+  return { ...ctx, deliverable, contributorIds, dperms: computeDeliverablePermissions(ctx, deliverable, contributorIds) };
 }
 
 export function assertDeliverable(perms: DeliverablePermissions, key: keyof DeliverablePermissions, message?: string) {

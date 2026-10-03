@@ -5,7 +5,7 @@ import { Copy, LogOut, MailPlus, RefreshCw, Trash2, UserMinus } from "lucide-rea
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import { canGrantRole, canManageMember, isStudioWideRole, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLES, type MemberAccess, type Role } from "@/lib/permissions";
+import { canGrantRole, canManageMember, isStudioWideRole, normalizeRole, ROLE_DESCRIPTIONS, ROLE_LABELS, roleLabel, ROLES, type MemberAccess, type Role } from "@/lib/permissions";
 import { qk, useRpcMutation } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
 import type { MemberDTO } from "@/lib/types";
@@ -22,7 +22,7 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
   const { studio } = useShell();
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<Role>("MEMBER");
+  const [role, setRole] = useState<Role>("CONTRIBUTOR");
   const [access, setAccess] = useState<MemberAccess>("STUDIO");
   const [projectIds, setProjectIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -55,14 +55,14 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
   };
   const chooseAccess = (value: MemberAccess) => {
     setAccess(value);
-    if (value === "PROJECTS" && isStudioWideRole(role)) setRole("MEMBER");
+    if (value === "PROJECTS" && isStudioWideRole(role)) setRole("CONTRIBUTOR");
   };
   const close = (value: boolean) => {
     onOpenChange(value);
     if (!value) {
       setLink(null);
       setEmail("");
-      setRole("MEMBER");
+      setRole("CONTRIBUTOR");
       setAccess("STUDIO");
       setProjectIds([]);
       setProjectError(null);
@@ -101,8 +101,8 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
               <div className="grid grid-cols-2 gap-1.5">
                 {(
                   [
-                    ["STUDIO", "Whole studio", "Every project their role allows."],
-                    ["PROJECTS", "Only specific projects", "For freelancers and partners."],
+                    ["STUDIO", "Whole studio", "Every studio project. Private ones for Developers and above, or when added."],
+                    ["PROJECTS", "Only specific projects", "Just the projects you choose, whatever the role. For freelancers and partners."],
                   ] as const
                 ).map(([value, title, hint]) => (
                   <label key={value} className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border-strong p-2.5 has-[:checked]:border-accent has-[:checked]:bg-accent-soft">
@@ -291,7 +291,7 @@ export function MembersPage({ initialMembers }: { initialMembers: MemberDTO[] })
                         Only {inv.projects.map((p) => p.name).join(", ") || "removed projects"}
                       </span>
                     ) : null}
-                    <span className="text-fg-muted">{ROLE_LABELS[inv.role as Role] ?? inv.role}</span>
+                    <span className="text-fg-muted">{roleLabel(inv.role)}</span>
                     <span className="text-[12px] text-fg-subtle">
                       {inv.expired ? <span className="text-danger">expired</span> : `expires ${formatShortDate(inv.expiresAt)}`} · by {inv.invitedBy ?? "someone"} {timeAgo(inv.createdAt)}
                     </span>
@@ -299,7 +299,7 @@ export function MembersPage({ initialMembers }: { initialMembers: MemberDTO[] })
                         resend.mutate({
                           studioId: studio.id,
                           email: inv.email,
-                          role: inv.role as Role,
+                          role: normalizeRole(inv.role) ?? "CONTRIBUTOR",
                           access: inv.access,
                           projectIds: inv.access === "PROJECTS" ? inv.projects.map((p) => p.id) : undefined,
                         })

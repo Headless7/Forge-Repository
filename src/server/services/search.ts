@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { SearchResultDTO } from "@/lib/types";
 import { getProjectAccess, requireProject, requireStudio } from "../access";
 import { db } from "../db";
-import { boardColumns, cardAssignees, cardLabels, cards, comments, labels, projects, users } from "../db/schema";
+import { boardColumns, boards, cardAssignees, cardLabels, cards, comments, labels, projects, users } from "../db/schema";
 import { summarizeCards } from "./card-dto";
 import type { Actor } from "./context";
 
@@ -55,6 +55,7 @@ export async function searchCards(
     .select({
       card: cards,
       columnName: boardColumns.name,
+      board: { id: boards.id, number: boards.number, name: boards.name },
       mTitle: sql<boolean>`${cards.title} ilike ${pattern}`,
       mDescription: sql<boolean>`${cards.description} ilike ${pattern}`,
       mColumn: sql<boolean>`${boardColumns.name} ilike ${pattern}`,
@@ -64,11 +65,13 @@ export async function searchCards(
     })
     .from(cards)
     .innerJoin(boardColumns, eq(boardColumns.id, cards.columnId))
+    .innerJoin(boards, eq(boards.id, cards.boardId))
     .where(
       and(
         inArray(cards.projectId, projectIds),
         isNull(cards.archivedAt),
         isNull(boardColumns.archivedAt),
+        isNull(boards.archivedAt),
         or(
           sql`${cards.title} ilike ${pattern}`,
           sql`${cards.description} ilike ${pattern}`,
@@ -107,6 +110,7 @@ export async function searchCards(
     return {
       card: summaries[i]!,
       project: { id: project.id, slug: project.slug, name: project.name, icon: project.icon, key: project.key },
+      board: row.board,
       columnName: row.columnName,
       matchedIn,
       snippet,

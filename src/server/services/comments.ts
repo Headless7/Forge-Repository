@@ -1,7 +1,8 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { extractMentions, REACTION_EMOJIS } from "@/lib/mentions";
 import type { AnnotationType, CardDetailDTO, CommentKind } from "@/lib/types";
-import { assertCard, computeDeliverablePermissions, requireCard, type CardAccess } from "../access";
+import { deliverableTeam } from "@/lib/deliverables";
+import { assertCard, computeDeliverablePermissions, loadContributors, requireCard, type CardAccess } from "../access";
 import { now } from "../clock";
 import { db, type Tx } from "../db";
 import { assetVersions, attachments, commentMentions, commentReactions, comments, deliverables, mediaAnnotations, users } from "../db/schema";
@@ -13,7 +14,7 @@ import { addWatchers, cardNotificationData, touchCard } from "./cards";
 import type { Actor } from "./context";
 import { Effects } from "./effects";
 import { filterProjectMembers } from "./members-query";
-import { notify } from "./notifications";
+import { notify, NotificationBatch } from "./notifications";
 
 export interface AnnotationInput {
   type: AnnotationType;
@@ -194,15 +195,25 @@ export async function createComment(actor: Actor, input: CreateCommentInput): Pr
       deliverable: scope?.name,
       deliverableNumber: scope?.number,
     };
-    const base = { actorId: actor.userId, studioId: ctx.access.studioId, projectId: ctx.card.projectId, cardId: ctx.card.id, commentId: comment!.id, data };
-    const notified = new Set<string>([actor.userId]);
-    for (const id of await notify(tx, { ...base, type: "MENTIONED", recipientIds: mentioned })) notified.add(id);
-    if (parent?.authorId && !notified.has(parent.authorId)) {
-      for (const id of await notify(tx, { ...base, type: "REPLY", recipientIds: [parent.authorId] })) notified.add(id);
-    }
-    const owners = [scope?.ownerId, ...ctx.assigneeIds, ctx.card.createdById].filter((id): id is string => Boolean(id) && !notified.has(id!));
-    for (const id of await notify(tx, { ...base, type: "COMMENT", recipientIds: owners })) notified.add(id);
-    notified.delete(actor.userId);
+    const base = {
+      actorId: actor.userId,
+      studioId: ctx.access.studioId,
+      projectId: ctx.card.projectId,
+      cardId: ctx.card.id,
+      deliverableId: scope?.id ?? null,
+      versionId,
+      commentId: comment!.id,
+      data,
+    };
+    // On a deliverable: the people working on it. On the card itself: its assignees and creator.
+    const workers = scope
+      ? deliverableTeam({ ownerId: scope.ownerId, contributorIds: (await loadContributors(tx, [scope.id])).get(scope.id) ?? [] }, ctx.assigneeIds).ids
+      : [...ctx.assigneeIds, ctx.card.createdById].filter((id): id is string => Boolean(id));
+    const notified = await new NotificationBatch()
+      .add({ ...base, type: "MENTIONED", recipientIds: mentioned })
+      .add({ ...base, type: "REPLY", recipientIds: parent?.authorId ? [parent.authorId] : [] })
+      .add({ ...base, type: "COMMENT", recipientIds: workers })
+      .send(tx);
 
     await addWatchers(tx, ctx.card.id, [actor.userId]);
     await touchCard(tx, ctx.card.id, actor.userId, false);
@@ -244,6 +255,8 @@ export async function editComment(actor: Actor, input: { commentId: string; body
           studioId: ctx.access.studioId,
           projectId: ctx.card.projectId,
           cardId: ctx.card.id,
+          deliverableId: comment.deliverableId,
+          versionId: comment.versionId,
           commentId: comment.id,
           data: { ...cardNotificationData(ctx.access, ctx.card), excerpt: excerpt(body), kind: comment.kind },
         }),
@@ -271,12 +284,14 @@ export async function setFeedbackResolved(actor: Actor, input: { commentId: stri
   if (comment.kind !== "FEEDBACK" || comment.parentId) throw invalid("Only feedback items can be resolved.");
   if (comment.deletedAt) throw invalid("This feedback was deleted.");
   let allowed = ctx.perms.canResolveFeedback;
-  if (!allowed && comment.deliverableId) {
-    const [d] = await db.select().from(deliverables).where(eq(deliverables.id, comment.deliverableId));
-    allowed = Boolean(d && computeDeliverablePermissions(ctx, d).canResolveFeedback);
+  const [d] = comment.deliverableId ? await db.select().from(deliverables).where(eq(deliverables.id, comment.deliverableId)) : [];
+  if (!allowed && d) {
+    const contributors = (await loadContributors(db, [d.id])).get(d.id) ?? [];
+    allowed = computeDeliverablePermissions(ctx, d, contributors).canResolveFeedback;
   }
   if (!allowed) throw forbidden("Only the people working on this card or reviewers can resolve feedback.");
   if (Boolean(comment.resolvedAt) === input.resolved) return loadCardDetail(ctx);
+  const fx = new Effects();
   await db.transaction(async (tx) => {
     await tx
       .update(comments)
@@ -291,8 +306,23 @@ export async function setFeedbackResolved(actor: Actor, input: { commentId: stri
       data: { commentId: comment.id, excerpt: excerpt(comment.body) },
     });
     await touchCard(tx, ctx.card.id, actor.userId, false);
+    // Whoever gave the feedback hears that it was addressed (or reopened).
+    fx.notify(
+      await notify(tx, {
+        recipientIds: comment.authorId ? [comment.authorId] : [],
+        actorId: actor.userId,
+        type: "FEEDBACK_RESOLVED",
+        studioId: ctx.access.studioId,
+        projectId: ctx.card.projectId,
+        cardId: ctx.card.id,
+        deliverableId: comment.deliverableId,
+        versionId: comment.versionId,
+        commentId: comment.id,
+        data: { ...cardNotificationData(ctx.access, ctx.card), excerpt: excerpt(comment.body), resolved: input.resolved, deliverable: d?.name, deliverableNumber: d?.number },
+      }),
+    );
   });
-  new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
+  fx.card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
   return loadCardDetail(await requireCard(actor.userId, ctx.card.id));
 }
 

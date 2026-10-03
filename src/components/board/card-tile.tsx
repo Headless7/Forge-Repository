@@ -13,8 +13,10 @@ import {
   Ellipsis,
   ExternalLink,
   Film,
+  LayoutGrid,
   Link2,
   MessageSquare,
+  MoveRight,
   Paperclip,
   Pencil,
   Play,
@@ -115,7 +117,7 @@ function OpenFeedbackBadge({ card }: { card: CardSummaryDTO }) {
 }
 
 function QuickActions({ card, onRename }: { card: CardSummaryDTO; onRename: () => void }) {
-  const { cardPerms, board, openCard, setCardState, setProductionStage, toggleAssignee, archiveCard, duplicateCard, studioSlug, can } = useBoard();
+  const { cardPerms, board, openCard, setCardState, setProductionStage, moveCardToColumn, moveCardToBoard, toggleAssignee, archiveCard, duplicateCard, studioSlug, can, view } = useBoard();
   const perms = cardPerms(card);
   const multi = card.progress.total > 1;
   const copyLink = () => {
@@ -130,7 +132,7 @@ function QuickActions({ card, onRename }: { card: CardSummaryDTO; onRename: () =
           aria-label={`Actions for ${card.title}`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
-          className="flex size-6 items-center justify-center rounded-md bg-surface-4/90 text-fg-muted opacity-0 shadow-sm backdrop-blur transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+          className="hover-reveal flex size-6 items-center justify-center rounded-md bg-surface-4/90 text-fg-muted opacity-0 shadow-sm backdrop-blur transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
         >
           <Ellipsis className="size-4" />
         </button>
@@ -157,6 +159,40 @@ function QuickActions({ card, onRename }: { card: CardSummaryDTO; onRename: () =
                     <UserAvatar user={m} size="xs" />
                     <span className="flex-1 truncate">{m.displayName}</span>
                     {card.assigneeIds.includes(m.id) ? <Check className="!text-accent" /> : null}
+                  </DropdownMenuItem>
+                ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
+        {view === "CATEGORY" && perms.canMove ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <MoveRight /> Move to column
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="max-h-72 w-56 overflow-y-auto">
+              {[...board.columns]
+                .sort((a, b) => a.position - b.position)
+                .map((c) => (
+                  <DropdownMenuItem key={c.id} disabled={c.id === card.columnId} onSelect={() => moveCardToColumn(card, c.id)}>
+                    <ColumnIcon name={c.icon} color={c.color} />
+                    <span className="flex-1 truncate">{c.name}</span>
+                    {c.id === card.columnId ? <Check className="!text-accent" /> : null}
+                  </DropdownMenuItem>
+                ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
+        {perms.canMove && board.boards.length > 1 ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <LayoutGrid /> Move to board
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="max-h-72 w-56 overflow-y-auto">
+              {board.boards
+                .filter((b) => b.id !== board.boardId)
+                .map((b) => (
+                  <DropdownMenuItem key={b.id} onSelect={() => moveCardToBoard(card, b.id)}>
+                    <span className="flex-1 truncate">{b.name}</span>
                   </DropdownMenuItem>
                 ))}
             </DropdownMenuSubContent>
@@ -451,7 +487,7 @@ export const SortableCard = memo(function SortableCard({ card, mode }: { card: C
     <div
       ref={setNodeRef}
       style={style}
-      className={cn("cv-auto rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring", isDragging && "relative z-10")}
+      className={cn("cv-auto shrink-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring", isDragging && "relative z-10")}
       {...attributes}
       {...listeners}
       tabIndex={0}

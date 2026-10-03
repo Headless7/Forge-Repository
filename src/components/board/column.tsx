@@ -4,6 +4,8 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import {
   Archive,
+  ArrowLeft,
+  ArrowRight,
   ChevronsLeftRight,
   ChevronsRightLeft,
   Copy,
@@ -56,6 +58,8 @@ export interface ColumnActions {
   duplicate: (column: ColumnDTO, withCards: boolean) => void;
   toggleCollapsed: (column: ColumnDTO) => void;
   createCard: (column: ColumnDTO, title: string, open: boolean) => void;
+  /** Reorder without dragging (touch screens, keyboard). */
+  move: (column: ColumnDTO, direction: -1 | 1) => void;
 }
 
 function IconColorPicker({ column, onChange }: { column: ColumnDTO; onChange: ColumnActions["update"] }) {
@@ -104,6 +108,9 @@ function IconColorPicker({ column, onChange }: { column: ColumnDTO; onChange: Co
 
 function ColumnMenu({ column, actions, onRename, canManage }: { column: ColumnDTO; actions: ColumnActions; onRename: () => void; canManage: boolean }) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  const { board } = useBoard();
+  const order = [...board.columns].sort((a, b) => a.position - b.position).map((c) => c.id);
+  const index = order.indexOf(column.id);
   return (
     <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
       <DropdownMenu>
@@ -125,6 +132,12 @@ function ColumnMenu({ column, actions, onRename, canManage }: { column: ColumnDT
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setPickerOpen(true)}>
                 <Palette /> Icon & colour
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={index <= 0} onSelect={() => actions.move(column, -1)}>
+                <ArrowLeft /> Move left
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={index < 0 || index >= order.length - 1} onSelect={() => actions.move(column, 1)}>
+                <ArrowRight /> Move right
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Default card layout</DropdownMenuLabel>
@@ -270,7 +283,7 @@ export const BoardColumn = memo(function BoardColumn({ column, cardIds, total, f
             {...attributes}
             {...listeners}
             aria-label={`Reorder ${column.name} column`}
-            className="-ml-1 flex h-6 w-4 cursor-grab items-center justify-center text-fg-subtle opacity-60 hover:opacity-100 active:cursor-grabbing"
+            className="touch-target -ml-1 flex h-6 w-4 cursor-grab items-center justify-center text-fg-subtle opacity-60 hover:opacity-100 active:cursor-grabbing"
           >
             <GripVertical className="size-3.5" />
           </button>
@@ -316,7 +329,7 @@ export const BoardColumn = memo(function BoardColumn({ column, cardIds, total, f
         <button
           type="button"
           onClick={() => startQuickAdd(column.id)}
-          className="mx-2 mb-2 flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] text-fg-subtle transition-colors hover:bg-surface-3 hover:text-fg"
+          className="mx-2 mb-2 flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-[13px] text-fg-subtle transition-colors hover:bg-surface-3 hover:text-fg"
         >
           <Plus className="size-4" /> Add card
         </button>

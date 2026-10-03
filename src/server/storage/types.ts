@@ -29,6 +29,8 @@ export interface StorageDriver {
   /** Makes the object available as a local file for processing; returns the path and a cleanup fn. */
   materialize(key: string): Promise<{ path: string; cleanup: () => Promise<void> }>;
   delete(key: string): Promise<void>;
+  /** Removes every object under a folder prefix (ending in "/"), e.g. an upload with its previews. */
+  deletePrefix(prefix: string): Promise<void>;
   createReadStream?(key: string, range?: { start: number; end: number }): Readable;
 }
 

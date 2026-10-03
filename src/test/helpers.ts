@@ -43,7 +43,7 @@ export async function pendingInvite(email: string): Promise<string> {
   await db.insert(invitations).values({
     studioId: studio.id,
     email: email.toLowerCase(),
-    role: "MEMBER",
+    role: "CONTRIBUTOR",
     tokenHash: hashToken(token),
     invitedById: inviter.id,
     expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
@@ -55,8 +55,10 @@ export interface Fixture {
   owner: TestUser;
   admin: TestUser;
   manager: TestUser;
+  /** Contributor (the former Member role). */
   member: TestUser;
   member2: TestUser;
+  developer: TestUser;
   viewer: TestUser;
   outsider: TestUser;
   studioId: string;
@@ -69,12 +71,13 @@ export interface Fixture {
 
 /** A studio with one member per role, a project with two columns, and a separate studio for isolation tests. */
 export async function setupStudio(): Promise<Fixture> {
-  const [owner, admin, manager, member, member2, viewer, outsider] = await Promise.all([
+  const [owner, admin, manager, member, member2, developer, viewer, outsider] = await Promise.all([
     createUser("Owner"),
     createUser("Admin"),
     createUser("Manager"),
     createUser("Member"),
     createUser("Member Two"),
+    createUser("Developer"),
     createUser("Viewer"),
     createUser("Outsider"),
   ]);
@@ -82,8 +85,9 @@ export async function setupStudio(): Promise<Fixture> {
   const roles: Array<[TestUser, Role]> = [
     [admin, "ADMIN"],
     [manager, "MANAGER"],
-    [member, "MEMBER"],
-    [member2, "MEMBER"],
+    [member, "CONTRIBUTOR"],
+    [member2, "CONTRIBUTOR"],
+    [developer, "DEVELOPER"],
     [viewer, "VIEWER"],
   ];
   for (const [user, role] of roles) await db.insert(studioMembers).values({ studioId: studio.id, userId: user.id, role });
@@ -101,6 +105,7 @@ export async function setupStudio(): Promise<Fixture> {
     manager,
     member,
     member2,
+    developer,
     viewer,
     outsider,
     studioId: studio.id,

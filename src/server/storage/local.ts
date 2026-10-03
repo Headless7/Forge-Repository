@@ -101,6 +101,11 @@ export class LocalStorageDriver implements StorageDriver {
     await fsp.rm(this.resolve(key), { force: true });
   }
 
+  async deletePrefix(prefix: string) {
+    if (!prefix.endsWith("/")) throw new Error(`Not a folder prefix: ${prefix}`);
+    await fsp.rm(this.resolve(prefix.slice(0, -1)), { recursive: true, force: true });
+  }
+
   createReadStream(key: string, range?: { start: number; end: number }) {
     return fs.createReadStream(this.resolve(key), range);
   }

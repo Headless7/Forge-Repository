@@ -87,22 +87,41 @@ export function wouldCreateCycle(links: LinkFacts[], fromId: string, toId: strin
   return false;
 }
 
+/**
+ * Who works on a deliverable: its responsible person and contributors when any are set,
+ * otherwise (inherited) the card's assignees.
+ */
+export function deliverableTeam(d: { ownerId: string | null; contributorIds?: readonly string[] }, cardAssigneeIds: readonly string[]): { ids: string[]; inherited: boolean } {
+  const explicit = [d.ownerId, ...(d.contributorIds ?? [])].filter((id): id is string => Boolean(id));
+  return explicit.length ? { ids: [...new Set(explicit)], inherited: false } : { ids: [...cardAssigneeIds], inherited: true };
+}
+
+/**
+ * Deliverable-level rights on top of the card's. Being responsible for, or contributing to, one
+ * deliverable lets you upload to it, submit it and resolve its feedback — nothing on the card's
+ * other deliverables. Self-approval is judged by who works on this deliverable.
+ */
 export function deliverablePermissions(input: {
   card: CardPermissions;
   role: string;
   userId: string;
   ownerId: string | null;
+  contributorIds?: readonly string[];
+  /** The viewer is one of the card's assignees. */
+  cardAssignee?: boolean;
   allowSelfApproval: boolean;
   readOnly: boolean;
 }): DeliverablePermissions {
   if (input.readOnly) return { canEdit: false, canUpload: false, canSubmit: false, canReview: false, canResolveFeedback: false };
-  const isOwner = input.ownerId === input.userId;
+  const works = input.ownerId === input.userId || (input.contributorIds ?? []).includes(input.userId);
+  const explicit = Boolean(input.ownerId) || (input.contributorIds?.length ?? 0) > 0;
+  const responsibleForWork = explicit ? works : Boolean(input.cardAssignee);
   return {
     canEdit: input.card.canEdit,
-    canUpload: input.card.canUpload || (isOwner && roleHas(input.role, "attachment.upload")),
-    canSubmit: input.card.canSubmit || (isOwner && roleHas(input.role, "card.submit")),
-    canReview: input.card.canReview && (input.allowSelfApproval || !isOwner),
-    canResolveFeedback: input.card.canResolveFeedback || isOwner,
+    canUpload: input.card.canUpload || (works && roleHas(input.role, "attachment.upload")),
+    canSubmit: input.card.canSubmit || (works && roleHas(input.role, "card.submit")),
+    canReview: roleHas(input.role, "card.review") && (input.allowSelfApproval || !responsibleForWork),
+    canResolveFeedback: input.card.canResolveFeedback || works,
   };
 }
 

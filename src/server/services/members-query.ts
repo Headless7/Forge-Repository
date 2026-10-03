@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
-import { isRole, memberCanOpenProject, type MemberAccess, type Role } from "@/lib/permissions";
+import { memberCanOpenProject, type MemberAccess, type Role } from "@/lib/permissions";
 import type { MemberDTO } from "@/lib/types";
-import { accessibleProjectIds, effectiveProjectRole, type ProjectRow, type StudioAccess } from "../access";
+import { accessibleProjectIds, asRole, effectiveProjectRole, type ProjectRow, type StudioAccess } from "../access";
 import { db, type Executor } from "../db";
 import { projectMembers, projects, studioMembers, users } from "../db/schema";
 import { avatarUrl } from "./users-lookup";
@@ -59,7 +59,7 @@ async function studioMemberRows(studioId: string, ex: Executor = db): Promise<Me
 
 export async function listStudioMembers(studioId: string): Promise<MemberDTO[]> {
   const rows = await studioMemberRows(studioId);
-  return Promise.all(rows.map((r) => toMemberDTO(r, isRole(r.role) ? r.role : "VIEWER")));
+  return Promise.all(rows.map((r) => toMemberDTO(r, asRole(r.role))));
 }
 
 /** The studio's members as `viewer` may see them: project-only collaborators see just the people on their projects. */
@@ -77,7 +77,7 @@ export async function listMembersFor(viewer: StudioAccess): Promise<MemberDTO[]>
   const visible = rows.filter(
     (r) => r.userId === viewer.userId || projectRows.some((p) => memberCanOpenProject(r, p, on.has(`${p.id}:${r.userId}`))),
   );
-  return Promise.all(visible.map((r) => toMemberDTO(r, isRole(r.role) ? r.role : "VIEWER")));
+  return Promise.all(visible.map((r) => toMemberDTO(r, asRole(r.role))));
 }
 
 /** People who can open the project, with their effective project role. */
@@ -90,7 +90,7 @@ export async function listProjectMembers(project: ProjectRow, ex: Executor = db)
   const visible = rows.filter((r) => memberCanOpenProject(r, project, overrideMap.has(r.userId)));
   return Promise.all(
     visible.map((r) => {
-      const studioRole: Role = isRole(r.role) ? r.role : "VIEWER";
+      const studioRole: Role = asRole(r.role);
       return toMemberDTO(r, effectiveProjectRole(studioRole, overrideMap.get(r.userId)?.role ?? null));
     }),
   );

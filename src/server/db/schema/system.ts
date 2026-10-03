@@ -1,8 +1,11 @@
-import { boolean, index, integer, jsonb, pgTable, primaryKey, text, uuid } from "drizzle-orm/pg-core";
-import { users } from "./auth";
+import { sql } from "drizzle-orm";
+import { boolean, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { sessions, users } from "./auth";
 import { cards } from "./cards";
 import { createdAt, pk, tsz, updatedAt } from "./columns";
+import { deliverables } from "./deliverables";
 import { comments } from "./feedback";
+import { assetVersions } from "./media";
 import { projects, studios } from "./studio";
 
 export const notifications = pgTable(
@@ -19,19 +22,34 @@ export const notifications = pgTable(
     projectId: uuid().references(() => projects.id, { onDelete: "cascade" }),
     cardId: uuid().references(() => cards.id, { onDelete: "cascade" }),
     commentId: uuid().references(() => comments.id, { onDelete: "set null" }),
+    /** The deliverable / revision the notification is about, so it opens exactly there. */
+    deliverableId: uuid().references((): AnyPgColumn => deliverables.id, { onDelete: "cascade" }),
+    versionId: uuid().references((): AnyPgColumn => assetVersions.id, { onDelete: "set null" }),
     actorId: uuid().references(() => users.id, { onDelete: "set null" }),
     type: text().notNull(),
     data: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+    /**
+     * Set for notifications that must reach someone at most once (deadline reminders): the same
+     * key for the same person is ignored, whichever worker or retry produces it.
+     */
+    dedupeKey: text(),
+    /**
+     * Shown in the in-app inbox (and its unread count). False when the person only wants this kind
+     * of notification on their devices or by email: the row still drives (and de-duplicates) those.
+     */
+    inbox: boolean().notNull().default(true),
     readAt: tsz(),
     createdAt: createdAt(),
   },
   (t) => [
     index("notifications_user_created_idx").on(t.userId, t.createdAt),
+    index("notifications_card_idx").on(t.cardId),
     index("notifications_user_unread_idx").on(t.userId, t.readAt),
+    uniqueIndex("notifications_user_dedupe_uq").on(t.userId, t.dedupeKey).where(sql`${t.dedupeKey} is not null`),
   ],
 );
 
-/** Opt-outs per notification type and delivery channel (in-app today; Discord/email later). */
+/** Choices per notification type and delivery channel; a missing row means the channel's default. */
 export const notificationPreferences = pgTable(
   "notification_preferences",
   {
@@ -39,7 +57,7 @@ export const notificationPreferences = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     type: text().notNull(),
-    channel: text({ enum: ["IN_APP", "EMAIL", "DISCORD"] }).notNull(),
+    channel: text({ enum: ["IN_APP", "EMAIL", "PUSH", "DISCORD"] }).notNull(),
     enabled: boolean().notNull(),
     updatedAt: updatedAt(),
   },
@@ -98,13 +116,39 @@ export const emailOutbox = pgTable(
     textBody: text().notNull(),
     htmlBody: text().notNull(),
     template: text().notNull(),
-    status: text({ enum: ["QUEUED", "SENT", "LOGGED", "FAILED"] }).notNull().default("QUEUED"),
+    /** SKIPPED: a notification email whose recipient lost access before it could be sent. */
+    status: text({ enum: ["QUEUED", "SENT", "LOGGED", "FAILED", "SKIPPED"] }).notNull().default("QUEUED"),
     attempts: integer().notNull().default(0),
+    /** Retries back off; a row is picked up again only after this time. */
+    nextAttemptAt: tsz().notNull().default(sql`now()`),
+    /** For notification emails: whose they are and which project, re-checked before sending. */
+    userId: uuid().references(() => users.id, { onDelete: "cascade" }),
+    projectId: uuid().references(() => projects.id, { onDelete: "cascade" }),
+    /** The notification it delivers: re-checked too (archived work, removed notification). */
+    notificationId: uuid().references((): AnyPgColumn => notifications.id, { onDelete: "cascade" }),
     error: text(),
     sentAt: tsz(),
     createdAt: createdAt(),
   },
   (t) => [index("email_outbox_status_idx").on(t.status, t.createdAt)],
+);
+
+/**
+ * Durable, retried removal of stored files. A deletion enqueues the attachment folders it freed
+ * (an original plus its thumbnails, previews and transcodes) in the same transaction; a worker
+ * removes each folder only once nothing references it any more, retrying failures.
+ */
+export const storageDeletions = pgTable(
+  "storage_deletions",
+  {
+    prefix: text().primaryKey(),
+    reason: text().notNull(),
+    attempts: integer().notNull().default(0),
+    nextAttemptAt: tsz().notNull().default(sql`now()`),
+    lastError: text(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("storage_deletions_next_idx").on(t.nextAttemptAt)],
 );
 
 /**
@@ -119,4 +163,67 @@ export const rateLimits = pgTable(
     resetAt: tsz().notNull(),
   },
   (t) => [index("rate_limits_reset_idx").on(t.resetAt)],
+);
+
+/**
+ * A browser/device that asked for operating-system notifications (Web Push). Tied to the sign-in
+ * session that created it: signing out (or the session expiring) stops delivery to that device,
+ * so someone else using the browser later never sees the previous person's notifications.
+ * The endpoint is a capability URL — treat it like a secret.
+ */
+export const pushSubscriptions = pgTable(
+  "push_subscriptions",
+  {
+    id: pk(),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: text()
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    endpoint: text().notNull(),
+    p256dh: text().notNull(),
+    auth: text().notNull(),
+    /** "Edge on Windows" — so people can tell their devices apart. */
+    label: text().notNull().default(""),
+    userAgent: text(),
+    lastSuccessAt: tsz(),
+    /** Consecutive failed deliveries; reset on success. */
+    failures: integer().notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("push_subscriptions_endpoint_uq").on(t.endpoint), index("push_subscriptions_user_idx").on(t.userId)],
+);
+
+/**
+ * Durable queue of device notifications: one row per notification and device, written in the
+ * same transaction as the event (so nothing is sent for work that rolled back) and re-checked —
+ * access, archived work, the person's current choices — just before sending.
+ */
+export const pushDeliveries = pgTable(
+  "push_deliveries",
+  {
+    id: pk(),
+    notificationId: uuid()
+      .notNull()
+      .references(() => notifications.id, { onDelete: "cascade" }),
+    subscriptionId: uuid()
+      .notNull()
+      .references(() => pushSubscriptions.id, { onDelete: "cascade" }),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** SKIPPED: no longer appropriate when its turn came (access, archive, preference, device gone). */
+    status: text({ enum: ["QUEUED", "SENDING", "SENT", "FAILED", "SKIPPED"] }).notNull().default("QUEUED"),
+    attempts: integer().notNull().default(0),
+    nextAttemptAt: tsz().notNull().default(sql`now()`),
+    error: text(),
+    sentAt: tsz(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("push_deliveries_notification_device_uq").on(t.notificationId, t.subscriptionId),
+    index("push_deliveries_due_idx").on(t.status, t.nextAttemptAt),
+  ],
 );

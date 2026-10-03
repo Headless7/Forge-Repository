@@ -4,6 +4,8 @@ import {
   Activity,
   Archive,
   ChevronDown,
+  LayoutGrid,
+  PencilLine,
   CircleAlert,
   Columns3,
   CircleCheck,
@@ -17,15 +19,20 @@ import {
   Workflow,
   X,
 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import { ROLE_LABELS } from "@/lib/permissions";
+import { qk, useRpcMutation } from "@/lib/queries";
 import type { BoardDTO, BoardView, CardState } from "@/lib/types";
 import { cn, formatShortDate } from "@/lib/utils";
 import { useRealtimeStatus } from "../realtime";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
 import { Button } from "../ui/button";
 import { Select } from "../ui/controls";
+import { ConfirmDialog } from "../ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,6 +47,7 @@ import {
   PopoverTrigger,
   Tooltip,
 } from "../ui/menu";
+import { BoardSwitcher, CreateBoardDialog, EditBoardDialog } from "./board-switcher";
 import { FilterPopover } from "./filter-popover";
 import type { BoardFilters } from "./filters";
 
@@ -226,7 +234,21 @@ export function BoardHeader({
   onViewChange: (view: BoardView) => void;
 }) {
   const status = useRealtimeStatus();
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const project = board.project;
+  const canManageBoards = board.viewer.permissions.includes("board.manage") && !project.archived;
+  const [editingBoard, setEditingBoard] = useState(false);
+  const [creatingBoard, setCreatingBoard] = useState(false);
+  const [archivingBoard, setArchivingBoard] = useState(false);
+  const archiveBoard = useRpcMutation("board.archive", {
+    onSuccess: () => {
+      setArchivingBoard(false);
+      void queryClient.invalidateQueries({ queryKey: qk.board(project.id) });
+      toast.success(`Archived “${board.board.name}”. Restore it from Archived items.`);
+      router.push(`/${studioSlug}/${project.slug}`);
+    },
+  });
   const milestones = board.milestones.filter((m) => !m.archived);
   const activeMilestone = milestones.find((m) => m.id === filters.milestone);
   const toggleState = (state: CardState) =>
@@ -239,7 +261,11 @@ export function BoardHeader({
         <span className="text-xl leading-none" aria-hidden>
           {project.icon}
         </span>
-        <h1 className="hidden truncate text-[15px] font-semibold tracking-tight md:block">{project.name}</h1>
+        <h1 className="hidden max-w-56 truncate text-[15px] font-semibold tracking-tight md:block">{project.name}</h1>
+        <span className="hidden text-fg-subtle md:inline" aria-hidden>
+          /
+        </span>
+        <BoardSwitcher board={board} studioSlug={studioSlug} canManage={canManageBoards} />
         {project.archived ? <span className="rounded bg-warning/15 px-1.5 text-[11px] font-semibold text-warning">Archived</span> : null}
         <ViewSwitch view={view} onChange={onViewChange} />
         {milestones.length ? (
@@ -248,13 +274,13 @@ export function BoardHeader({
               <button
                 type="button"
                 className={cn(
-                  "inline-flex h-7 max-w-[46vw] items-center gap-1.5 whitespace-nowrap rounded-md border px-2 text-[12.5px] font-medium md:max-w-none",
+                  "inline-flex h-7 min-w-0 max-w-[40vw] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border px-2 text-[12.5px] font-medium md:max-w-none",
                   activeMilestone ? "border-accent/50 bg-accent-soft text-fg" : "border-border-strong text-fg-muted hover:text-fg",
                 )}
               >
-                <Flag className="size-3.5" />
-                {activeMilestone?.name ?? (filters.milestone === "none" ? "No milestone" : "All milestones")}
-                <ChevronDown className="size-3.5" />
+                <Flag className="size-3.5 shrink-0" />
+                <span className="min-w-0 truncate">{activeMilestone?.name ?? (filters.milestone === "none" ? "No milestone" : "All milestones")}</span>
+                <ChevronDown className="size-3.5 shrink-0" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-60">
@@ -332,10 +358,27 @@ export function BoardHeader({
               <Settings />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel className="truncate">{board.board.name}</DropdownMenuLabel>
+            {canManageBoards ? (
+              <>
+                <DropdownMenuItem onSelect={() => setEditingBoard(true)}>
+                  <PencilLine /> Rename or describe board
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setCreatingBoard(true)}>
+                  <LayoutGrid /> Create board
+                </DropdownMenuItem>
+                {board.boards.length > 1 ? (
+                  <DropdownMenuItem onSelect={() => setArchivingBoard(true)}>
+                    <Archive /> Archive this board
+                  </DropdownMenuItem>
+                ) : null}
+                <DropdownMenuSeparator />
+              </>
+            ) : null}
             <DropdownMenuItem asChild>
               <Link href={`/${studioSlug}/${project.slug}/settings`}>
-                <Settings /> Board settings
+                <Settings /> Project settings
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
@@ -356,6 +399,17 @@ export function BoardHeader({
         </DropdownMenu>
         <AddCardPopover board={board} onCreate={onCreateCard} disabled={!canCreate} />
       </div>
+      <EditBoardDialog open={editingBoard} onOpenChange={setEditingBoard} board={board} />
+      <CreateBoardDialog open={creatingBoard} onOpenChange={setCreatingBoard} board={board} studioSlug={studioSlug} />
+      <ConfirmDialog
+        open={archivingBoard}
+        onOpenChange={setArchivingBoard}
+        title={`Archive “${board.board.name}”?`}
+        description="Its columns and cards are hidden (with their notifications) until the board is restored from Archived items. Nothing is deleted."
+        confirmLabel="Archive board"
+        loading={archiveBoard.isPending}
+        onConfirm={() => archiveBoard.mutate({ boardId: board.boardId, archived: true })}
+      />
     </header>
   );
 }

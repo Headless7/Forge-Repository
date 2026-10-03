@@ -13,6 +13,16 @@ import { AvatarStack } from "../domain/avatar";
 import { StatePill } from "../domain/state";
 import { Kbd } from "../ui/controls";
 
+/** The board of a project most recently loaded in this tab (the one on screen). */
+export function openBoardData(queryClient: ReturnType<typeof useQueryClient>, projectId: string): BoardDTO | undefined {
+  const queries = queryClient
+    .getQueryCache()
+    .findAll({ queryKey: qk.board(projectId) })
+    .filter((query) => query.state.data && "cards" in (query.state.data as object))
+    .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt);
+  return queries[0]?.state.data as BoardDTO | undefined;
+}
+
 function useDebounced<T>(value: T, ms: number) {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -63,7 +73,7 @@ export function SearchDialog({
   const local = useMemo<SearchResultDTO[]>(() => {
     const needle = q.trim().toLowerCase();
     if (!needle || !currentProject) return [];
-    const board = queryClient.getQueryData<BoardDTO>(qk.board(currentProject.id));
+    const board = openBoardData(queryClient, currentProject.id);
     if (!board) return [];
     const columnNames = new Map(board.columns.map((c) => [c.id, c.name]));
     return board.cards
@@ -72,6 +82,7 @@ export function SearchDialog({
       .map((card) => ({
         card,
         project: { id: board.project.id, slug: board.project.slug, name: board.project.name, icon: board.project.icon, key: board.project.key },
+        board: { id: board.board.id, number: board.board.number, name: board.board.name },
         columnName: columnNames.get(card.columnId) ?? "",
         matchedIn: ["title"],
         snippet: null,
@@ -80,20 +91,26 @@ export function SearchDialog({
 
   const fresh = server.data && !server.isPlaceholderData && debounced === q.trim();
   const results = fresh ? server.data! : local.length ? local : (server.data ?? []);
-  const members = currentProject ? queryClient.getQueryData<BoardDTO>(qk.board(currentProject.id))?.members ?? [] : [];
+  const openBoard = currentProject ? openBoardData(queryClient, currentProject.id) : undefined;
+  const members = openBoard?.members ?? [];
+  // Name the board when it isn't obvious: across the studio, or in a project with several boards.
+  const showBoard = scope === "studio" || (openBoard?.boards.length ?? 1) > 1;
 
   useEffect(() => setActive(0), [debounced, scope]);
 
   const openResult = (result: SearchResultDTO) => {
     onOpenChange(false);
-    const path = `/${studio.slug}/${result.project.slug}`;
-    if (pathname === path) {
+    const projectPath = `/${studio.slug}/${result.project.slug}`;
+    const boardPath = `${projectPath}/b/${result.board.number}`;
+    // Already looking at the card's board: just open the card over it.
+    const onBoard = pathname === boardPath || (pathname === projectPath && openBoardData(queryClient, result.project.id)?.boardId === result.board.id);
+    if (onBoard) {
       const params = new URLSearchParams(window.location.search);
       params.set("card", result.card.key);
-      params.delete("comment");
-      window.history.pushState(null, "", `${path}?${params.toString()}`);
+      for (const name of ["comment", "d", "v"]) params.delete(name);
+      window.history.pushState(null, "", `${pathname}?${params.toString()}`);
     } else {
-      router.push(`${path}?card=${encodeURIComponent(result.card.key)}`);
+      router.push(`${boardPath}?card=${encodeURIComponent(result.card.key)}`);
     }
   };
 
@@ -192,6 +209,7 @@ export function SearchDialog({
                           {r.project.icon} {r.project.name} ·
                         </span>
                       ) : null}
+                      {showBoard ? <span>{r.board.name} ·</span> : null}
                       <span>{r.columnName}</span>
                       {r.snippet ? <span className="truncate">· {r.snippet}</span> : null}
                       {r.matchedIn.includes("comment") && !r.snippet ? <span>· matched a comment</span> : null}

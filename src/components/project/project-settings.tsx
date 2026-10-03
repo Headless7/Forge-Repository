@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { Archive, ArchiveRestore, Check, Flag, Lock, Plus, Rocket, Tag, Trash2, Users } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, Flag, Lock, Plus, Rocket, Tag, Trash2, Users } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
@@ -14,6 +14,7 @@ import { rpc } from "@/lib/rpc-client";
 import type { BoardDTO, LabelDTO, MilestoneDTO } from "@/lib/types";
 import { cn, formatShortDate } from "@/lib/utils";
 import { ArchivedItems } from "../board/archived-dialog";
+import { CreateBoardDialog } from "../board/board-switcher";
 import { UserAvatar } from "../domain/avatar";
 import { LabelChip } from "../domain/state";
 import { PROJECT_EMOJIS } from "../shell/create-project-dialog";
@@ -143,7 +144,7 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
         {(
           [
             ["STUDIO", Users, "Everyone in the studio", "All studio members can open this project with their studio role."],
-            ["PRIVATE", Lock, "Private", "Only people you add below (plus owners and admins)."],
+            ["PRIVATE", Lock, "Private", "People you add below, plus studio Developers, Managers, Admins and the Owner."],
           ] as const
         ).map(([value, Icon, title, desc]) => (
           <button
@@ -164,14 +165,16 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
       <ul className="divide-y divide-border rounded-lg border border-border">
         {(access.data ?? []).map((m) => {
           const privileged = m.studioRole === "OWNER" || m.studioRole === "ADMIN";
-          // Private projects, and project-only collaborators anywhere, need to be added explicitly.
+          // Private projects, and project-only collaborators anywhere, need to be added explicitly —
+          // except people whose studio role already opens the project.
           const explicit = p.visibility === "PRIVATE" || m.projectsOnly;
           return (
             <li key={m.userId} className="flex flex-wrap items-center gap-3 px-3 py-2">
               {explicit ? (
                 <Checkbox
                   checked={m.hasAccess}
-                  disabled={!canEdit || privileged}
+                  disabled={!canEdit || privileged || m.automaticAccess}
+                  title={m.automaticAccess ? `Has access as a studio ${ROLE_LABELS[m.studioRole]}` : undefined}
                   onCheckedChange={(v) => setMember.mutate({ projectId: p.id, userId: m.userId, member: v === true, role: m.projectRole })}
                   aria-label={`Give ${m.displayName} access`}
                 />
@@ -182,6 +185,7 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
                 <p className="truncate text-[11.5px] text-fg-subtle">
                   @{m.username} · studio {ROLE_LABELS[m.studioRole]}
                   {m.projectsOnly ? " · projects only" : ""}
+                  {explicit && m.automaticAccess && !privileged ? " · has access through their role" : ""}
                 </p>
               </div>
               <div className="w-56">
@@ -196,7 +200,7 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
                       : [
                           { value: "INHERIT", label: `Studio role · ${ROLE_LABELS[m.studioRole]}` },
                           { value: "MANAGER", label: "Manager on this project" },
-                          { value: "MEMBER", label: "Member on this project" },
+                          { value: "CONTRIBUTOR", label: "Contributor on this project" },
                           { value: "VIEWER", label: "Viewer on this project" },
                         ]
                   }
@@ -207,6 +211,92 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
           );
         })}
       </ul>
+    </Section>
+  );
+}
+
+/** The project's boards: rename, describe, reorder, archive (restore is in Archived items), create. */
+function Boards({ board, canManage, studioSlug }: { board: BoardDTO; canManage: boolean; studioSlug: string }) {
+  const queryClient = useQueryClient();
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: qk.board(board.project.id) });
+  const update = useRpcMutation("board.update", { onSuccess: refresh });
+  const move = useRpcMutation("board.move", { onSuccess: refresh });
+  const archive = useRpcMutation("board.archive", { onSuccess: () => { refresh(); toast.success("Board archived. Restore it from Archived items below."); } });
+  const [creating, setCreating] = useState(false);
+  const [archiving, setArchiving] = useState<BoardDTO["boards"][number] | null>(null);
+  const list = board.boards;
+  return (
+    <Section id="boards" title={`Boards · ${list.length}`} description="Separate spaces for this project's work, each with its own columns and cards. Members, access, labels and milestones are shared by every board. The first board is where the project opens.">
+      <ul className="divide-y divide-border rounded-lg border border-border">
+        {list.map((b, i) => (
+          <li key={b.id} className="flex flex-wrap items-start gap-2 px-3 py-2.5">
+            <div className="min-w-0 flex-1 basis-56">
+              {canManage ? (
+                <>
+                  <input
+                    defaultValue={b.name}
+                    key={`name-${b.id}-${b.name}`}
+                    maxLength={60}
+                    aria-label={`Name of board ${b.name}`}
+                    onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== b.name && update.mutate({ boardId: b.id, name: e.target.value.trim() })}
+                    className="h-8 w-full rounded-md border border-transparent bg-transparent px-1.5 text-[13px] font-medium outline-none hover:border-border-strong focus:border-accent focus:bg-surface-3"
+                  />
+                  <textarea
+                    defaultValue={b.description}
+                    key={`desc-${b.id}-${b.description}`}
+                    maxLength={2000}
+                    rows={1}
+                    placeholder="Add a description"
+                    aria-label={`Description of board ${b.name}`}
+                    onBlur={(e) => e.target.value.trim() !== b.description && update.mutate({ boardId: b.id, description: e.target.value })}
+                    className="mt-0.5 w-full resize-y rounded-md border border-transparent bg-transparent px-1.5 py-1 text-[12.5px] text-fg-muted outline-none hover:border-border-strong focus:border-accent focus:bg-surface-3"
+                  />
+                </>
+              ) : (
+                <>
+                  <p className="text-[13px] font-medium">{b.name}</p>
+                  {b.description ? <p className="whitespace-pre-wrap text-[12.5px] text-fg-muted">{b.description}</p> : null}
+                </>
+              )}
+              <p className="px-1.5 text-[11.5px] text-fg-subtle">
+                {b.cards} card{b.cards === 1 ? "" : "s"}
+                {i === 0 ? " · opens first" : ""} ·{" "}
+                <Link href={`/${studioSlug}/${board.project.slug}/b/${b.number}`} className="text-accent hover:underline">
+                  Open
+                </Link>
+              </p>
+            </div>
+            {canManage ? (
+              <div className="flex items-center gap-1">
+                <Button size="icon-sm" variant="ghost" aria-label={`Move ${b.name} up`} disabled={i === 0 || move.isPending} onClick={() => move.mutate({ boardId: b.id, index: i - 1 })}>
+                  <ArrowUp />
+                </Button>
+                <Button size="icon-sm" variant="ghost" aria-label={`Move ${b.name} down`} disabled={i === list.length - 1 || move.isPending} onClick={() => move.mutate({ boardId: b.id, index: i + 1 })}>
+                  <ArrowDown />
+                </Button>
+                <Button size="icon-sm" variant="ghost" aria-label={`Archive ${b.name}`} disabled={list.length < 2} title={list.length < 2 ? "A project needs at least one board" : undefined} onClick={() => setArchiving(b)}>
+                  <Archive />
+                </Button>
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {canManage ? (
+        <Button className="mt-3" variant="secondary" size="sm" onClick={() => setCreating(true)}>
+          <Plus /> Create board
+        </Button>
+      ) : null}
+      <CreateBoardDialog open={creating} onOpenChange={setCreating} board={board} studioSlug={studioSlug} />
+      <ConfirmDialog
+        open={Boolean(archiving)}
+        onOpenChange={(open) => !open && setArchiving(null)}
+        title={`Archive “${archiving?.name ?? ""}”?`}
+        description="Its columns and cards are hidden (with their notifications) until the board is restored from Archived items. Nothing is deleted."
+        confirmLabel="Archive board"
+        loading={archive.isPending}
+        onConfirm={() => archiving && archive.mutate({ boardId: archiving.id, archived: true }, { onSuccess: () => setArchiving(null) })}
+      />
     </Section>
   );
 }
@@ -450,7 +540,7 @@ function DangerZone({ board, studioSlug }: { board: BoardDTO; studioSlug: string
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 p-3">
           <div>
             <p className="text-[13px] font-medium">{p.archived ? "Restore project" : "Archive project"}</p>
-            <p className="text-[12px] text-fg-muted">Archived projects are hidden from the sidebar and become read-only. Nothing is deleted.</p>
+            <p className="text-[12px] text-fg-muted">Archived projects are hidden from the sidebar and become read-only. Nothing is deleted. Only the studio owner can archive and restore.</p>
           </div>
           <Button variant="secondary" loading={archive.isPending} onClick={() => archive.mutate({ projectId: p.id, archived: !p.archived })}>
             {p.archived ? <ArchiveRestore /> : <Archive />} {p.archived ? "Restore" : "Archive"}
@@ -459,9 +549,13 @@ function DangerZone({ board, studioSlug }: { board: BoardDTO; studioSlug: string
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/40 p-3">
           <div>
             <p className="text-[13px] font-medium text-danger">Delete project permanently</p>
-            <p className="text-[12px] text-fg-muted">Removes the board, all cards, versions, media, feedback and history. This can&apos;t be undone.</p>
+            <p className="text-[12px] text-fg-muted">
+              {p.archived
+                ? "Removes the board, all cards, versions, media, feedback and history, and frees its storage. This can't be undone."
+                : "Archive the project first — deletion is the last step after archiving."}
+            </p>
           </div>
-          <Button variant="danger" onClick={() => setOpen(true)}>
+          <Button variant="danger" disabled={!p.archived} onClick={() => setOpen(true)}>
             <Trash2 /> Delete…
           </Button>
         </div>
@@ -488,12 +582,17 @@ function DangerZone({ board, studioSlug }: { board: BoardDTO; studioSlug: string
 }
 
 export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: BoardDTO; studioSlug: string }) {
-  const { data: board } = useQuery({ queryKey: qk.board(initialBoard.project.id), queryFn: () => rpc("board.get", { projectId: initialBoard.project.id }), initialData: initialBoard });
+  const { data: board } = useQuery({
+    queryKey: qk.boardView(initialBoard.project.id, initialBoard.boardId),
+    queryFn: () => rpc("board.get", { projectId: initialBoard.project.id, boardId: initialBoard.boardId }),
+    initialData: initialBoard,
+  });
   const perms = new Set(board.viewer.permissions);
   const canEdit = perms.has("project.update");
   const nav = [
     ["general", "General"],
     ["members", "Members & permissions"],
+    ["boards", "Boards"],
     ["workflow", "Board & workflow"],
     ["labels", "Labels"],
     ["milestones", "Milestones"],
@@ -522,10 +621,11 @@ export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: Bo
           {!canEdit ? <p className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-[12.5px] text-fg-muted">Only studio owners and admins can change project settings. You&apos;re viewing them read-only.</p> : null}
           <General board={board} canEdit={canEdit} studioSlug={studioSlug} />
           <Access board={board} canEdit={canEdit} />
+          <Boards board={board} canManage={perms.has("board.manage") && !board.project.archived} studioSlug={studioSlug} />
           <Workflow board={board} canEdit={canEdit} />
           <Labels board={board} canEdit={perms.has("label.manage")} />
           <Milestones board={board} canEdit={perms.has("milestone.manage")} />
-          <Section id="archived" title="Archived cards & columns" description="Restore anything that was archived from the board.">
+          <Section id="archived" title="Archived items" description="Restore anything that was archived — boards, columns, cards, deliverables and files.">
             <ArchivedItems projectId={board.project.id} canDelete={perms.has("card.delete")} canRestoreColumns={perms.has("column.manage")} />
           </Section>
           {perms.has("project.delete") ? <DangerZone board={board} studioSlug={studioSlug} /> : null}

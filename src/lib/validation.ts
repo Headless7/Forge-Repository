@@ -18,6 +18,7 @@ export const displayNameSchema = z.string().trim().min(1, "Enter your name.").ma
 export const cardTitleSchema = z.string().trim().min(1, "Give the card a title.").max(200, "Titles are limited to 200 characters.");
 export const columnNameSchema = z.string().trim().min(1, "Name the column.").max(60, "Column names are limited to 60 characters.");
 export const projectNameSchema = z.string().trim().min(2, "Project names need at least 2 characters.").max(80);
+export const boardNameSchema = z.string().trim().min(1, "Name the board.").max(60, "Board names are limited to 60 characters.");
 export const studioNameSchema = z.string().trim().min(2, "Studio names need at least 2 characters.").max(60);
 export const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Invalid colour.");
 export const emojiSchema = z.string().trim().min(1).max(16);

@@ -48,7 +48,7 @@ async function confirmEmail(userId: string) {
 
 /** An invitation as the invitee receives it (token from the returned link). */
 async function invite(by: TestUser, studioId: string, email: string, extra: Partial<Parameters<typeof studios.createInvitation>[1]> = {}) {
-  const created = await studios.createInvitation(by.actor, { studioId, email, role: "MEMBER", ...extra });
+  const created = await studios.createInvitation(by.actor, { studioId, email, role: "CONTRIBUTOR", ...extra });
   return { ...created, token: created.url.split("/invite/")[1]! };
 }
 
@@ -258,10 +258,10 @@ describe("project-only collaborators", () => {
     cardB = (await cards.createCard(f.owner.actor, { projectId: projectB, columnId: columnB.id, title: "Unannounced sword" })).id;
 
     collab = await createUser("Freelancer");
-    const inv = await invite(f.admin, f.studioId, collab.email, { role: "MEMBER", access: "PROJECTS", projectIds: [f.projectId] });
+    const inv = await invite(f.admin, f.studioId, collab.email, { role: "CONTRIBUTOR", access: "PROJECTS", projectIds: [f.projectId] });
     await studios.acceptInvitation(collab.actor, { token: inv.token });
     otherCollab = await createUser("Other Freelancer");
-    const inv2 = await invite(f.admin, f.studioId, otherCollab.email, { role: "MEMBER", access: "PROJECTS", projectIds: [projectB] });
+    const inv2 = await invite(f.admin, f.studioId, otherCollab.email, { role: "CONTRIBUTOR", access: "PROJECTS", projectIds: [projectB] });
     await studios.acceptInvitation(otherCollab.actor, { token: inv2.token });
   });
 
@@ -379,7 +379,7 @@ describe("revoking access", () => {
     const inv = await invite(f.admin, f.studioId, person.email);
     await studios.acceptInvitation(person.actor, { token: inv.token });
     // An admin re-sends to the same address while… the member is removed.
-    await db.insert(invitations).values({ studioId: f.studioId, email: person.email, role: "MEMBER", tokenHash: `stale-${stamp()}`, expiresAt: new Date(Date.now() + 86400000) });
+    await db.insert(invitations).values({ studioId: f.studioId, email: person.email, role: "CONTRIBUTOR", tokenHash: `stale-${stamp()}`, expiresAt: new Date(Date.now() + 86400000) });
     await studios.removeMember(f.admin.actor, { studioId: f.studioId, userId: person.id });
     const pending = await db.select().from(invitations).where(and(eq(invitations.studioId, f.studioId), eq(invitations.email, person.email)));
     expect(pending.every((i) => i.revokedAt || i.acceptedAt)).toBe(true);

@@ -5,8 +5,10 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -119,5 +121,19 @@ export class S3StorageDriver implements StorageDriver {
 
   async delete(key: string) {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }));
+  }
+
+  async deletePrefix(prefix: string) {
+    if (!prefix.endsWith("/")) throw new Error(`Not a folder prefix: ${prefix}`);
+    let token: string | undefined;
+    do {
+      const page = await this.client.send(new ListObjectsV2Command({ Bucket: this.config.bucket, Prefix: prefix, ContinuationToken: token }));
+      const keys = (page.Contents ?? []).flatMap((o) => (o.Key ? [{ Key: o.Key }] : []));
+      if (keys.length) {
+        const result = await this.client.send(new DeleteObjectsCommand({ Bucket: this.config.bucket, Delete: { Objects: keys, Quiet: true } }));
+        if (result.Errors?.length) throw new Error(`Couldn't delete ${result.Errors.length} object(s) under ${prefix}: ${result.Errors[0]?.Message ?? "unknown error"}`);
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
   }
 }

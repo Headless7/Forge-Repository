@@ -1,11 +1,12 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera, Laptop, LogOut, MailCheck, MailWarning, Monitor, Moon, Smartphone, Sun, Trash2 } from "lucide-react";
+import { BellOff, BellRing, Camera, Laptop, LogOut, MailCheck, MailWarning, Monitor, Moon, Send, Smartphone, Sun, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { NOTIFICATION_TYPE_META } from "@/lib/notifications";
+import { currentSubscription, disableDevicePush, enableDevicePush, notificationPermission, pushSupport, syncDevicePush } from "@/lib/push-client";
 import { qk, useRpcMutation } from "@/lib/queries";
 import { errorMessage, rpc, type RpcOutput } from "@/lib/rpc-client";
 import { cn, formatDateTime, timeAgo } from "@/lib/utils";
@@ -190,31 +191,224 @@ export function ProfilePage({ initial }: { initial: Profile }) {
   );
 }
 
+type DeviceState =
+  | { kind: "checking" }
+  | { kind: "unsupported" }
+  | { kind: "ios-needs-install" }
+  | { kind: "blocked" }
+  | { kind: "off"; dismissed?: boolean }
+  | { kind: "on" };
+
+/** This browser's device-notification status, with the explicit enable/disable/test actions. */
+function ThisDevice({ available, onChange }: { available: boolean; onChange: () => void }) {
+  const [state, setState] = useState<DeviceState>({ kind: "checking" });
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(async () => {
+    const support = pushSupport();
+    if (support !== "supported") return setState({ kind: support });
+    if (notificationPermission() === "denied") return setState({ kind: "blocked" });
+    setState((await syncDevicePush()) ? { kind: "on" } : { kind: "off" });
+  }, []);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const enable = async () => {
+    setBusy(true);
+    const result = await enableDevicePush();
+    setBusy(false);
+    if (result.ok) {
+      setState({ kind: "on" });
+      toast.success("Device notifications are on for this browser.");
+    } else if (result.reason === "denied") {
+      setState({ kind: "blocked" });
+    } else if (result.reason === "dismissed") {
+      setState({ kind: "off", dismissed: true });
+    } else if (result.reason === "unavailable") {
+      toast.error("Device notifications aren't set up on this server.");
+    } else {
+      toast.error(result.message ? `Couldn't turn on device notifications: ${result.message}` : "This browser can't receive device notifications.");
+    }
+    onChange();
+  };
+  const disable = async () => {
+    setBusy(true);
+    await disableDevicePush();
+    setBusy(false);
+    setState({ kind: "off" });
+    onChange();
+  };
+  const test = async () => {
+    const sub = await currentSubscription();
+    if (!sub) return;
+    setBusy(true);
+    const result = await rpc("push.test", { endpoint: sub.endpoint }).catch((error) => {
+      toast.error(errorMessage(error));
+      return null;
+    });
+    setBusy(false);
+    const r = result?.results[0];
+    if (r?.ok) toast.success("Test sent — it should appear on this device in a moment. (If this tab has focus, check your system's notification center.)");
+    else if (r) toast.error(`The push service refused the test: ${r.error ?? "unknown error"}`);
+  };
+
+  const status: Record<DeviceState["kind"], { text: string; tone: string }> = {
+    checking: { text: "Checking this browser…", tone: "text-fg-muted" },
+    unsupported: { text: "This browser can't show device notifications.", tone: "text-fg-muted" },
+    "ios-needs-install": { text: "On iPhone and iPad, add Forge to your Home Screen first (Share → Add to Home Screen), then open it from there.", tone: "text-fg-muted" },
+    blocked: { text: "Notifications are blocked for this site in your browser settings. Allow them there (the lock or site-settings icon by the address), then come back.", tone: "text-warning" },
+    off: { text: "Off on this browser.", tone: "text-fg-muted" },
+    on: { text: "On — this browser gets device notifications for the types switched on below.", tone: "text-state-approved" },
+  };
+  return (
+    <div className="rounded-lg border border-border-strong p-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <BellRing className="size-5 shrink-0 text-fg-subtle" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-medium">This device</p>
+          <p className={cn("text-[12.5px]", status[state.kind].tone)} role="status">
+            {status[state.kind].text}
+            {state.kind === "off" && state.dismissed ? " You closed the browser's question without choosing — you can try again." : ""}
+          </p>
+        </div>
+        {available && state.kind === "off" ? (
+          <Button variant="primary" size="sm" loading={busy} onClick={() => void enable()}>
+            <BellRing /> Enable device notifications
+          </Button>
+        ) : null}
+        {state.kind === "on" ? (
+          <div className="flex flex-wrap gap-1.5">
+            <Button variant="secondary" size="sm" loading={busy} onClick={() => void test()}>
+              <Send /> Send a test
+            </Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => void disable()}>
+              <BellOff /> Turn off on this device
+            </Button>
+          </div>
+        ) : null}
+      </div>
+      {available && state.kind === "off" ? (
+        <p className="mt-2 text-[12px] text-fg-muted">
+          Get a system notification for review requests, approvals, deadlines and mentions even when Forge isn&apos;t open. Your browser will ask for permission once. Delivery depends on the
+          browser and system: they can be delayed while the device is offline or in battery saving, and a notification already shown can&apos;t always be taken back.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function YourDevices({ refreshKey }: { refreshKey: number }) {
+  const queryClient = useQueryClient();
+  const devices = useQuery({ queryKey: ["push-devices", refreshKey], queryFn: () => rpc("push.devices", {}) });
+  const remove = useRpcMutation("push.removeDevice", { onSuccess: (list) => queryClient.setQueryData(["push-devices", refreshKey], list) });
+  if (!devices.data?.length) return null;
+  return (
+    <div className="mt-3">
+      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">Devices receiving notifications</p>
+      <ul className="divide-y divide-border rounded-lg border border-border">
+        {devices.data.map((d) => (
+          <li key={d.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-[13px]">
+            <span className="min-w-0 flex-1">
+              <span className="font-medium">{d.label}</span>
+              {d.thisSession ? <span className="text-fg-subtle"> · this sign-in</span> : null}
+              <span className="block text-[11.5px] text-fg-subtle">
+                added {timeAgo(d.createdAt)}
+                {d.lastSuccessAt ? ` · last delivered ${timeAgo(d.lastSuccessAt)}` : ""}
+                {d.failing ? " · recent deliveries failed" : ""}
+              </span>
+            </span>
+            <Button size="xs" variant="ghost" loading={remove.isPending && remove.variables?.id === d.id} onClick={() => remove.mutate({ id: d.id })}>
+              <Trash2 /> Remove
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function NotificationPreferencesPage() {
   const queryClient = useQueryClient();
   const prefs = useQuery({ queryKey: qk.notificationPrefs(), queryFn: () => rpc("notification.preferences", {}) });
   const set = useRpcMutation("notification.setPreference", { onSuccess: (data) => queryClient.setQueryData(qk.notificationPrefs(), data) });
+  const [devicesKey, setDevicesKey] = useState(0);
+  const emailAvailable = prefs.data?.emailAvailable ?? false;
+  const pushAvailable = prefs.data?.pushAvailable ?? false;
+  const groups = [...new Set(Object.values(NOTIFICATION_TYPE_META).map((m) => m.group))];
+  const channels: Array<{ id: "inApp" | "push" | "email"; label: string; aria: string }> = [
+    { id: "inApp", label: "In-app", aria: "in Forge" },
+    { id: "push", label: "Device", aria: "on your devices" },
+    ...(emailAvailable ? [{ id: "email" as const, label: "Email", aria: "by email" }] : []),
+  ];
   return (
     <div className="grid gap-5">
-      <Card title="In-app notifications" description="Choose what shows up in your notification center. Discord and email delivery can be connected later.">
-        {prefs.isLoading ? (
+      <Card
+        title="Device notifications"
+        description={
+          pushAvailable
+            ? "Operating-system notifications on the browsers and phones you turn them on for — also when Forge isn't open. Each device is turned on separately."
+            : "Device notifications aren't set up on this server yet, so nothing can be sent to your devices."
+        }
+      >
+        <ThisDevice available={pushAvailable} onChange={() => setDevicesKey((k) => k + 1)} />
+        {pushAvailable ? <YourDevices refreshKey={devicesKey} /> : null}
+      </Card>
+      <Card
+        title="What to notify you about"
+        description={`For each kind of notification, choose where it goes: In-app (your notification center and its unread count)${pushAvailable ? ", Device (system notifications on your devices)" : ""}${emailAvailable ? " or Email" : ""}. The choices are independent and apply to your whole account; changing them never asks your browser for anything.`}
+      >
+        {prefs.isLoading || !prefs.data ? (
           <div className="grid gap-2">
             {Array.from({ length: 6 }, (_, i) => (
               <Skeleton key={i} className="h-10" />
             ))}
           </div>
         ) : (
-          <ul className="divide-y divide-border">
-            {(prefs.data ?? []).map((p) => (
-              <li key={p.type} className="flex items-center justify-between gap-4 py-3">
-                <span>
-                  <span className="block text-[13px] font-medium">{NOTIFICATION_TYPE_META[p.type].label}</span>
-                  <span className="block text-[12px] text-fg-muted">{NOTIFICATION_TYPE_META[p.type].description}</span>
-                </span>
-                <Switch checked={p.inApp} onCheckedChange={(v) => set.mutate({ type: p.type, inApp: v })} aria-label={NOTIFICATION_TYPE_META[p.type].label} />
-              </li>
+          <div className="grid gap-5">
+            {groups.map((group) => (
+              <section key={group} aria-label={group}>
+                <div className="flex items-center gap-4 border-b border-border pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
+                  <span className="flex-1">{group}</span>
+                  {channels.map((c) => (
+                    <span key={c.id} className="hidden w-14 text-center sm:block">
+                      {c.label}
+                    </span>
+                  ))}
+                </div>
+                <ul className="divide-y divide-border">
+                  {prefs.data.types
+                    .filter((p) => NOTIFICATION_TYPE_META[p.type].group === group)
+                    .map((p) => {
+                      const meta = NOTIFICATION_TYPE_META[p.type];
+                      return (
+                        <li key={p.type} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:gap-4">
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-[13px] font-medium">{meta.label}</span>
+                            <span className="block text-[12px] text-fg-muted">{meta.description}</span>
+                          </span>
+                          <span className="flex gap-4">
+                            {channels.map((c) => {
+                              const disabled = c.id === "push" && !pushAvailable;
+                              return (
+                                <label key={c.id} className={cn("flex items-center gap-2 sm:w-14 sm:justify-center", disabled && "opacity-50")}>
+                                  <Switch
+                                    checked={p[c.id] && !disabled}
+                                    disabled={disabled}
+                                    onCheckedChange={(v) => set.mutate({ type: p.type, [c.id]: v })}
+                                    aria-label={`${meta.label} ${c.aria}`}
+                                  />
+                                  <span className="text-[12px] text-fg-muted sm:sr-only">{c.label}</span>
+                                </label>
+                              );
+                            })}
+                          </span>
+                        </li>
+                      );
+                    })}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         )}
       </Card>
     </div>

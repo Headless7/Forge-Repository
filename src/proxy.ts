@@ -32,5 +32,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api/|_next/static|_next/image|favicon.ico|icon.svg|.*\\.(?:png|jpg|jpeg|gif|webp|svg|ico|txt|woff2?)$).*)"],
+  // The service worker and web app manifest are fetched by the browser itself (also when signed out).
+  matcher: ["/((?!api/|_next/static|_next/image|favicon.ico|icon.svg|sw.js|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|gif|webp|svg|ico|txt|woff2?)$).*)"],
 };

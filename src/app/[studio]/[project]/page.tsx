@@ -1,12 +1,10 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
-import { Suspense } from "react";
-import { BoardView } from "@/components/board/board-view";
-import { actorFor, requireSession } from "@/server/auth/current";
+import { BoardRoute } from "@/components/board/board-route";
+import { requireSession } from "@/server/auth/current";
 import { getProjectAccessBySlug } from "@/server/access";
-import { getBoardBySlug } from "@/server/services/board";
 
 type Params = Promise<{ studio: string; project: string }>;
+type Search = Promise<Record<string, string | string[] | undefined>>;
 
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
   const { studio, project } = await params;
@@ -15,15 +13,8 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   return { title: access ? access.project.name : "Not found" };
 }
 
-export default async function BoardPage({ params }: { params: Params }) {
+/** The project's default board (the first in its board switcher). */
+export default async function ProjectBoardPage({ params, searchParams }: { params: Params; searchParams: Search }) {
   const { studio, project } = await params;
-  const session = await requireSession();
-  const board = await getBoardBySlug(actorFor(session), studio, project);
-  // Unknown project and "no access" look identical from the outside.
-  if (!board) notFound();
-  return (
-    <Suspense>
-      <BoardView initialBoard={board} studioSlug={studio} />
-    </Suspense>
-  );
+  return <BoardRoute studio={studio} project={project} boardNumber={null} search={await searchParams} />;
 }

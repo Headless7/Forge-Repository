@@ -1,11 +1,12 @@
 "use client";
 
 import { format } from "date-fns";
-import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Ellipsis, Link2, Lock, Plus } from "lucide-react";
+import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Ellipsis, Link2, Lock, Plus, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { CARD_STATE_META } from "@/lib/card-meta";
+import { roleHas } from "@/lib/permissions";
 import { useCardMutation } from "@/lib/queries";
-import type { DeliverableDTO } from "@/lib/types";
+import type { DeliverableDTO, MemberDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { StatePill } from "../domain/state";
@@ -13,7 +14,7 @@ import { Button } from "../ui/button";
 import { Checkbox, Select } from "../ui/controls";
 import { ConfirmDialog } from "../ui/dialog";
 import { Input, Textarea } from "../ui/input";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Tooltip } from "../ui/menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip } from "../ui/menu";
 import { AddDeliverableDialog } from "./deliverables-panel";
 import { useScope, useWorkspace } from "./workspace-context";
 
@@ -33,7 +34,7 @@ export function DeliverableBreadcrumb() {
         <ArrowLeft /> All deliverables
       </Button>
       <span className="text-fg-subtle">/</span>
-      <button type="button" onClick={() => openDeliverable(null)} className="max-w-48 truncate text-fg-muted hover:text-fg">
+      <button type="button" onClick={() => openDeliverable(null)} className="min-h-6 max-w-48 truncate text-fg-muted hover:text-fg">
         {card.title}
       </button>
       <span className="text-fg-subtle">/</span>
@@ -56,6 +57,72 @@ export function DeliverableBreadcrumb() {
         </Button>
       </Tooltip>
     </nav>
+  );
+}
+
+function formatDue(iso: string) {
+  return format(new Date(iso), "EEE d MMM, HH:mm");
+}
+
+/**
+ * People working on a deliverable alongside its responsible person. Managers pick anyone who can
+ * work in the project; others can only add or remove themselves.
+ */
+function ContributorsPicker({ d, members, viewerId, canAssign, canSelfAssign, onChange }: {
+  d: DeliverableDTO;
+  members: MemberDTO[];
+  viewerId: string;
+  canAssign: boolean;
+  canSelfAssign: boolean;
+  onChange: (ids: string[]) => void;
+}) {
+  const workers = members.filter((m) => roleHas(m.role, "attachment.upload") && m.id !== d.ownerId);
+  const chosen = members.filter((m) => d.contributorIds.includes(m.id));
+  const disabled = !(canAssign || canSelfAssign);
+  const toggle = (id: string) => onChange(d.contributorIds.includes(id) ? d.contributorIds.filter((x) => x !== id) : [...d.contributorIds, id]);
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          aria-label={`Contributors: ${chosen.length ? chosen.map((m) => m.displayName).join(", ") : "none"}`}
+          className="flex h-7 min-w-0 items-center gap-1.5 rounded-md border border-border-strong/70 bg-surface-3/60 px-2 text-left text-[12.5px] hover:border-border-strong disabled:opacity-60"
+        >
+          {chosen.length ? (
+            <>
+              <span className="flex -space-x-1.5">
+                {chosen.slice(0, 3).map((m) => (
+                  <UserAvatar key={m.id} user={m} size="xs" />
+                ))}
+              </span>
+              <span className="truncate">{chosen.length === 1 ? chosen[0]!.displayName : `${chosen.length} people`}</span>
+            </>
+          ) : (
+            <span className="flex items-center gap-1.5 text-fg-subtle">
+              <Users className="size-3.5" /> None
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-1">
+        <p className="px-2 py-1.5 text-[11px] text-fg-subtle">They can upload, submit and resolve feedback on this deliverable only.</p>
+        <ul className="scrollbar-thin max-h-64 overflow-y-auto">
+          {workers.map((m) => {
+            const mayToggle = canAssign || m.id === viewerId;
+            return (
+              <li key={m.id}>
+                <label className={cn("flex min-h-9 items-center gap-2 rounded-md px-2 text-[13px]", mayToggle ? "cursor-pointer hover:bg-surface-4" : "opacity-50")}>
+                  <Checkbox checked={d.contributorIds.includes(m.id)} disabled={!mayToggle} onCheckedChange={() => toggle(m.id)} aria-label={m.displayName} />
+                  <UserAvatar user={m} size="xs" />
+                  <span className="truncate">{m.displayName}</span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -97,6 +164,8 @@ export function DeliverableHeader() {
     .filter((x): x is DeliverableDTO => Boolean(x));
   const blocking = requires.filter((x) => x.state !== "APPROVED");
   const canAssign = card.permissions.canAssign;
+  const inheritsPeople = !d.ownerId && d.contributorIds.length === 0;
+  const overdue = (x: Pick<DeliverableDTO, "dueAt" | "state">) => Boolean(x.dueAt && x.state !== "APPROVED" && new Date(x.dueAt).getTime() < Date.now());
 
   return (
     <section aria-label="Deliverable" className="grid gap-2">
@@ -134,7 +203,7 @@ export function DeliverableHeader() {
         ) : null}
       </div>
 
-      <div className="grid gap-2 rounded-xl border border-border bg-surface-2 p-2.5 text-[12.5px] sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-2 rounded-xl border border-border bg-surface-2 p-2.5 text-[12.5px] sm:grid-cols-2 xl:grid-cols-3">
         <label className="grid gap-0.5">
           <span className="text-[11px] text-fg-subtle">Type</span>
           <Input
@@ -155,8 +224,24 @@ export function DeliverableHeader() {
             value={d.ownerId ?? "none"}
             disabled={!(canAssign || card.permissions.canSelfAssign)}
             onValueChange={(v) => update.mutate({ deliverableId: d.id, ownerId: v === "none" ? null : v })}
-            options={[{ value: "none", label: "Card assignees" }, ...members.filter((m) => canAssign || m.id === viewerId || m.id === d.ownerId).map((m) => ({ value: m.id, label: m.displayName, icon: <UserAvatar user={m} size="xs" /> }))]}
+            options={[
+              { value: "none", label: inheritsPeople ? "Card assignees (inherited)" : "No one" },
+              ...members
+                .filter((m) => (roleHas(m.role, "attachment.upload") && (canAssign || m.id === viewerId)) || m.id === d.ownerId)
+                .map((m) => ({ value: m.id, label: m.displayName, icon: <UserAvatar user={m} size="xs" /> })),
+            ]}
             className="h-7"
+          />
+        </div>
+        <div className="grid gap-0.5">
+          <span className="text-[11px] text-fg-subtle">Contributors</span>
+          <ContributorsPicker
+            d={d}
+            members={members}
+            viewerId={viewerId}
+            canAssign={canAssign}
+            canSelfAssign={card.permissions.canSelfAssign}
+            onChange={(ids) => update.mutate({ deliverableId: d.id, contributorIds: ids })}
           />
         </div>
         <div className="grid gap-0.5">
@@ -166,22 +251,47 @@ export function DeliverableHeader() {
             value={d.reviewerId ?? "none"}
             disabled={!canAssign}
             onValueChange={(v) => update.mutate({ deliverableId: d.id, reviewerId: v === "none" ? null : v })}
-            options={[{ value: "none", label: "Card reviewers" }, ...members.filter((m) => ["OWNER", "ADMIN", "MANAGER"].includes(m.role) || m.id === d.reviewerId).map((m) => ({ value: m.id, label: m.displayName }))]}
+            options={[
+              { value: "none", label: "Card reviewers (inherited)" },
+              ...members.filter((m) => roleHas(m.role, "card.review") || m.id === d.reviewerId).map((m) => ({ value: m.id, label: m.displayName, icon: <UserAvatar user={m} size="xs" /> })),
+            ]}
             className="h-7"
           />
         </div>
-        <label className="grid gap-0.5">
-          <span className="text-[11px] text-fg-subtle">Due</span>
+        <div className="grid gap-0.5">
+          <label htmlFor={`due-${d.id}`} className="text-[11px] text-fg-subtle">
+            Due
+          </label>
           <input
+            id={`due-${d.id}`}
             type="datetime-local"
             aria-label="Deliverable due date"
+            aria-describedby={`due-note-${d.id}`}
             disabled={!perms.canEdit}
             value={toLocalInput(d.dueAt)}
             onChange={(e) => update.mutate({ deliverableId: d.id, dueAt: e.target.value ? new Date(e.target.value).toISOString() : null })}
-            className="h-7 min-w-0 rounded-md border border-border-strong/70 bg-surface-3/60 px-2 text-[12.5px] outline-none focus:border-accent disabled:opacity-60 [color-scheme:dark] light:[color-scheme:light]"
+            className={cn(
+              "h-7 min-w-0 rounded-md border border-border-strong/70 bg-surface-3/60 px-2 text-[12.5px] outline-none focus:border-accent disabled:opacity-60 [color-scheme:dark] light:[color-scheme:light]",
+              d.dueAt && overdue(d) && "border-danger/60 text-danger",
+            )}
           />
-        </label>
-        <label className="flex items-center gap-2 sm:col-span-2 xl:col-span-4">
+          <span id={`due-note-${d.id}`} className="flex flex-wrap items-center gap-1 text-[11px] text-fg-subtle">
+            {d.dueAt ? (
+              card.dueAt && perms.canEdit ? (
+                <button type="button" className="inline-flex min-h-6 items-center text-accent hover:underline" onClick={() => update.mutate({ deliverableId: d.id, dueAt: null })}>
+                  Use the card&apos;s deadline instead
+                </button>
+              ) : (
+                "Its own deadline"
+              )
+            ) : card.dueAt ? (
+              <span className={cn(overdue({ ...d, dueAt: card.dueAt }) && "text-danger")}>Inherits the card&apos;s deadline · {formatDue(card.dueAt)}</span>
+            ) : (
+              "No deadline"
+            )}
+          </span>
+        </div>
+        <label className="flex items-center gap-2 sm:col-span-2 xl:col-span-3">
           <Checkbox checked={d.required} disabled={!perms.canEdit} onCheckedChange={(v) => update.mutate({ deliverableId: d.id, required: v === true })} />
           <span>Required to complete the card</span>
           {!d.required ? <span className="text-fg-subtle">— optional work doesn&apos;t block completion</span> : null}

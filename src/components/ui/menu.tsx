@@ -34,8 +34,16 @@ export function DropdownMenuItem({
 }: ComponentProps<typeof M.Item> & { destructive?: boolean; shortcut?: string }) {
   return (
     <M.Item className={cn(item, destructive && "text-danger [&_svg]:text-danger data-[highlighted]:bg-danger/10", className)} {...props}>
-      {children}
-      {shortcut ? <span className="ml-auto pl-4 text-[11px] text-fg-subtle">{shortcut}</span> : null}
+      {/* With asChild the item becomes its one child (e.g. a link): a second child — even an absent
+          shortcut — makes the slot throw and takes the whole page down when the menu opens. */}
+      {props.asChild ? (
+        children
+      ) : (
+        <>
+          {children}
+          {shortcut ? <span className="ml-auto pl-4 text-[11px] text-fg-subtle">{shortcut}</span> : null}
+        </>
+      )}
     </M.Item>
   );
 }

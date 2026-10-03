@@ -29,7 +29,11 @@ export class Effects {
     for (const [projectId, entry] of this.projects) {
       emitProjectChange(projectId, [...entry.cardIds], { board: entry.board, clientId });
     }
-    if (this.notified.size) emitNotifications(this.notified);
+    if (this.notified.size) {
+      emitNotifications(this.notified);
+      // Device notifications queued with the change go out now that it has committed.
+      void import("./push").then((m) => m.schedulePushDelivery()).catch(() => {});
+    }
     this.projects.clear();
     this.notified.clear();
   }

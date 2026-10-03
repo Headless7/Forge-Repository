@@ -75,7 +75,7 @@ describe("roles and permissions", () => {
   it("limits who can grant which roles and protects the last owner", async () => {
     await expectAppError(studios.updateMember(f.admin.actor, { studioId: f.studioId, userId: f.member.id, role: "OWNER" }), "FORBIDDEN");
     await expectAppError(studios.updateMember(f.manager.actor, { studioId: f.studioId, userId: f.member.id, role: "MANAGER" }), "FORBIDDEN");
-    await expectAppError(studios.updateMember(f.admin.actor, { studioId: f.studioId, userId: f.owner.id, role: "MEMBER" }), "FORBIDDEN");
+    await expectAppError(studios.updateMember(f.admin.actor, { studioId: f.studioId, userId: f.owner.id, role: "CONTRIBUTOR" }), "FORBIDDEN");
     await expectAppError(studios.removeMember(f.owner.actor, { studioId: f.studioId, userId: f.owner.id }), "CONFLICT");
     const members = await studios.updateMember(f.admin.actor, { studioId: f.studioId, userId: f.member2.id, role: "MANAGER" });
     expect(members.find((m) => m.id === f.member2.id)?.role).toBe("MANAGER");
@@ -83,7 +83,7 @@ describe("roles and permissions", () => {
 
   it("invitations are single-use, email-bound and expire", async () => {
     const invitee = await createUser("Invitee");
-    const invite = await studios.createInvitation(f.admin.actor, { studioId: f.studioId, email: invitee.email, role: "MEMBER" });
+    const invite = await studios.createInvitation(f.admin.actor, { studioId: f.studioId, email: invitee.email, role: "CONTRIBUTOR" });
     const token = invite.url.split("/invite/")[1]!;
     await expectAppError(studios.acceptInvitation(f.member.actor, { token }), "FORBIDDEN");
     await expect(studios.acceptInvitation(invitee.actor, { token })).resolves.toHaveProperty("studioSlug");
@@ -95,6 +95,6 @@ describe("roles and permissions", () => {
     const expToken = expiring.url.split("/invite/")[1]!;
     await db.update(invitations).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(invitations.tokenHash, hashToken(expToken)));
     await expectAppError(studios.acceptInvitation(late.actor, { token: expToken }), "VALIDATION");
-    await expectAppError(studios.createInvitation(f.manager.actor, { studioId: f.studioId, email: "x@y.dev", role: "MEMBER" }), "FORBIDDEN");
+    await expectAppError(studios.createInvitation(f.manager.actor, { studioId: f.studioId, email: "x@y.dev", role: "CONTRIBUTOR" }), "FORBIDDEN");
   });
 });

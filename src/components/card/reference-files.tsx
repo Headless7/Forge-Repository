@@ -63,7 +63,7 @@ export function ReferenceFiles() {
                 {card.cover?.attachmentId === a.id ? <span className="rounded bg-accent-soft px-1.5 text-[10.5px] font-medium leading-5 text-accent">Cover</span> : null}
                 {(a.kind === "IMAGE" || a.kind === "VIDEO") && a.status !== "FAILED" && card.permissions.canEdit && card.cover?.attachmentId !== a.id ? (
                   <Tooltip content="Use as board cover">
-                    <Button size="icon-xs" variant="ghost" aria-label={`Use ${a.filename} as cover`} className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100" onClick={() => setCover.mutate({ cardId: card.id, attachmentId: a.id })}>
+                    <Button size="icon-xs" variant="ghost" aria-label={`Use ${a.filename} as cover`} className="hover-reveal opacity-0 focus-visible:opacity-100 group-hover:opacity-100" onClick={() => setCover.mutate({ cardId: card.id, attachmentId: a.id })}>
                       <ImageIcon />
                     </Button>
                   </Tooltip>
@@ -79,7 +79,7 @@ export function ReferenceFiles() {
                 ) : null}
                 {card.permissions.canEdit || a.uploadedById === viewerId ? (
                   <Tooltip content="Remove">
-                    <Button size="icon-xs" variant="ghost" aria-label={`Remove ${a.filename}`} className="opacity-0 group-hover:opacity-100" onClick={() => remove.mutate({ attachmentId: a.id })}>
+                    <Button size="icon-xs" variant="ghost" aria-label={`Remove ${a.filename}`} className="hover-reveal opacity-0 focus-visible:opacity-100 group-hover:opacity-100" onClick={() => remove.mutate({ attachmentId: a.id })}>
                       <Trash2 />
                     </Button>
                   </Tooltip>

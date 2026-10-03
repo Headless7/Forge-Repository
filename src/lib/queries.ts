@@ -6,7 +6,10 @@ import { errorMessage, rpc, RpcError, type RpcInput, type RpcName, type RpcOutpu
 import type { CardDetailDTO } from "./types";
 
 export const qk = {
+  /** Every board of a project (a prefix: invalidating it refreshes whichever board is open). */
   board: (projectId: string) => ["board", projectId] as const,
+  /** One board's contents. */
+  boardView: (projectId: string, boardId: string) => ["board", projectId, boardId] as const,
   card: (cardId: string) => ["card", cardId] as const,
   cardByNumber: (projectId: string, number: number) => ["card-number", projectId, number] as const,
   cardActivity: (cardId: string) => ["card-activity", cardId] as const,

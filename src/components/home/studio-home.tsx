@@ -1,13 +1,13 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, CalendarClock, CircleAlert, Clock, Eye, FolderPlus } from "lucide-react";
+import { ArrowRight, CalendarClock, CircleAlert, Clock, Eye, FolderPlus, Lock } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { qk } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
 import type { RpcOutput } from "@/lib/rpc-client";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn, formatShortDate, timeAgo } from "@/lib/utils";
 import { describeActivity } from "../domain/activity-text";
 import { UserAvatar } from "../domain/avatar";
 import { StatePill } from "../domain/state";
@@ -34,7 +34,10 @@ export function StudioHome({ initial }: { initial: Home }) {
   const { user, studio, can } = useShell();
   const [createOpen, setCreateOpen] = useState(false);
   const { data } = useQuery({ queryKey: qk.home(studio.id), queryFn: () => rpc("studio.home", { studioId: studio.id }), initialData: initial, staleTime: 20_000 });
-  const cardHref = (projectSlug: string, key: string) => `/${studio.slug}/${projectSlug}?card=${encodeURIComponent(key)}`;
+  /** Opens the card on its board (project links without a board are redirected there too). */
+  const cardHref = (projectSlug: string, key: string, board?: { number: number } | null) =>
+    `/${studio.slug}/${projectSlug}${board ? `/b/${board.number}` : ""}?card=${encodeURIComponent(key)}`;
+  const boardSuffix = (board: { name: string; shown: boolean } | null) => (board?.shown ? ` · ${board.name}` : "");
 
   return (
     <div className="scrollbar-thin h-full overflow-y-auto">
@@ -95,12 +98,12 @@ export function StudioHome({ initial }: { initial: Home }) {
               <EmptyState title="You're all caught up" description="Nothing is waiting on you right now — no change requests, reviews or deadlines." />
             ) : (
               <ul className="grid gap-2">
-                {data.attention.map(({ reason, card, project }) => {
+                {data.attention.map(({ reason, card, project, board }) => {
                   const meta = REASONS[reason];
                   const Icon = meta.icon;
                   return (
                     <li key={card.id}>
-                      <Link href={cardHref(project.slug, card.key)} className="flex items-center gap-3 rounded-lg border border-border bg-surface-2 p-2.5 transition-colors hover:border-border-strong">
+                      <Link href={cardHref(project.slug, card.key, board)} className="flex items-center gap-3 rounded-lg border border-border bg-surface-2 p-2.5 transition-colors hover:border-border-strong">
                         {card.cover?.thumbUrl ? (
                           <img src={card.cover.thumbUrl} alt="" className="h-11 w-[72px] shrink-0 rounded-md object-cover" />
                         ) : (
@@ -110,6 +113,7 @@ export function StudioHome({ initial }: { initial: Home }) {
                           <p className="truncate text-[13.5px] font-medium">{card.title}</p>
                           <p className="truncate text-[11.5px] text-fg-subtle">
                             <span className="font-mono">{card.key}</span> · {project.name}
+                            {boardSuffix(board)}
                             {card.counts.unresolvedFeedback ? <span className="text-state-changes"> · {card.counts.unresolvedFeedback} unresolved</span> : null}
                           </p>
                         </div>
@@ -124,17 +128,69 @@ export function StudioHome({ initial }: { initial: Home }) {
               </ul>
             )}
 
+            <h2 className="mb-1 mt-8 text-[13px] font-semibold uppercase tracking-wide text-fg-subtle">Your deliverables</h2>
+            <p className="mb-3 text-[12px] text-fg-subtle">Unfinished work you&apos;re responsible for or contribute to, soonest deadline first.</p>
+            {data.deliverables.length === 0 ? (
+              <p className="text-[13px] text-fg-muted">No deliverables are waiting on you.</p>
+            ) : (
+              <ul className="grid gap-1.5">
+                {data.deliverables.map((item) => {
+                  const overdue = item.dueAt ? new Date(item.dueAt).getTime() < Date.now() : false;
+                  return (
+                    <li key={item.deliverable.id}>
+                      <Link
+                        href={`${cardHref(item.project.slug, item.card.key, item.board)}&d=${item.deliverable.number}`}
+                        className="flex items-center gap-3 rounded-lg border border-border bg-surface-2 px-3 py-2.5 transition-colors hover:border-border-strong"
+                      >
+                        <span className="text-lg" aria-hidden>
+                          {item.project.icon}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[13.5px] font-medium">
+                            {item.deliverable.name}
+                            <span className="font-normal text-fg-muted"> · {item.card.title}</span>
+                          </p>
+                          <p className="flex flex-wrap items-center gap-x-2 text-[11.5px] text-fg-subtle">
+                            <span className="font-mono">{item.card.key}</span>
+                            {item.board?.shown ? <span>{item.board.name}</span> : null}
+                            <span>{item.role === "responsible" ? "Responsible" : item.role === "contributor" ? "Contributor" : "Card assignee"}</span>
+                            {item.dueAt ? (
+                              <span className={cn("inline-flex items-center gap-0.5", overdue && "font-semibold text-danger")} title={item.dueInherited ? "The card's deadline" : "Its own deadline"}>
+                                <CalendarClock className="size-3" />
+                                {overdue ? "overdue · " : ""}
+                                {item.dueInherited ? "card · " : ""}
+                                {formatShortDate(item.dueAt)}
+                              </span>
+                            ) : null}
+                            {item.waitingOn.length ? (
+                              <span className="inline-flex items-center gap-0.5 text-state-review">
+                                <Lock className="size-3" /> waiting on {item.waitingOn.join(", ")}
+                              </span>
+                            ) : null}
+                          </p>
+                        </div>
+                        <StatePill state={item.deliverable.state} size="sm" />
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
             <h2 className="mb-3 mt-8 text-[13px] font-semibold uppercase tracking-wide text-fg-subtle">Recently viewed</h2>
             {data.recent.length === 0 ? (
               <p className="text-[13px] text-fg-muted">Cards you open will show up here.</p>
             ) : (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {data.recent.map(({ card, project, viewedAt }) => (
-                  <Link key={card.id} href={cardHref(project.slug, card.key)} className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-2 p-2 hover:border-border-strong">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                {data.recent.map(({ card, project, board, viewedAt }) => (
+                  <Link key={card.id} href={cardHref(project.slug, card.key, board)} className="flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-surface-2 p-2 hover:border-border-strong">
                     {card.cover?.thumbUrl ? <img src={card.cover.thumbUrl} alt="" className="h-9 w-14 shrink-0 rounded object-cover" /> : <span className="flex h-9 w-14 shrink-0 items-center justify-center rounded bg-surface-4">{project.icon}</span>}
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13px] font-medium">{card.title}</p>
-                      <p className="truncate text-[11px] text-fg-subtle">viewed {timeAgo(viewedAt)}</p>
+                      <p className="truncate text-[11px] text-fg-subtle">
+                        viewed {timeAgo(viewedAt)}
+                        {boardSuffix(board)}
+                      </p>
                     </div>
                     <StatePill state={card.state} size="sm" />
                   </Link>
@@ -162,7 +218,7 @@ export function StudioHome({ initial }: { initial: Home }) {
                       </p>
                     </div>
                     {e.card && e.project ? (
-                      <Link href={cardHref(e.project.slug, e.card.key)} className="shrink-0 self-start rounded px-1.5 font-mono text-[10.5px] text-fg-subtle hover:bg-surface-3 hover:text-fg">
+                      <Link href={cardHref(e.project.slug, e.card.key)} className="touch-target shrink-0 self-start rounded px-1.5 font-mono text-[10.5px] text-fg-subtle hover:bg-surface-3 hover:text-fg">
                         {e.card.key}
                       </Link>
                     ) : null}

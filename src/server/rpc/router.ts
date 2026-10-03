@@ -10,6 +10,7 @@ import {
   cardStateSchema,
   cardTitleSchema,
   colorSchema,
+  boardNameSchema,
   columnNameSchema,
   displayModeSchema,
   emailSchema,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/validation";
 import { COLUMN_ICONS } from "@/lib/column-icons";
 import * as accounts from "../services/accounts";
+import * as archive from "../services/archive";
 import { listAuditLog, listCardActivity, listProjectActivity } from "../services/activity";
 import * as board from "../services/board";
 import * as cards from "../services/cards";
@@ -39,6 +41,9 @@ import * as labels from "../services/labels";
 import * as media from "../services/media";
 import * as notifications from "../services/notifications";
 import * as production from "../services/production";
+import * as purge from "../services/purge";
+import * as push from "../services/push";
+import * as projectTemplates from "../services/project-templates";
 import * as projects from "../services/projects";
 import * as reviews from "../services/reviews";
 import * as roblox from "../services/roblox";
@@ -50,21 +55,68 @@ import { requireCard, requireProject, requireStudio, getProjectAccess } from "..
 import { proc } from "./procedure";
 
 const columnIcon = z.enum(COLUMN_ICONS).nullable().optional();
+const purgeTargetSchema = z.object({ type: z.enum(purge.PURGE_TYPES), id: idSchema });
+/** A deliverable-canvas connection point, e.g. "r-50" (see lib/canvas-points). */
+const canvasPointSchema = z.string().regex(/^[trbl]-\d{1,2}$/, "Unknown connection point.");
+/** A browser push subscription endpoint: an https capability URL issued by the browser's push service. */
+const pushEndpointSchema = z.string().url().max(2048).refine((v) => v.startsWith("https://"), "Unsupported push endpoint.");
 const text = (max: number) => z.string().max(max);
 
 export const appRouter = {
   // ── Board & columns ───────────────────────────────────────────────────────
   "board.get": proc({
-    input: z.object({ projectId: idSchema }),
-    handler: ({ actor }, i) => board.getBoard(actor, i.projectId),
+    input: z.object({ projectId: idSchema, boardId: idSchema.nullable().optional() }),
+    handler: ({ actor }, i) => board.getBoard(actor, i.projectId, i.boardId),
+  }),
+  "board.create": proc({
+    input: z.object({
+      projectId: idSchema,
+      name: boardNameSchema,
+      description: text(2000).optional(),
+      columns: z.union([z.enum(["empty", "roblox"]), z.object({ copyFromBoardId: idSchema })]).optional(),
+    }),
+    limit: { max: 60, windowMs: 60_000 },
+    handler: ({ actor }, i) => board.createBoard(actor, i),
+  }),
+  "board.update": proc({
+    input: z.object({ boardId: idSchema, name: boardNameSchema.optional(), description: text(2000).optional() }),
+    handler: ({ actor }, i) => board.updateBoard(actor, i),
+  }),
+  "board.move": proc({
+    input: z.object({
+      boardId: idSchema,
+      afterBoardId: idSchema.nullable().optional(),
+      beforeBoardId: idSchema.nullable().optional(),
+      index: z.number().int().min(0).nullable().optional(),
+    }),
+    handler: ({ actor }, i) => board.moveBoard(actor, i),
+  }),
+  "board.archive": proc({
+    input: z.object({ boardId: idSchema, archived: z.boolean() }),
+    handler: ({ actor }, i) => board.setBoardArchived(actor, i),
   }),
   "board.archived": proc({
     input: z.object({ projectId: idSchema }),
-    handler: ({ actor }, i) => board.listArchived(actor, i.projectId),
+    handler: ({ actor }, i) => archive.listArchivedContent(actor, i.projectId),
+  }),
+  "archive.projects": proc({
+    input: z.object({ studioId: idSchema }),
+    handler: ({ actor }, i) => archive.listArchivedProjects(actor, i.studioId),
+  }),
+  "archive.preview": proc({
+    input: z.object({ targets: z.array(purgeTargetSchema).min(1).max(500) }),
+    limit: { max: 120, windowMs: 60_000 },
+    handler: ({ actor }, i) => purge.previewPurge(actor, i),
+  }),
+  "archive.purge": proc({
+    input: z.object({ targets: z.array(purgeTargetSchema).min(1).max(500), confirm: z.literal("DELETE") }),
+    limit: { max: 20, windowMs: 60_000 },
+    handler: ({ actor }, i) => purge.purge(actor, { targets: i.targets }),
   }),
   "column.create": proc({
     input: z.object({
       projectId: idSchema,
+      boardId: idSchema.nullable().optional(),
       name: columnNameSchema,
       icon: columnIcon,
       color: colorSchema.nullable().optional(),
@@ -110,7 +162,7 @@ export const appRouter = {
     handler: ({ actor }, i) => board.setColumnCollapsed(actor, i),
   }),
   "board.setView": proc({
-    input: z.object({ projectId: idSchema, view: z.enum(["CATEGORY", "PRODUCTION"]) }),
+    input: z.object({ projectId: idSchema, boardId: idSchema.nullable().optional(), view: z.enum(["CATEGORY", "PRODUCTION"]) }),
     handler: ({ actor }, i) => board.setBoardView(actor, i),
   }),
 
@@ -165,6 +217,10 @@ export const appRouter = {
       index: z.number().int().min(0).nullable().optional(),
     }),
     handler: ({ actor }, i) => cards.moveCard(actor, i),
+  }),
+  "card.moveToBoard": proc({
+    input: z.object({ cardId: idSchema, boardId: idSchema }),
+    handler: ({ actor }, i) => cards.moveCardToBoard(actor, i),
   }),
   "card.archive": proc({
     input: z.object({ cardId: idSchema, archived: z.boolean() }),
@@ -233,6 +289,7 @@ export const appRouter = {
       assetType: text(40).optional(),
       required: z.boolean().optional(),
       ownerId: idSchema.nullable().optional(),
+      contributorIds: z.array(idSchema).max(20).optional(),
       reviewerId: idSchema.nullable().optional(),
       dueAt: isoDateSchema.nullable().optional(),
       canvasX: z.number().finite().min(-100_000).max(100_000).optional(),
@@ -250,6 +307,7 @@ export const appRouter = {
       assetType: text(40).optional(),
       required: z.boolean().optional(),
       ownerId: idSchema.nullable().optional(),
+      contributorIds: z.array(idSchema).max(20).optional(),
       reviewerId: idSchema.nullable().optional(),
       dueAt: isoDateSchema.nullable().optional(),
     }),
@@ -263,7 +321,15 @@ export const appRouter = {
     input: z.object({
       cardId: idSchema,
       positions: z
-        .array(z.object({ id: idSchema, x: z.number().finite().min(-100_000).max(100_000), y: z.number().finite().min(-100_000).max(100_000) }))
+        .array(
+          z.object({
+            id: idSchema,
+            x: z.number().finite().min(-100_000).max(100_000).optional(),
+            y: z.number().finite().min(-100_000).max(100_000).optional(),
+            w: z.number().finite().min(1).max(10_000).nullable().optional(),
+            h: z.number().finite().min(1).max(10_000).nullable().optional(),
+          }),
+        )
         .min(1)
         .max(200),
     }),
@@ -279,11 +345,25 @@ export const appRouter = {
     handler: ({ actor }, i) => reviews.setDeliverableState(actor, i),
   }),
   "deliverable.link": proc({
-    input: z.object({ cardId: idSchema, fromId: idSchema, toId: idSchema, type: z.enum(["DEPENDENCY", "ASSOCIATION"]), note: text(500).optional() }),
+    input: z.object({
+      cardId: idSchema,
+      fromId: idSchema,
+      toId: idSchema,
+      type: z.enum(["DEPENDENCY", "ASSOCIATION"]),
+      note: text(500).optional(),
+      fromPoint: canvasPointSchema.nullable().optional(),
+      toPoint: canvasPointSchema.nullable().optional(),
+    }),
     handler: ({ actor }, i) => deliverables.linkDeliverables(actor, i),
   }),
   "deliverable.updateLink": proc({
-    input: z.object({ linkId: idSchema, note: text(500).optional(), reverse: z.boolean().optional() }),
+    input: z.object({
+      linkId: idSchema,
+      note: text(500).optional(),
+      reverse: z.boolean().optional(),
+      fromPoint: canvasPointSchema.nullable().optional(),
+      toPoint: canvasPointSchema.nullable().optional(),
+    }),
     handler: ({ actor }, i) => deliverables.updateLink(actor, i),
   }),
   "deliverable.unlink": proc({
@@ -358,6 +438,10 @@ export const appRouter = {
   "attachment.archive": proc({
     input: z.object({ attachmentId: idSchema }),
     handler: ({ actor }, i) => media.archiveAttachment(actor, i),
+  }),
+  "attachment.restore": proc({
+    input: z.object({ attachmentId: idSchema }),
+    handler: ({ actor }, i) => media.restoreAttachment(actor, i),
   }),
   "attachment.setCover": proc({
     input: z.object({ cardId: idSchema, attachmentId: idSchema }),
@@ -516,9 +600,16 @@ export const appRouter = {
       color: colorSchema.optional(),
       description: text(2000).optional(),
       template: z.enum(["roblox", "empty"]).optional(),
+      templateProjectId: idSchema.nullable().optional(),
+      templateMemberIds: z.array(idSchema).max(500).nullable().optional(),
       visibility: z.enum(["STUDIO", "PRIVATE"]).optional(),
     }),
+    limit: { max: 30, windowMs: 60_000 },
     handler: ({ actor }, i) => projects.createProject(actor, i),
+  }),
+  "project.templatePreview": proc({
+    input: z.object({ studioId: idSchema, sourceProjectId: idSchema }),
+    handler: ({ actor }, i) => projectTemplates.previewProjectTemplate(actor, i),
   }),
   "project.update": proc({
     input: z.object({
@@ -693,8 +784,40 @@ export const appRouter = {
     handler: ({ actor }) => notifications.getNotificationPreferences(actor),
   }),
   "notification.setPreference": proc({
-    input: z.object({ type: notificationTypeSchema, inApp: z.boolean() }),
+    input: z.object({ type: notificationTypeSchema, inApp: z.boolean().optional(), push: z.boolean().optional(), email: z.boolean().optional() }),
     handler: ({ actor }, i) => notifications.setNotificationPreference(actor, i),
+  }),
+
+  // ── Device notifications (Web Push) ─────────────────────────────────────
+  "push.config": proc({
+    input: z.object({}),
+    handler: async () => push.pushPublicConfig(),
+  }),
+  "push.status": proc({
+    input: z.object({ endpoint: pushEndpointSchema }),
+    handler: ({ actor }, i) => push.pushStatus(actor, i),
+  }),
+  "push.subscribe": proc({
+    input: z.object({ endpoint: pushEndpointSchema, p256dh: z.string().min(80).max(120), auth: z.string().min(16).max(40) }),
+    limit: { max: 30, windowMs: 60 * 60_000 },
+    handler: ({ actor }, i) => push.subscribePush(actor, i),
+  }),
+  "push.unsubscribe": proc({
+    input: z.object({ endpoint: pushEndpointSchema }),
+    handler: ({ actor }, i) => push.unsubscribePush(actor, i),
+  }),
+  "push.devices": proc({
+    input: z.object({}),
+    handler: ({ actor }) => push.listPushDevices(actor),
+  }),
+  "push.removeDevice": proc({
+    input: z.object({ id: idSchema }),
+    handler: ({ actor }, i) => push.removePushDevice(actor, i),
+  }),
+  "push.test": proc({
+    input: z.object({ endpoint: pushEndpointSchema.nullable().optional() }),
+    limit: { max: 10, windowMs: 10 * 60_000 },
+    handler: ({ actor }, i) => push.sendTestPush(actor, i),
   }),
 
   // ── Search ────────────────────────────────────────────────────────────────

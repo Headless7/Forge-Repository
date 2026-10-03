@@ -1,6 +1,6 @@
 import { and, eq, isNull, lt, max, ne, sql } from "drizzle-orm";
 import type { AttachmentDTO } from "@/lib/types";
-import { assertCard, computeDeliverablePermissions, requireCard, requireDeliverable, type CardAccess, type DeliverableAccess } from "../access";
+import { assertCard, computeDeliverablePermissions, loadContributors, requireCard, requireDeliverable, type CardAccess, type DeliverableAccess } from "../access";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
 import { assetVersions, attachments, cards, deliverables, reviews } from "../db/schema";
@@ -144,7 +144,8 @@ async function assertUploadAllowed(
   if (deliverableId) {
     const [d] = await ex.select().from(deliverables).where(and(eq(deliverables.id, deliverableId), eq(deliverables.cardId, ctx.card.id)));
     if (!d) throw notFound("Deliverable");
-    if (!computeDeliverablePermissions(ctx, d).canUpload) throw forbidden("You don't have permission to upload files to this deliverable.");
+    const contributors = (await loadContributors(ex, [d.id])).get(d.id) ?? [];
+    if (!computeDeliverablePermissions(ctx, d, contributors).canUpload) throw forbidden("You don't have permission to upload files to this deliverable.");
   } else {
     assertCard(ctx.perms, "canUpload", "You don't have permission to upload files to this card.");
   }
@@ -351,6 +352,8 @@ export async function completeUpload(
             studioId: ctx.access.studioId,
             projectId: ctx.card.projectId,
             cardId: ctx.card.id,
+            deliverableId: d?.id ?? null,
+            versionId: version?.id ?? null,
             data: { ...cardNotificationData(ctx.access, ctx.card), change: `uploaded ${scoped ? `${scoped} ` : ""}V${version?.versionNumber ?? "?"}` },
           }),
         );
@@ -425,6 +428,21 @@ export async function archiveAttachment(actor: Actor, input: { attachmentId: str
   }
   await db.transaction(async (tx) => {
     await tx.update(attachments).set({ archivedAt: now() }).where(eq(attachments.id, attachment.id));
+    await recomputeCovers(tx, attachment);
+    await touchCard(tx, ctx.card.id, actor.userId);
+  });
+  new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
+  return { ok: true };
+}
+
+/** Brings an archived file back (archiving is reversible until someone deletes it permanently). */
+export async function restoreAttachment(actor: Actor, input: { attachmentId: string }) {
+  const { attachment, ctx } = await loadAttachmentForWrite(actor, input.attachmentId);
+  const own = attachment.uploadedById === actor.userId;
+  if (!(ctx.perms.canEdit || (own && ctx.perms.canComment))) throw forbidden("You can't restore this attachment.");
+  if (!attachment.archivedAt) return { ok: true };
+  await db.transaction(async (tx) => {
+    await tx.update(attachments).set({ archivedAt: null }).where(eq(attachments.id, attachment.id));
     await recomputeCovers(tx, attachment);
     await touchCard(tx, ctx.card.id, actor.userId);
   });

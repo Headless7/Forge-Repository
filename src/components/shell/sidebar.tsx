@@ -26,6 +26,7 @@ import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { qk, useRpcMutation } from "@/lib/queries";
+import { signOutEverywhereOnThisDevice } from "@/lib/push-client";
 import { rpc } from "@/lib/rpc-client";
 import type { ProjectListItemDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -138,7 +139,7 @@ export function Sidebar({
   });
 
   async function signOut() {
-    await fetch("/api/auth/sign-out", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    await signOutEverywhereOnThisDevice();
     router.replace("/sign-in");
     router.refresh();
   }
@@ -229,7 +230,7 @@ export function Sidebar({
           {collapsed ? <span className="h-px w-6 bg-border" /> : <span className="text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">Projects</span>}
           {!collapsed && can("project.create") ? (
             <Tooltip content="New project">
-              <button type="button" onClick={onCreateProject} aria-label="New project" className="flex size-5 items-center justify-center rounded text-fg-subtle hover:bg-surface-3 hover:text-fg">
+              <button type="button" onClick={onCreateProject} aria-label="New project" className="touch-target flex size-5 items-center justify-center rounded text-fg-subtle hover:bg-surface-3 hover:text-fg">
                 <Plus className="size-3.5" />
               </button>
             </Tooltip>

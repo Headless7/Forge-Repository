@@ -1,7 +1,29 @@
 "use client";
 
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, BellOff, CheckCheck, CircleAlert, CircleCheck, Eye, MessageSquare, AtSign, UserPlus, CalendarClock, Reply, Sparkles, Settings } from "lucide-react";
+import {
+  Archive,
+  AtSign,
+  Bell,
+  BellOff,
+  CalendarClock,
+  CalendarX,
+  CheckCheck,
+  CircleAlert,
+  CircleCheck,
+  Eye,
+  Lock,
+  LockOpen,
+  MessageSquare,
+  MessageSquareCheck,
+  Reply,
+  Settings,
+  Sparkles,
+  UserCheck,
+  UserMinus,
+  UserPlus,
+} from "lucide-react";
+import type { NotificationType } from "@/lib/notifications";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
@@ -14,48 +36,103 @@ import { Button } from "../ui/button";
 import { Dialog, SheetContent } from "../ui/dialog";
 import { Tooltip } from "../ui/menu";
 
-const TYPE_ICON: Record<string, ReactNode> = {
+const TYPE_ICON: Record<NotificationType, ReactNode> = {
   ASSIGNED: <UserPlus className="text-info" />,
+  UNASSIGNED: <UserMinus className="text-fg-muted" />,
+  REVIEWER_ASSIGNED: <UserCheck className="text-state-review" />,
   MENTIONED: <AtSign className="text-accent" />,
   COMMENT: <MessageSquare className="text-fg-muted" />,
   REPLY: <Reply className="text-fg-muted" />,
   REVIEW_REQUESTED: <Eye className="text-state-review" />,
   CHANGES_REQUESTED: <CircleAlert className="text-state-changes" />,
   APPROVED: <CircleCheck className="text-state-approved" />,
-  WATCHED_CARD: <Sparkles className="text-fg-muted" />,
+  FEEDBACK_RESOLVED: <MessageSquareCheck className="text-state-approved" />,
+  PREREQUISITE_APPROVED: <CircleCheck className="text-info" />,
+  UNBLOCKED: <LockOpen className="text-state-approved" />,
+  BLOCKED: <Lock className="text-state-changes" />,
   DUE_SOON: <CalendarClock className="text-state-review" />,
+  OVERDUE: <CalendarX className="text-danger" />,
+  DUE_CHANGED: <CalendarClock className="text-fg-muted" />,
+  WORK_ARCHIVED: <Archive className="text-fg-muted" />,
+  WATCHED_CARD: <Sparkles className="text-fg-muted" />,
 };
+
+function formatDue(iso: unknown) {
+  return typeof iso === "string" ? new Date(iso).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : null;
+}
 
 export function describeNotification(n: NotificationDTO): { headline: ReactNode; detail: string | null } {
   const actor = <strong className="font-semibold text-fg">{n.actor?.displayName ?? "Someone"}</strong>;
-  const card = <strong className="font-semibold text-fg">{n.card?.title ?? "a card"}</strong>;
-  const d = n.data as { excerpt?: string; versionNumber?: number | null; feedbackCount?: number; change?: string; note?: string; firstItem?: string; timestampMs?: number | null };
+  const d = n.data as {
+    excerpt?: string;
+    versionNumber?: number | null;
+    feedbackCount?: number;
+    change?: string;
+    note?: string;
+    firstItem?: string;
+    timestampMs?: number | null;
+    deliverable?: string;
+    role?: string;
+    resubmission?: boolean;
+    resolved?: boolean;
+    restored?: boolean;
+    prerequisite?: string;
+    remaining?: number;
+    dueAt?: string | null;
+    kind?: string;
+  };
+  const cardTitle = <strong className="font-semibold text-fg">{n.card?.title ?? "a card"}</strong>;
+  // "Rig on Boss" when it's about one deliverable of a card with several.
+  const what = d.deliverable ? (
+    <>
+      <strong className="font-semibold text-fg">{d.deliverable}</strong> on {cardTitle}
+    </>
+  ) : (
+    cardTitle
+  );
   const v = d.versionNumber ? ` V${d.versionNumber}` : "";
   const at = typeof d.timestampMs === "number" ? `[${formatTimecode(d.timestampMs)}] ` : "";
+  const role = d.role === "contributor" ? "a contributor to" : "responsible for";
   switch (n.type) {
     case "ASSIGNED":
-      return { headline: <>{actor} assigned you to {card}</>, detail: null };
+      return { headline: <>{actor} made you {role} {what}</>, detail: null };
+    case "UNASSIGNED":
+      return { headline: <>{actor} took you off {d.role === "reviewer" ? "reviewing " : ""}{what}</>, detail: null };
+    case "REVIEWER_ASSIGNED":
+      return { headline: <>{actor} made you the reviewer of {what}</>, detail: null };
     case "MENTIONED":
-      return { headline: <>{actor} mentioned you in {card}</>, detail: d.excerpt ?? null };
+      return { headline: <>{actor} mentioned you on {what}</>, detail: d.excerpt ?? null };
     case "COMMENT":
-      return { headline: <>{actor} commented on {card}</>, detail: d.excerpt ? `${at}${d.excerpt}` : null };
+      return { headline: <>{actor} {d.kind === "FEEDBACK" ? "left feedback" : "commented"} on {what}</>, detail: d.excerpt ? `${at}${d.excerpt}` : null };
     case "REPLY":
-      return { headline: <>{actor} replied to you on {card}</>, detail: d.excerpt ?? null };
+      return { headline: <>{actor} replied to you on {what}</>, detail: d.excerpt ?? null };
     case "REVIEW_REQUESTED":
-      return { headline: <>{actor} submitted {card}{v} for review</>, detail: null };
+      return { headline: <>{actor} {d.resubmission ? "resubmitted" : "submitted"} {what}{v} for your review</>, detail: null };
     case "CHANGES_REQUESTED":
       return {
-        headline: <>{actor} requested changes on {card}{v}</>,
+        headline: <>{actor} requested changes on {what}{v}</>,
         detail: d.feedbackCount ? `${d.feedbackCount} feedback item${d.feedbackCount === 1 ? "" : "s"}${d.firstItem ? ` · ${d.firstItem}` : d.note ? ` · ${d.note}` : ""}` : (d.note ?? null),
       };
     case "APPROVED":
-      return { headline: <>{actor} approved {card}{v}</>, detail: d.note ?? null };
-    case "WATCHED_CARD":
-      return { headline: <>{actor} {d.change ?? "updated"} on {card}</>, detail: null };
+      return { headline: <>{actor} approved {what}{v}</>, detail: d.note ?? null };
+    case "FEEDBACK_RESOLVED":
+      return { headline: <>{actor} {d.resolved === false ? "reopened" : "resolved"} your feedback on {what}</>, detail: d.excerpt ?? null };
+    case "PREREQUISITE_APPROVED":
+      return { headline: <>{d.prerequisite ?? "A prerequisite"} was approved — {what} still waits on {d.remaining ?? 1} more</>, detail: null };
+    case "UNBLOCKED":
+      return { headline: <>{what} is ready to start</>, detail: d.prerequisite ? `Everything it waits on is approved (last: ${d.prerequisite}).` : "Everything it waits on is approved." };
+    case "BLOCKED":
+      return { headline: <>{what} is waiting again</>, detail: d.prerequisite ? `${d.prerequisite} is no longer approved.` : null };
     case "DUE_SOON":
-      return { headline: <>{card} is due within 24 hours</>, detail: null };
-    default:
-      return { headline: <>{actor} updated {card}</>, detail: null };
+      return { headline: <>{what} is due soon</>, detail: formatDue(d.dueAt) };
+    case "OVERDUE":
+      return { headline: <>{what} is overdue</>, detail: formatDue(d.dueAt) ? `It was due ${formatDue(d.dueAt)}.` : null };
+    case "DUE_CHANGED":
+      return { headline: d.dueAt ? <>{actor} moved the deadline of {what}</> : <>{actor} removed the deadline of {what}</>, detail: formatDue(d.dueAt) };
+    case "WORK_ARCHIVED":
+      return { headline: <>{actor} {d.restored ? "restored" : "archived"} {what}</>, detail: null };
+    case "WATCHED_CARD":
+      return { headline: <>{actor} {d.change ?? "updated"} on {cardTitle}</>, detail: null };
   }
 }
 
@@ -100,7 +177,8 @@ function NotificationItem({ n, onOpen, onToggleRead }: { n: NotificationDTO; onO
           type="button"
           onClick={() => onToggleRead(n)}
           aria-label={unread ? "Mark as read" : "Mark as unread"}
-          className="mt-1 flex size-5 shrink-0 items-center justify-center rounded-full"
+          aria-pressed={!unread}
+          className="-mr-2 -mt-1 flex size-9 shrink-0 items-center justify-center rounded-full hover:bg-surface-4"
         >
           <span className={cn("size-2 rounded-full transition-colors", unread ? "bg-accent" : "bg-transparent ring-1 ring-border-strong group-hover:ring-fg-subtle")} />
         </button>
@@ -117,7 +195,7 @@ export function NotificationsSheet({ open, onOpenChange }: { open: boolean; onOp
     queryKey: [...qk.notifications(), unreadOnly],
     queryFn: ({ pageParam }) => rpc("notification.list", { unreadOnly, before: pageParam ?? undefined, limit: 30 }),
     initialPageParam: null as string | null,
-    getNextPageParam: (last) => (last.items.length === 30 ? last.items[last.items.length - 1]!.createdAt : null),
+    getNextPageParam: (last) => last.nextCursor,
     enabled: open,
   });
   const markRead = useRpcMutation("notification.markRead", {

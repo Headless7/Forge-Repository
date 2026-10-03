@@ -41,7 +41,7 @@ function ChecklistBlock({ list }: { list: ChecklistDTO }) {
           {done}/{list.items.length}
         </span>
         {canEdit ? (
-          <Button size="icon-xs" variant="ghost" aria-label="Delete checklist" className="opacity-0 group-hover/list:opacity-100" onClick={() => removeList.mutate({ checklistId: list.id })}>
+          <Button size="icon-xs" variant="ghost" aria-label="Delete checklist" className="hover-reveal opacity-0 focus-visible:opacity-100 group-hover/list:opacity-100" onClick={() => removeList.mutate({ checklistId: list.id })}>
             <Trash2 />
           </Button>
         ) : null}
@@ -81,7 +81,7 @@ function ChecklistBlock({ list }: { list: ChecklistDTO }) {
               </span>
             )}
             {canEdit ? (
-              <button type="button" aria-label={`Delete ${item.text}`} onClick={() => removeItem.mutate({ itemId: item.id })} className="text-fg-subtle opacity-0 hover:text-fg group-hover/item:opacity-100">
+              <button type="button" aria-label={`Delete ${item.text}`} onClick={() => removeItem.mutate({ itemId: item.id })} className="hover-reveal text-fg-subtle opacity-0 hover:text-fg focus-visible:opacity-100 group-hover/item:opacity-100">
                 <X className="size-3.5" />
               </button>
             ) : null}

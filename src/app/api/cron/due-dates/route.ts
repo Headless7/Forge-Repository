@@ -4,6 +4,8 @@ import { env } from "@/server/env";
 import { runDueDateReminders } from "@/server/services/due-dates";
 import { deliverOutbox } from "@/server/services/email";
 import { sharedRateLimiter } from "@/server/rate-limit";
+import { processStorageDeletions } from "@/server/services/purge";
+import { processPushDeliveries } from "@/server/services/push";
 import { evictStaleRobloxAssets } from "@/server/services/roblox";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +18,9 @@ export async function GET(req: Request) {
   }
   const reminders = await runDueDateReminders();
   await deliverOutbox();
+  const push = await processPushDeliveries(200);
   const robloxAssetsFreed = await evictStaleRobloxAssets();
   await sharedRateLimiter.sweep();
-  return NextResponse.json({ ok: true, reminders, robloxAssetsFreed });
+  const storageCleanup = await processStorageDeletions();
+  return NextResponse.json({ ok: true, reminders, push, robloxAssetsFreed, storageCleanup });
 }

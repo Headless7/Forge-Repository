@@ -154,6 +154,12 @@ function readDeliverableParam(): number | null {
   const n = d ? Number(d) : NaN;
   return Number.isInteger(n) && n > 0 ? n : null;
 }
+/** A revision number from a link (e.g. a notification), opened once when the card loads. */
+function readVersionParam(): number | null {
+  const v = new URLSearchParams(window.location.search).get("v");
+  const n = v ? Number(v) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
 function writeDeliverableParam(n: number | null) {
   const params = new URLSearchParams(window.location.search);
   if (n) params.set("d", String(n));
@@ -209,7 +215,7 @@ export function CardModal({
     if (!card || viewedFor.current === card.id) return;
     viewedFor.current = card.id;
     void rpc("card.viewed", { cardId: card.id }).then(() => {
-      queryClient.setQueryData(qk.board(projectId), (b: typeof board.board | undefined) =>
+      queryClient.setQueriesData({ queryKey: qk.board(projectId) }, (b: typeof board.board | undefined) =>
         b ? { ...b, cards: b.cards.map((c) => (c.id === card.id ? { ...c, unread: false } : c)) } : b,
       );
     });
@@ -247,6 +253,12 @@ export function CardModal({
     initialised.current = true;
     const fromUrl = readDeliverableParam();
     let start: DeliverableDTO | undefined = fromUrl ? deliverables.find((d) => d.number === fromUrl) : undefined;
+    if (fromUrl && !start) {
+      // An old link (notification, email, bookmark) to a deliverable that's since been archived or deleted.
+      const gone = card.deliverables.find((d) => d.number === fromUrl);
+      toast(gone ? `D${gone.number} ${gone.name} is archived — showing the card instead.` : "That deliverable no longer exists — showing the card instead.");
+      writeDeliverableParam(null);
+    }
     if (!start && focusCommentId) {
       const all = card.comments.flatMap((c) => [c, ...c.replies]);
       const target = all.find((c) => c.id === focusCommentId);
@@ -256,6 +268,13 @@ export function CardModal({
     if (!start && multi && (initialAction || queue)) start = deliverables.find((d) => d.state === "NEEDS_REVIEW");
     if (start && multi) setActiveId(start.id);
     else if (!multi) setActiveId(deliverables[0]!.id);
+    // Open the linked revision of that deliverable (the selection is remembered per deliverable).
+    const linkedVersion = readVersionParam();
+    const target = start ?? (!multi ? deliverables[0] : undefined);
+    if (linkedVersion && target) {
+      const version = card.versions.find((x) => x.deliverableId === target.id && x.number === linkedVersion);
+      if (version) versionByDeliverable.current.set(target.id, version.id);
+    }
     // Files dropped on the board tile of a multi-deliverable card wait for a choice.
     const dropped = pendingCardDrops.get(card.id);
     if (dropped?.length) {
@@ -623,7 +642,7 @@ export function CardModal({
                       <div className="-mt-2 flex flex-wrap items-center gap-2 text-[12px] text-fg-subtle">
                         <Layers className="size-3.5" />
                         <span>One deliverable.</span>
-                        <button type="button" onClick={() => setAddingDeliverable(true)} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
+                        <button type="button" onClick={() => setAddingDeliverable(true)} className="inline-flex min-h-6 items-center gap-1 font-medium text-accent hover:underline">
                           <Plus className="size-3" /> Add another deliverable
                         </button>
                         <span className="hidden md:inline">— split the work (e.g. model, animation, VFX, sound) with separate files and reviews.</span>

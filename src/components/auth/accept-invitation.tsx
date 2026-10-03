@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { signOutEverywhereOnThisDevice } from "@/lib/push-client";
 import { errorMessage, rpc } from "@/lib/rpc-client";
 import { Button } from "../ui/button";
 
@@ -47,7 +48,7 @@ export function AcceptInvitation({
   }
 
   async function switchAccount() {
-    await fetch("/api/auth/sign-out", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    await signOutEverywhereOnThisDevice();
     router.replace(`/sign-in?next=${encodeURIComponent(`/invite/${token}`)}`);
     router.refresh();
   }

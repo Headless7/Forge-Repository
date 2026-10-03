@@ -12,7 +12,7 @@ import type {
   ReviewDTO,
   VersionDTO,
 } from "@/lib/types";
-import { computeDeliverablePermissions, type CardAccess, type CardRow, type DeliverableRow } from "../access";
+import { computeDeliverablePermissions, loadContributors, type CardAccess, type CardRow, type DeliverableRow } from "../access";
 import { db } from "../db";
 import {
   assetVersions,
@@ -113,6 +113,8 @@ interface CardDeliverableFacts {
   rows: DeliverableRow[];
   facts: DeliverableFacts[];
   links: LinkFacts[];
+  /** Contributors per deliverable. */
+  contributors: Map<string, string[]>;
 }
 
 /** Deliverables, links and "has files" for many cards with a fixed number of queries. */
@@ -135,10 +137,12 @@ export async function loadDeliverableFacts(cardIds: string[]): Promise<Map<strin
   ]);
   const withFiles = new Set(fileRows.map((r) => r.deliverableId));
   const counts = new Map(versionCounts.map((r) => [r.deliverableId, r.n]));
-  for (const id of cardIds) out.set(id, { rows: [], facts: [], links: [] });
+  const contributors = await loadContributors(db, rows.map((r) => r.id));
+  for (const id of cardIds) out.set(id, { rows: [], facts: [], links: [], contributors: new Map() });
   for (const row of rows) {
     const entry = out.get(row.cardId)!;
     entry.rows.push(row);
+    entry.contributors.set(row.id, contributors.get(row.id) ?? []);
     entry.facts.push({
       id: row.id,
       name: row.name,
@@ -272,6 +276,9 @@ export async function summarizeCards(
         dueAt: card.dueAt?.toISOString() ?? null,
         milestoneId: card.milestoneId,
         assigneeIds: assigneeMap.get(card.id) ?? [],
+        deliverableAssigneeIds: [
+          ...new Set(facts.rows.filter((d) => !d.archivedAt).flatMap((d) => [d.ownerId, ...(facts.contributors.get(d.id) ?? [])]).filter((id): id is string => Boolean(id))),
+        ],
         labelIds: labelMap.get(card.id) ?? [],
         cover: await mediaRef(card.coverAttachmentId ? coverMap.get(card.coverAttachmentId) : undefined),
         coverMode: card.coverMode,
@@ -465,12 +472,15 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
         required: d.required,
         state: d.state,
         ownerId: d.ownerId,
+        contributorIds: facts.contributors.get(d.id) ?? [],
         reviewerId: d.reviewerId,
         dueAt: d.dueAt?.toISOString() ?? null,
         currentVersionId: d.currentVersionId,
         approvedVersionId: d.approvedVersionId,
         canvasX: d.canvasX,
         canvasY: d.canvasY,
+        canvasW: d.canvasW,
+        canvasH: d.canvasH,
         position: d.position,
         createdById: d.createdById,
         createdAt: d.createdAt.toISOString(),
@@ -481,7 +491,7 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
         kinds: [...new Set(currentFiles.map((a) => a.kind))].filter((k) => PREVIEWABLE.has(k) || k === "FILE"),
         openFeedback: commentRows.filter((c) => c.deliverableId === d.id && c.kind === "FEEDBACK" && !c.parentId && !c.resolvedAt && !c.deletedAt).length,
         blockedBy: blocked.get(d.id) ?? [],
-        permissions: computeDeliverablePermissions(cardAccess, d),
+        permissions: computeDeliverablePermissions(cardAccess, d, facts.contributors.get(d.id) ?? []),
       };
     }),
   );
@@ -504,6 +514,8 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
     deliverableLinks: linkRows.map((l) => ({
       id: l.id,
       fromId: l.fromId,
+      fromPoint: l.fromPoint,
+      toPoint: l.toPoint,
       toId: l.toId,
       type: l.type,
       note: l.note,

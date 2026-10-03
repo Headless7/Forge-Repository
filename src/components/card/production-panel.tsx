@@ -85,7 +85,7 @@ export function ProductionPanel() {
             {readiness.pendingChanges.map((p) => (
               <li key={`${p.deliverableId}-${p.detail}`}>
                 {multi ? (
-                  <button type="button" onClick={() => openDeliverable(p.deliverableId)} className="font-medium hover:underline">
+                  <button type="button" onClick={() => openDeliverable(p.deliverableId)} className="inline-flex min-h-6 items-center font-medium hover:underline">
                     {p.name}
                   </button>
                 ) : (
@@ -113,7 +113,7 @@ export function ProductionPanel() {
               {readiness.blockers.slice(0, 8).map((b) => (
                 <li key={`${b.deliverableId}-${b.reason}`} className="rounded-md bg-surface-3/50 px-2 py-1">
                   {b.deliverableId && multi ? (
-                    <button type="button" onClick={() => openDeliverable(b.deliverableId)} className="font-medium hover:underline">
+                    <button type="button" onClick={() => openDeliverable(b.deliverableId)} className="inline-flex min-h-6 items-center font-medium hover:underline">
                       {b.name}
                     </button>
                   ) : (

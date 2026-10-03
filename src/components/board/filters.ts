@@ -106,12 +106,17 @@ export interface FilterContext {
   labels: Map<string, LabelDTO>;
 }
 
+/** Someone works on the card: as one of its assignees, or on one of its deliverables. */
+function worksOn(card: CardSummaryDTO, userId: string) {
+  return card.assigneeIds.includes(userId) || card.deliverableAssigneeIds.includes(userId);
+}
+
 export function matchesFilters(card: CardSummaryDTO, f: BoardFilters, ctx: FilterContext): boolean {
-  if (f.mine && !card.assigneeIds.includes(ctx.userId)) return false;
+  if (f.mine && !worksOn(card, ctx.userId)) return false;
   if (f.states.length && !f.states.includes(card.state)) return false;
   if (f.categories.length && !f.categories.includes(card.columnId)) return false;
   if (f.stages.length && !f.stages.includes(card.productionStatus)) return false;
-  if (f.assignees.length && !f.assignees.some((id) => card.assigneeIds.includes(id))) return false;
+  if (f.assignees.length && !f.assignees.some((id) => worksOn(card, id))) return false;
   if (f.labels.length && !f.labels.some((id) => card.labelIds.includes(id))) return false;
   if (f.priorities.length && !f.priorities.includes(card.priority)) return false;
   if (f.milestone === "none" && card.milestoneId) return false;

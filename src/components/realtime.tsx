@@ -82,9 +82,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       source.addEventListener("ready", () => {
         attempts = 0;
         setStatus("live");
+        // Catch up on changes made before the stream was open: between the server rendering the
+        // page and this connection (first load), or while disconnected (reconnects).
+        if (projectId) void queryClient.invalidateQueries({ queryKey: qk.board(projectId) });
         if (hadConnection) {
-          // Catch up on anything missed while disconnected.
-          if (projectId) void queryClient.invalidateQueries({ queryKey: qk.board(projectId) });
           void queryClient.invalidateQueries({ queryKey: ["card"] });
           void queryClient.invalidateQueries({ queryKey: qk.notifications() });
         }

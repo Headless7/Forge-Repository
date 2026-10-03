@@ -1,10 +1,11 @@
 "use client";
 
 import { Bell, Menu, Search } from "lucide-react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { useHotkeys } from "@/hooks/use-hotkeys";
+import { syncDevicePush } from "@/lib/push-client";
 import { rpc, errorMessage } from "@/lib/rpc-client";
 import type { ProjectListItemDTO, StudioSummaryDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,25 @@ import { ShortcutsDialog } from "./shortcuts-dialog";
 import { Sidebar, useProjects } from "./sidebar";
 
 const COLLAPSE_KEY = "forge:sidebar-collapsed";
+
+/**
+ * Device notifications in the open app: clicking one opens its link in this tab (the service
+ * worker asks), and a subscription this browser holds for someone else or an ended sign-in is
+ * detached on load — so on a shared computer nobody gets another person's notifications.
+ */
+function usePushBridge() {
+  const router = useRouter();
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; url?: string } | null;
+      if (data?.type === "forge:navigate" && typeof data.url === "string" && data.url.startsWith("/")) router.push(data.url);
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    void syncDevicePush().catch(() => {});
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [router]);
+}
 
 function VerifyBanner({ email }: { email: string }) {
   const [hidden, setHidden] = useState(false);
@@ -79,6 +99,7 @@ export function AppShell({
   const [createOpen, setCreateOpen] = useState(false);
   const projects = useProjects(studio.id, initialProjects).data;
   const unread = useUnreadCount(initialUnread).data;
+  usePushBridge();
 
   useEffect(() => {
     try {

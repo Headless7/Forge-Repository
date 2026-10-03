@@ -45,15 +45,16 @@ function isMedia(file: File) {
 
 export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO; studioSlug: string }) {
   const projectId = initialBoard.project.id;
+  const boardId = initialBoard.boardId;
   const queryClient = useQueryClient();
   const uploads = useUploads();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const boardKey = qk.board(projectId);
+  const boardKey = useMemo(() => qk.boardView(projectId, boardId), [projectId, boardId]);
 
   const { data: board } = useQuery({
     queryKey: boardKey,
-    queryFn: () => rpc("board.get", { projectId }),
+    queryFn: () => rpc("board.get", { projectId, boardId }),
     initialData: initialBoard,
     staleTime: 15_000,
   });
@@ -82,7 +83,10 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
     (key: string, options: OpenCardOptions = {}) => {
       if (!key || key === "…") return;
       const params = new URLSearchParams(window.location.search);
-      if (params.get("card")?.toUpperCase() !== key.toUpperCase()) params.delete("d");
+      if (params.get("card")?.toUpperCase() !== key.toUpperCase()) {
+        params.delete("d");
+        params.delete("v");
+      }
       params.set("card", key);
       for (const [name, value] of [["queue", options.queue], ["action", options.action], ["comment", options.comment]] as const) {
         if (value) params.set(name, value);
@@ -106,7 +110,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
       return;
     }
     const params = new URLSearchParams(window.location.search);
-    for (const name of ["card", "d", "queue", "action", "comment"]) params.delete(name);
+    for (const name of ["card", "d", "v", "queue", "action", "comment"]) params.delete(name);
     const query = params.toString();
     window.history.replaceState(null, "", `${pathname}${query ? `?${query}` : ""}`);
   }, [pathname]);
@@ -141,9 +145,9 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
   const setView = useCallback(
     (next: BoardViewMode) => {
       queryClient.setQueryData<BoardDTO>(boardKey, (old) => (old ? { ...old, prefs: { ...old.prefs, view: next } } : old));
-      setViewMutation.mutate({ projectId, view: next });
+      setViewMutation.mutate({ projectId, boardId, view: next });
     },
-    [queryClient, boardKey, setViewMutation, projectId],
+    [queryClient, boardKey, setViewMutation, projectId, boardId],
   );
   const [notReady, setNotReady] = useState<NotReadyInfo | null>(null);
 
@@ -326,6 +330,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
             dueAt: null,
             milestoneId,
             assigneeIds: selfAssign ? [b.viewer.userId] : [],
+            deliverableAssigneeIds: [],
             labelIds: [],
             cover: null,
             coverMode: "AUTO",
@@ -406,8 +411,17 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
         columnCollapse.mutate({ columnId: column.id, collapsed: !collapsed });
       },
       createCard,
+      move: (column, direction) => {
+        const order = columns.map((c) => c.id);
+        const from = order.indexOf(column.id);
+        const to = from + direction;
+        if (from < 0 || to < 0 || to >= order.length) return;
+        order.splice(from, 1);
+        order.splice(to, 0, column.id);
+        void onMoveColumn(column.id, order);
+      },
     }),
-    [board.prefs.collapsedColumnIds, columnArchive, columnCollapse, columnDelete, columnDuplicate, columnUpdate, createCard, patchBoard],
+    [board.prefs.collapsedColumnIds, columnArchive, columnCollapse, columnDelete, columnDuplicate, columnUpdate, createCard, patchBoard, columns, onMoveColumn],
   );
 
   // Card quick actions
@@ -422,6 +436,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
   const assigneeMutation = useRpcMutation("card.assignees", { onSuccess: refreshBoard, onError: refreshBoard });
   const archiveMutation = useRpcMutation("card.archive", { onError: refreshBoard });
   const duplicateMutation = useRpcMutation("card.duplicate", { onSuccess: (card) => { refreshBoard(); toast.success(`Duplicated as ${card.key}.`); } });
+  const moveToBoardMutation = useRpcMutation("card.moveToBoard", { onError: refreshBoard });
 
   // Media links are signed for a few hours; a board left open longer re-fetches them when one fails (at most every 30 s).
   const lastMediaRefresh = useRef(0);
@@ -453,6 +468,28 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
         stateMutation.mutate({ cardId: card.id, state });
       },
       setProductionStage: (card, status) => void moveProduction(card.id, status, { index: 0 }),
+      moveCardToColumn: (card, columnId) => {
+        const ordered = board.cards
+          .filter((c) => c.columnId === columnId && c.id !== card.id)
+          .sort((a, b) => a.position - b.position)
+          .map((c) => c.id);
+        void onMoveCard(card.id, columnId, [...ordered, card.id]);
+      },
+      moveCardToBoard: (card, targetBoardId) => {
+        const target = board.boards.find((b) => b.id === targetBoardId);
+        patchBoard((b) => ({ ...b, cards: b.cards.filter((c) => c.id !== card.id) }));
+        moveToBoardMutation.mutate(
+          { cardId: card.id, boardId: targetBoardId },
+          {
+            onSuccess: () => {
+              void queryClient.invalidateQueries({ queryKey: qk.board(projectId) });
+              toast(`Moved ${card.key} to “${target?.name ?? "another board"}”`, {
+                action: target ? { label: "Open board", onClick: () => window.location.assign(`/${studioSlug}/${board.project.slug}/b/${target.number}?card=${card.key}`) } : undefined,
+              });
+            },
+          },
+        );
+      },
       toggleAssignee: (card, userId) => {
         const has = card.assigneeIds.includes(userId);
         patchCard(card.id, { assigneeIds: has ? card.assigneeIds.filter((id) => id !== userId) : [...card.assigneeIds, userId] });
@@ -488,7 +525,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
       quickAddColumnId,
       stopQuickAdd: () => setQuickAddColumnId(null),
     }),
-    [board, view, studioSlug, membersById, labelsById, columnsById, cardsById, can, cardPerms, openCard, patchCard, patchBoard, renameMutation, stateMutation, moveProduction, assigneeMutation, archiveMutation, duplicateMutation, refreshBoard, refreshMedia, projectId, uploads, quickAddColumnId],
+    [board, view, studioSlug, membersById, labelsById, columnsById, cardsById, can, cardPerms, openCard, patchCard, patchBoard, renameMutation, stateMutation, moveProduction, assigneeMutation, archiveMutation, duplicateMutation, moveToBoardMutation, queryClient, refreshBoard, refreshMedia, projectId, uploads, quickAddColumnId],
   );
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
@@ -521,7 +558,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
 
   const templateColumns = async () => {
     for (const col of ROBLOX_TEMPLATE) {
-      await columnCreate.mutateAsync({ projectId, name: col.name, icon: col.icon, color: col.color, defaultCardMode: col.mode }).catch(() => {});
+      await columnCreate.mutateAsync({ projectId, boardId, name: col.name, icon: col.icon, color: col.color, defaultCardMode: col.mode }).catch(() => {});
     }
   };
 
@@ -638,7 +675,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
                 <p className="mt-1 text-[13px] text-fg-muted">Categories are the columns of your board — VFX, Animations, UI, Scripting… whatever your team works on.</p>
                 {can("column.manage") ? (
                   <div className="mt-5 grid gap-2">
-                    <AddColumn onCreate={(name) => columnCreate.mutate({ projectId, name })} />
+                    <AddColumn onCreate={(name) => columnCreate.mutate({ projectId, boardId, name })} />
                     <Button variant="ghost" size="sm" loading={columnCreate.isPending} onClick={() => void templateColumns()}>
                       Use the Roblox game template ({ROBLOX_TEMPLATE.map((c) => c.name).slice(0, 4).join(", ")}…)
                     </Button>
@@ -649,7 +686,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
               </div>
             </div>
           ) : (
-            <DndContext id={`board-${projectId}`} {...dndProps}>
+            <DndContext id={`board-${boardId}`} {...dndProps}>
               <SortableContext items={columnOrder} strategy={horizontalListSortingStrategy}>
                 <div className="flex h-full items-start gap-3 p-3 md:p-4">
                   {columns.map((column) => (
@@ -664,7 +701,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
                       />
                     </div>
                   ))}
-                  {can("column.manage") ? <AddColumn onCreate={(name) => columnCreate.mutate({ projectId, name })} /> : null}
+                  {can("column.manage") ? <AddColumn onCreate={(name) => columnCreate.mutate({ projectId, boardId, name })} /> : null}
                   <div className="w-1 shrink-0" />
                 </div>
               </SortableContext>

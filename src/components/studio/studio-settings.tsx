@@ -5,11 +5,13 @@ import { HardDrive, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
+import { roleLabel } from "@/lib/permissions";
 import { useRpcMutation } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { PROJECT_EMOJIS } from "../shell/create-project-dialog";
+import { ArchivedProjects } from "./archived-projects";
 import { useShell } from "../shell/shell-context";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/controls";
@@ -26,6 +28,9 @@ const AUDIT_TEXT: Record<string, string> = {
   "project.deleted": "permanently deleted a project",
   "project.member_set": "changed project access",
   "project.member_removed": "removed someone from a project",
+  "column.deleted": "permanently deleted a column",
+  "deliverable.deleted": "permanently deleted a deliverable",
+  "attachment.deleted": "permanently deleted a file",
   "member.role_changed": "changed a member's role",
   "member.access_changed": "changed a member's access",
   "member.removed": "removed a member",
@@ -41,8 +46,8 @@ function auditDetail(data: Record<string, unknown>) {
   if (typeof data.email === "string") parts.push(data.email);
   if (typeof data.name === "string") parts.push(data.name);
   if (typeof data.key === "string") parts.push(`${data.key}${typeof data.title === "string" ? ` “${data.title}”` : ""}`);
-  if (typeof data.from === "string" && typeof data.to === "string") parts.push(`${data.from} → ${data.to}`);
-  if (typeof data.role === "string" && !data.from) parts.push(data.role.toLowerCase());
+  if (typeof data.from === "string" && typeof data.to === "string") parts.push(`${roleLabel(data.from)} → ${roleLabel(data.to)}`);
+  if (typeof data.role === "string" && !data.from) parts.push(roleLabel(data.role).toLowerCase());
   if (data.access === "PROJECTS" && !data.from) parts.push("projects only");
   return parts.join(" · ");
 }
@@ -133,6 +138,8 @@ export function StudioSettings() {
             <Skeleton className="mt-4 h-8" />
           )}
         </section>
+
+        {studio.role === "OWNER" ? <ArchivedProjects studioId={studio.id} /> : null}
 
         {can("audit.view") ? (
           <section className="rounded-xl border border-border bg-surface-2 p-5">
