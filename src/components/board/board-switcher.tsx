@@ -132,6 +132,7 @@ export function CreateBoardDialog({ open, onOpenChange, board, studioSlug }: { o
   const create = useRpcMutation("board.create", {
     onSuccess: (created) => {
       void queryClient.invalidateQueries({ queryKey: qk.board(board.project.id) });
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
       toast.success(`Board “${created.name}” created.`);
       onOpenChange(false);
       setName("");
@@ -205,6 +206,7 @@ export function EditBoardDialog({ open, onOpenChange, board }: { open: boolean; 
   const update = useRpcMutation("board.update", {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: qk.board(board.project.id) });
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
       toast.success("Board updated.");
       onOpenChange(false);
     },

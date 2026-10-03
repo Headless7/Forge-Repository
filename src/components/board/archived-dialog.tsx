@@ -102,6 +102,7 @@ export function ArchivedItems({ projectId, canDelete, canRestoreColumns }: { pro
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: qk.archived(projectId) });
     void queryClient.invalidateQueries({ queryKey: qk.board(projectId) });
+    void queryClient.invalidateQueries({ queryKey: ["projects"] });
     void queryClient.invalidateQueries({ queryKey: ["storage"] });
   };
   const restoreCard = useRpcMutation("card.archive", { onSuccess: () => { refresh(); toast.success("Card restored to the board."); } });

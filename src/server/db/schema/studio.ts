@@ -262,7 +262,7 @@ export const userBoardPrefs = pgTable(
       .notNull()
       .references(() => boards.id, { onDelete: "cascade" }),
     collapsedColumnIds: jsonb().$type<string[]>().notNull().default([]),
-    view: text({ enum: ["CATEGORY", "PRODUCTION"] }).notNull().default("CATEGORY"),
+    view: text({ enum: ["CATEGORY", "PRODUCTION", "TIMELINE", "CALENDAR"] }).notNull().default("CATEGORY"),
     updatedAt: updatedAt(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.boardId] })],

@@ -3,7 +3,10 @@
 import {
   Activity,
   Archive,
+  CalendarDays,
+  ChartGantt,
   ChevronDown,
+  Gauge,
   LayoutGrid,
   PencilLine,
   CircleAlert,
@@ -81,7 +84,7 @@ function Toggle({
         )}
       >
         {icon}
-        <span className="hidden @min-[1500px]:inline">{label}</span>
+        <span className="hidden @min-[1800px]:inline">{label}</span>
         {count !== undefined && count > 0 ? (
           <span className={cn("rounded px-1 text-[10.5px] font-semibold tabular-nums", tone ?? "bg-surface-4 text-fg-muted")}>{count}</span>
         ) : null}
@@ -182,6 +185,8 @@ function ViewSwitch({ view, onChange }: { view: BoardView; onChange: (view: Boar
   const options: Array<{ value: BoardView; label: string; icon: ReactNode; hint: string }> = [
     { value: "CATEGORY", label: "Categories", icon: <Columns3 />, hint: "Group cards by category (VFX, Animations, UI …)" },
     { value: "PRODUCTION", label: "Production", icon: <Workflow />, hint: "Group cards by production stage: To-do, Completed, Published" },
+    { value: "TIMELINE", label: "Timeline", icon: <ChartGantt />, hint: "Cards and deliverables over time, with dependencies and milestones" },
+    { value: "CALENDAR", label: "Calendar", icon: <CalendarDays />, hint: "Deadlines and milestones by day" },
   ];
   return (
     <div role="radiogroup" aria-label="Board view" className="flex h-7 shrink-0 items-center rounded-md border border-border-strong bg-surface-3/60 p-0.5">
@@ -191,6 +196,7 @@ function ViewSwitch({ view, onChange }: { view: BoardView; onChange: (view: Boar
             type="button"
             role="radio"
             aria-checked={view === o.value}
+            aria-label={o.label}
             onClick={() => onChange(o.value)}
             className={cn(
               "inline-flex h-6 items-center gap-1.5 rounded px-2 text-[12.5px] font-medium transition-colors [&_svg]:size-3.5",
@@ -198,7 +204,7 @@ function ViewSwitch({ view, onChange }: { view: BoardView; onChange: (view: Boar
             )}
           >
             {o.icon}
-            <span className="hidden sm:inline">{o.label}</span>
+            <span className="hidden @min-[1450px]:inline">{o.label}</span>
           </button>
         </Tooltip>
       ))}
@@ -245,12 +251,14 @@ export function BoardHeader({
     onSuccess: () => {
       setArchivingBoard(false);
       void queryClient.invalidateQueries({ queryKey: qk.board(project.id) });
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
       toast.success(`Archived “${board.board.name}”. Restore it from Archived items.`);
       router.push(`/${studioSlug}/${project.slug}`);
     },
   });
   const milestones = board.milestones.filter((m) => !m.archived);
   const activeMilestone = milestones.find((m) => m.id === filters.milestone);
+  const milestoneText = activeMilestone?.name ?? (filters.milestone === "none" ? "No milestone" : "All milestones");
   const toggleState = (state: CardState) =>
     onFiltersChange({ ...filters, states: filters.states.includes(state) ? filters.states.filter((s) => s !== state) : [...filters.states, state] });
   const canCreate = board.viewer.permissions.includes("card.create") && !project.archived;
@@ -261,8 +269,14 @@ export function BoardHeader({
         <span className="text-xl leading-none" aria-hidden>
           {project.icon}
         </span>
-        <h1 className="hidden max-w-56 truncate text-[15px] font-semibold tracking-tight md:block">{project.name}</h1>
-        <span className="hidden text-fg-subtle md:inline" aria-hidden>
+        {/* The name shows here on wide headers (narrower ones have it in the sidebar or top bar). */}
+        <h1 className="sr-only">
+          {project.name} · {board.board.name}
+        </h1>
+        <span className="hidden max-w-56 truncate text-[15px] font-semibold tracking-tight @min-[1100px]:block" aria-hidden>
+          {project.name}
+        </span>
+        <span className="hidden text-fg-subtle @min-[1100px]:inline" aria-hidden>
           /
         </span>
         <BoardSwitcher board={board} studioSlug={studioSlug} canManage={canManageBoards} />
@@ -273,13 +287,15 @@ export function BoardHeader({
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
+                aria-label={`Milestone filter: ${milestoneText}`}
                 className={cn(
-                  "inline-flex h-7 min-w-0 max-w-[40vw] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border px-2 text-[12.5px] font-medium md:max-w-none",
+                  "inline-flex h-7 min-w-0 max-w-[40vw] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border px-2 text-[12.5px] font-medium md:max-w-52",
                   activeMilestone ? "border-accent/50 bg-accent-soft text-fg" : "border-border-strong text-fg-muted hover:text-fg",
                 )}
               >
                 <Flag className="size-3.5 shrink-0" />
-                <span className="min-w-0 truncate">{activeMilestone?.name ?? (filters.milestone === "none" ? "No milestone" : "All milestones")}</span>
+                {/* Phones: just the flag (highlighted when filtering) so the first header row fits. */}
+                <span className="hidden min-w-0 truncate @min-[480px]:block">{milestoneText}</span>
                 <ChevronDown className="size-3.5 shrink-0" />
               </button>
             </DropdownMenuTrigger>
@@ -303,8 +319,9 @@ export function BoardHeader({
         </Tooltip>
       </div>
 
-      <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
-        <div className="relative hidden w-40 @min-[1100px]:block @min-[1500px]:w-52">
+      {/* Starts at room for Filters, people, settings and Add card, so it wraps rather than overlaps; the toggles scroll when tight. */}
+      <div className="flex min-w-0 flex-1 basis-[22rem] items-center justify-end gap-1.5">
+        <div className="relative hidden w-40 @min-[1300px]:block @min-[1500px]:w-52">
           <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-fg-subtle" />
           <input
             value={filters.q}
@@ -386,6 +403,13 @@ export function BoardHeader({
                 <Activity /> Project activity
               </Link>
             </DropdownMenuItem>
+            {board.viewer.permissions.includes("reports.view") ? (
+              <DropdownMenuItem asChild>
+                <Link href={`/${studioSlug}/${project.slug}/dashboard`}>
+                  <Gauge /> Project dashboard
+                </Link>
+              </DropdownMenuItem>
+            ) : null}
             <DropdownMenuItem onSelect={onOpenArchived}>
               <Archive /> Archived items
             </DropdownMenuItem>

@@ -50,6 +50,7 @@ export type ActivityType =
   | "column.renamed"
   | "column.archived"
   | "column.restored"
+  | "card.start_changed"
   | "column.duplicated"
   | "board.created"
   | "board.renamed"

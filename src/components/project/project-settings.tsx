@@ -218,7 +218,10 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
 /** The project's boards: rename, describe, reorder, archive (restore is in Archived items), create. */
 function Boards({ board, canManage, studioSlug }: { board: BoardDTO; canManage: boolean; studioSlug: string }) {
   const queryClient = useQueryClient();
-  const refresh = () => void queryClient.invalidateQueries({ queryKey: qk.board(board.project.id) });
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: qk.board(board.project.id) });
+    void queryClient.invalidateQueries({ queryKey: ["projects"] });
+  };
   const update = useRpcMutation("board.update", { onSuccess: refresh });
   const move = useRpcMutation("board.move", { onSuccess: refresh });
   const archive = useRpcMutation("board.archive", { onSuccess: () => { refresh(); toast.success("Board archived. Restore it from Archived items below."); } });

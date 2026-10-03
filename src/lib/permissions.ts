@@ -82,6 +82,8 @@ export const PERMISSIONS = [
   "members.invite",
   "members.manage",
   "audit.view",
+  /** Producer dashboard: progress, risk, review health and workload (Managers and above). */
+  "reports.view",
   "project.create",
   "project.view",
   "project.update",
@@ -137,6 +139,7 @@ const MANAGER: Permission[] = [
   "label.manage",
   "milestone.manage",
   "comment.moderate",
+  "reports.view",
 ];
 
 const ADMIN: Permission[] = [

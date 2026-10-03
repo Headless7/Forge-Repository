@@ -93,6 +93,7 @@ describe("board filters", () => {
     hasRoblox: false,
     priority: "NORMAL",
     displayMode: null,
+    startAt: null,
     dueAt: null,
     milestoneId: null,
     assigneeIds: [],

@@ -227,3 +227,22 @@ export const pushDeliveries = pgTable(
     index("push_deliveries_due_idx").on(t.status, t.nextAttemptAt),
   ],
 );
+
+/**
+ * A person's private calendar subscription (ICS): the URL carries a random token, of which only a
+ * hash is stored. Calendar apps fetch it without signing in, so it shows only that person's work,
+ * re-checked against their current access on every fetch. Regenerating replaces (revokes) it.
+ */
+export const calendarFeeds = pgTable(
+  "calendar_feeds",
+  {
+    id: pk(),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text().notNull(),
+    lastUsedAt: tsz(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("calendar_feeds_token_uq").on(t.tokenHash), uniqueIndex("calendar_feeds_user_uq").on(t.userId)],
+);

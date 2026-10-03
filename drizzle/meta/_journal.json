@@ -64,6 +64,13 @@
       "when": 1791025217587,
       "tag": "0008_boards_roles_push_canvas",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791054985944,
+      "tag": "0009_schedule_dashboard",
+      "breakpoints": true
     }
   ]
 }

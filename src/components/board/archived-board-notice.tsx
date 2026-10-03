@@ -1,5 +1,6 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { ArchiveRestore, FolderArchive } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -11,9 +12,11 @@ import { Button } from "../ui/button";
 /** Shown at an archived board's address instead of a bare "not found". */
 export function ArchivedBoardNotice({ studioSlug, project, boardId, boardName, canRestore }: { studioSlug: string; project: ProjectDTO; boardId: string; boardName: string; canRestore: boolean }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const restore = useRpcMutation("board.archive", {
     onSuccess: () => {
       toast.success(`“${boardName}” restored.`);
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
       router.refresh();
     },
   });

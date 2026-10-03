@@ -47,6 +47,8 @@ export const deliverables = pgTable(
     ownerId: uuid().references(() => users.id, { onDelete: "set null" }),
     /** Review owner; falls back to the card's reviewers when empty. */
     reviewerId: uuid().references(() => users.id, { onDelete: "set null" }),
+    /** Its own planned start; null inherits the card's (like dueAt). */
+    startAt: tsz(),
     dueAt: tsz(),
     currentVersionId: uuid().references((): AnyPgColumn => assetVersions.id, { onDelete: "set null" }),
     /** Most recent approved revision — kept when newer, unapproved revisions arrive. */

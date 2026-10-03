@@ -7,7 +7,7 @@ export const RESERVED_STUDIO_SLUGS = new Set([
 
 /** Second-level segments under a studio that can't be used as project slugs. */
 export const RESERVED_PROJECT_SLUGS = new Set([
-  "members", "settings", "activity", "notifications", "projects", "new", "search", "audit", "invite",
+  "members", "settings", "activity", "notifications", "projects", "new", "search", "audit", "invite", "calendar", "dashboard",
 ]);
 
 export function slugify(value: string, maxLength = 40): string {

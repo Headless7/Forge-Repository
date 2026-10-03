@@ -234,7 +234,15 @@ export interface DeliverableInput {
   /** Everyone working on it alongside the responsible person (replaces the current list). */
   contributorIds?: string[];
   reviewerId?: string | null;
+  startAt?: string | null;
   dueAt?: string | null;
+}
+
+/** A deliverable's planned start must not be after its deadline (each its own, or the card's). */
+function assertDates(card: { startAt: Date | null; dueAt: Date | null }, own: { startAt: Date | null; dueAt: Date | null }) {
+  const start = own.startAt ?? card.startAt;
+  const due = own.dueAt ?? card.dueAt;
+  if (start && due && start.getTime() > due.getTime()) throw invalid("The start can't be after the deadline.");
 }
 
 export async function createDeliverable(
@@ -245,6 +253,7 @@ export async function createDeliverable(
   assertCard(ctx.perms, "canEdit", "You don't have permission to add deliverables to this card.");
   const name = input.name.trim();
   if (!name) throw invalid("Give the deliverable a name.");
+  assertDates(ctx.card, { startAt: input.startAt ? new Date(input.startAt) : null, dueAt: input.dueAt ? new Date(input.dueAt) : null });
   const contributorIds = [...new Set(input.contributorIds ?? [])].filter((id) => id !== input.ownerId);
   const fx = new Effects();
   await db.transaction(async (tx) => {
@@ -271,6 +280,7 @@ export async function createDeliverable(
         required: input.required ?? true,
         ownerId: input.ownerId ?? null,
         reviewerId: input.reviewerId ?? null,
+        startAt: input.startAt ? new Date(input.startAt) : null,
         dueAt: input.dueAt ? new Date(input.dueAt) : null,
         canvasX: input.canvasX ?? (last ? last.x + 300 : 0),
         canvasY: input.canvasY ?? (last ? last.y : 0),
@@ -343,10 +353,15 @@ export async function updateDeliverable(actor: Actor, input: DeliverableInput & 
     patch.required = input.required;
     changed.push(input.required ? "required" : "optional");
   }
-  if (input.dueAt !== undefined && (input.dueAt ?? null) !== (d.dueAt?.toISOString() ?? null)) {
+  if (input.startAt !== undefined && (input.startAt ? new Date(input.startAt).getTime() : null) !== (d.startAt?.getTime() ?? null)) {
+    patch.startAt = input.startAt ? new Date(input.startAt) : null;
+    changed.push("start date");
+  }
+  if (input.dueAt !== undefined && (input.dueAt ? new Date(input.dueAt).getTime() : null) !== (d.dueAt?.getTime() ?? null)) {
     patch.dueAt = input.dueAt ? new Date(input.dueAt) : null;
     changed.push("due date");
   }
+  assertDates(ctx.card, { startAt: patch.startAt !== undefined ? (patch.startAt ?? null) : d.startAt, dueAt: patch.dueAt !== undefined ? (patch.dueAt ?? null) : d.dueAt });
   if (input.ownerId !== undefined && input.ownerId !== d.ownerId) {
     patch.ownerId = input.ownerId;
     changed.push("owner");

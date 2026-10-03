@@ -11,7 +11,7 @@ export type CardDisplayMode = "VISUAL" | "COMPACT";
 export type AttachmentKind = "IMAGE" | "VIDEO" | "AUDIO" | "ROBLOX" | "FILE";
 export type AttachmentPurpose = "VERSION" | "CARD" | "COMMENT" | "RESOURCE" | "COVER";
 export type ProductionStatus = "TODO" | "COMPLETED" | "PUBLISHED";
-export type BoardView = "CATEGORY" | "PRODUCTION";
+export type BoardView = "CATEGORY" | "PRODUCTION" | "TIMELINE" | "CALENDAR";
 export type DeliverableLinkType = "DEPENDENCY" | "ASSOCIATION";
 export type AttachmentStatus = "PENDING" | "PROCESSING" | "READY" | "FAILED";
 export type VersionStatus = "DRAFT" | "IN_REVIEW" | "CHANGES_REQUESTED" | "APPROVED";
@@ -139,6 +139,8 @@ export interface CardSummaryDTO {
   hasRoblox: boolean;
   priority: Priority;
   displayMode: CardDisplayMode | null;
+  /** Planned start (optional). */
+  startAt: string | null;
   dueAt: string | null;
   milestoneId: string | null;
   assigneeIds: string[];
@@ -208,6 +210,149 @@ export interface ProjectTemplatePreviewDTO {
     note: string | null;
   }>;
   notCopied: string[];
+}
+
+/** One deliverable in a dashboard drill-down list. */
+export interface DashboardItemDTO {
+  deliverableId: string;
+  cardId: string;
+  cardKey: string;
+  cardTitle: string;
+  number: number;
+  name: string;
+  state: CardState;
+  required: boolean;
+  board: { number: number; name: string };
+  dueAt: string | null;
+  dueInherited: boolean;
+  /** Responsible people and contributors (or the card's assignees when it inherits). */
+  people: string[];
+  reviewerIds: string[];
+  /** Why it's on this list: "waiting on Model", "in review for 3 days", "no activity for 20 days". */
+  note: string | null;
+}
+
+export type DashboardListKey =
+  | `state:${CardState}`
+  | "overdue"
+  | "dueSoon"
+  | "blocked"
+  | "unassigned"
+  | "stale"
+  | "queue"
+  | `person:${string}`
+  | `milestone:${string}`;
+
+export interface DurationStatDTO {
+  /** Hours. */
+  median: number | null;
+  p75: number | null;
+  /** How many samples. */
+  n: number;
+}
+
+export interface ProjectDashboardDTO {
+  project: { id: string; slug: string; name: string; icon: string; key: string };
+  boards: Array<{ id: string; number: number; name: string }>;
+  milestoneOptions: Array<{ id: string; name: string }>;
+  range: { from: string; to: string };
+  generatedAt: string;
+  /** Earliest entry in the review log the flow metrics can draw on. */
+  historySince: string | null;
+  status: { byState: Record<CardState, number>; total: number; required: number; requiredApproved: number };
+  risk: { overdue: number; dueSoon: number; blocked: number; unassigned: number; stale: number };
+  review: {
+    queue: number;
+    oldestWaitingHours: number | null;
+    /** Submission → first decision (approve or request changes). */
+    firstReview: DurationStatDTO;
+    /** First submission of a round → approval. */
+    toApproval: DurationStatDTO;
+    decisions: number;
+    changesRequested: number;
+    approvals: number;
+    /** Approvals that needed at least one round of changes first. */
+    approvalsAfterChanges: number;
+  };
+  /** Deliverables approved per week (weeks start on Monday, UTC). */
+  throughput: Array<{ weekStart: string; approved: number }>;
+  /** Deliverable created → first approved, for those first approved in the range. */
+  cycleTime: DurationStatDTO;
+  workload: Array<{ userId: string; displayName: string; avatarUrl: string | null; avatarColor: string; responsible: number; contributing: number; overdue: number; dueSoon: number; reviewing: number }>;
+  milestones: Array<{
+    id: string;
+    name: string;
+    dueAt: string | null;
+    released: boolean;
+    required: number;
+    approved: number;
+    /** Required deliverables approved per day over the last 4 weeks. */
+    ratePerDay: number;
+    projectedAt: string | null;
+    forecast: "done" | "on-track" | "at-risk" | "late" | "no-due-date" | "no-progress";
+  }>;
+}
+
+export interface StudioDashboardRowDTO {
+  project: { id: string; slug: string; name: string; icon: string };
+  open: number;
+  required: number;
+  requiredApproved: number;
+  overdue: number;
+  blocked: number;
+  queue: number;
+  approvedThisWeek: number;
+}
+
+/** A deliverable on the timeline/calendar: effective dates (own, or inherited from the card). */
+export interface ScheduleDeliverableDTO {
+  id: string;
+  number: number;
+  name: string;
+  state: CardState;
+  required: boolean;
+  startAt: string | null;
+  dueAt: string | null;
+  /** Its own dates (null where the card's apply). */
+  ownStartAt: string | null;
+  ownDueAt: string | null;
+  /** Unapproved prerequisites it waits on. */
+  blockedBy: string[];
+  /** The viewer is responsible for, contributes to, or reviews it. */
+  mine: boolean;
+}
+
+export interface ScheduleCardDTO {
+  id: string;
+  key: string;
+  number: number;
+  title: string;
+  state: CardState;
+  project: { id: string; slug: string; name: string; icon: string; key: string; studioSlug: string };
+  board: { id: string; number: number; name: string };
+  columnId: string;
+  startAt: string | null;
+  dueAt: string | null;
+  assigneeIds: string[];
+  /** The viewer may change the card's (and its deliverables') dates. */
+  canEdit: boolean;
+  /** The viewer is assigned to the card or works on one of its deliverables. */
+  mine: boolean;
+  deliverables: ScheduleDeliverableDTO[];
+  links: Array<{ fromId: string; toId: string; type: DeliverableLinkType }>;
+}
+
+/** Scheduled work overlapping a date range, for the timeline and calendars. */
+export interface ScheduleDTO {
+  from: string;
+  to: string;
+  cards: ScheduleCardDTO[];
+  milestones: Array<{ id: string; name: string; dueAt: string; released: boolean; project: { id: string; slug: string; name: string; icon: string; studioSlug: string } }>;
+  /** Active cards with no dates at all (board and project scopes), to be scheduled. */
+  unscheduled: Array<{ id: string; key: string; title: string; state: CardState; boardNumber: number }>;
+  unscheduledTotal: number;
+  /** More matched than were returned (very busy ranges). */
+  truncated: boolean;
 }
 
 /** A board in the project's switcher — light: no columns or cards. */
@@ -386,6 +531,8 @@ export interface DeliverableDTO {
   contributorIds: string[];
   /** Reviewer; with no one set the card's reviewers review it. */
   reviewerId: string | null;
+  /** Own planned start; with none set the card's start applies. */
+  startAt: string | null;
   /** Own deadline; with none set the card's deadline applies. */
   dueAt: string | null;
   currentVersionId: string | null;
@@ -508,6 +655,10 @@ export interface ProjectListItemDTO {
   description: string;
   archived: boolean;
   counts: { cards: number; needsReview: number; changesRequested: number; approved: number; inProgress: number };
+  /** Live boards in switcher order (the first is where the project opens). */
+  boards: Array<{ id: string; number: number; name: string }>;
+  /** The viewer's effective role here allows the producer dashboard (project overrides count). */
+  canViewReports: boolean;
 }
 
 export interface SearchResultDTO {

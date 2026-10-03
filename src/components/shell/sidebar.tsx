@@ -4,8 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   Bell,
+  CalendarDays,
   Check,
   ChevronsUpDown,
+  Gauge,
   House,
   Keyboard,
   KeyRound,
@@ -224,6 +226,8 @@ export function Sidebar({
             onClick={onOpenNotifications}
             badge={unreadCount ? <span className="rounded-full bg-accent px-1.5 text-[10.5px] font-semibold leading-4 text-accent-fg">{unreadCount > 99 ? "99+" : unreadCount}</span> : null}
           />
+          <NavItem href={`${base}/calendar`} icon={<CalendarDays />} label="My calendar" active={pathname === `${base}/calendar`} collapsed={collapsed} onClick={onNavigate} />
+          {can("reports.view") ? <NavItem href={`${base}/dashboard`} icon={<Gauge />} label="Dashboard" active={pathname === `${base}/dashboard`} collapsed={collapsed} onClick={onNavigate} /> : null}
         </div>
 
         <div className={cn("mb-1 mt-4 flex items-center justify-between px-2", collapsed && "justify-center px-0")}>
@@ -236,18 +240,20 @@ export function Sidebar({
             </Tooltip>
           ) : null}
         </div>
-        <div className="grid gap-0.5">
+        <div className="grid grid-cols-1 gap-0.5">
           {projects.length === 0 && !collapsed ? <p className="px-2 py-1 text-[12px] text-fg-subtle">No projects yet.</p> : null}
           {projects.map((p) => {
             const href = `${base}/${p.slug}`;
             const isActive = activeProject?.id === p.id;
+            // Every project lists its boards when it has several; the open project always does.
+            const boardList = !collapsed && (isActive || p.boards.length > 1) ? p.boards : [];
             return (
               <div key={p.id}>
                 <NavItem
                   href={href}
                   icon={<span className="flex size-4 items-center justify-center text-[14px] leading-none">{p.icon}</span>}
                   label={p.name}
-                  active={isActive && pathname === href}
+                  active={isActive && pathname === href && !boardList.length}
                   collapsed={collapsed}
                   onClick={onNavigate}
                   badge={
@@ -258,9 +264,21 @@ export function Sidebar({
                     ) : null
                   }
                 />
+                {boardList.length ? (
+                  <ul className="mt-0.5 grid grid-cols-1 gap-0.5" aria-label={`${p.name} boards`}>
+                    {boardList.map((b, i) => {
+                      const boardPath = `${href}/b/${b.number}`;
+                      return (
+                        <li key={b.id}>
+                          <NavItem href={boardPath} icon={<SquareKanban />} label={b.name} active={pathname === boardPath || (i === 0 && pathname === href)} collapsed={false} indent onClick={onNavigate} />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : null}
                 {isActive && !collapsed ? (
                   <div className="my-0.5 grid gap-0.5">
-                    <NavItem href={href} icon={<SquareKanban />} label="Board" active={pathname === href} collapsed={false} indent onClick={onNavigate} />
+                    {p.canViewReports ? <NavItem href={`${href}/dashboard`} icon={<Gauge />} label="Dashboard" active={pathname === `${href}/dashboard`} collapsed={false} indent onClick={onNavigate} /> : null}
                     <NavItem href={`${href}/activity`} icon={<Activity />} label="Activity" active={pathname === `${href}/activity`} collapsed={false} indent onClick={onNavigate} />
                     <NavItem href={`${href}/settings#members`} icon={<Users />} label="Members" collapsed={false} indent onClick={onNavigate} />
                     <NavItem href={`${href}/settings`} icon={<Settings />} label="Settings" active={pathname === `${href}/settings`} collapsed={false} indent onClick={onNavigate} />

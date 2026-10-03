@@ -4,7 +4,8 @@ import { DndContext, DragOverlay } from "@dnd-kit/core";
 import { horizontalListSortingStrategy, SortableContext } from "@dnd-kit/sortable";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Eye, Sparkles, X } from "lucide-react";
-import { usePathname, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ROBLOX_TEMPLATE } from "@/lib/column-icons";
@@ -18,9 +19,11 @@ import type { BoardDTO, BoardView as BoardViewMode, CardDisplayMode, CardState, 
 import { cn } from "@/lib/utils";
 import { useHotkeys } from "@/hooks/use-hotkeys";
 import { CardModal } from "../card/card-modal";
+import type { OpenTarget } from "../schedule/schedule-utils";
 import { useRealtimeProject } from "../realtime";
 import { UserAvatar } from "../domain/avatar";
 import { Button } from "../ui/button";
+import { Skeleton } from "../ui/controls";
 import { useUploads } from "../upload/upload-manager";
 import { ArchivedDialog } from "./archived-dialog";
 import { BoardContext, pendingCardDrops, type BoardContextValue, type OpenCardOptions } from "./board-context";
@@ -32,6 +35,12 @@ import { NotReadyDialog, ProductionBoard, type NotReadyInfo } from "./production
 import { useBoardDnd, type ItemsByColumn } from "./use-board-dnd";
 
 const byPosition = (a: { position: number }, b: { position: number }) => a.position - b.position;
+
+// Timeline and calendar draw "today", date ranges and day labels in the viewer's time zone and
+// locale, so they render in the browser only (the server's clock and zone would differ).
+const scheduleLoading = () => <Skeleton className="m-3 h-48" />;
+const TimelineView = dynamic(() => import("../schedule/timeline").then((m) => m.TimelineView), { ssr: false, loading: scheduleLoading });
+const BoardCalendar = dynamic(() => import("../schedule/calendar").then((m) => m.BoardCalendar), { ssr: false, loading: scheduleLoading });
 
 /** Files that become a new revision when dropped on a card (everything else is a reference file). */
 function isMedia(file: File) {
@@ -92,6 +101,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
         if (value) params.set(name, value);
         else params.delete(name);
       }
+      if (options.deliverable) params.set("d", String(options.deliverable));
       const url = `${pathname}?${params.toString()}`;
       if (params.get("card") && new URLSearchParams(window.location.search).get("card")) {
         window.history.replaceState(null, "", url);
@@ -153,7 +163,18 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
 
   const filterCtx = useMemo(() => ({ userId: board.viewer.userId, members: membersById, labels: labelsById }), [board.viewer.userId, membersById, labelsById]);
   const visibleCards = useMemo(() => board.cards.filter((c) => matchesFilters(c, filters, filterCtx)), [board.cards, filters, filterCtx]);
+  const visibleCardIds = useMemo(() => new Set(visibleCards.map((c) => c.id)), [visibleCards]);
   const filtered = hasAnyFilter(filters);
+  const scheduleView = view === "TIMELINE" || view === "CALENDAR";
+  const router = useRouter();
+  /** Opens a card from the timeline/calendar: here when it's on this board, otherwise on its board. */
+  const openTarget = useCallback(
+    (t: OpenTarget) => {
+      if (t.projectSlug === board.project.slug && t.boardNumber === board.board.number) openCard(t.key, { deliverable: t.deliverableNumber });
+      else router.push(`/${t.studioSlug}/${t.projectSlug}/b/${t.boardNumber}?card=${encodeURIComponent(t.key)}${t.deliverableNumber ? `&d=${t.deliverableNumber}` : ""}`);
+    },
+    [board.project.slug, board.board.number, openCard, router],
+  );
 
   const totals = useMemo(() => {
     const map = new Map<string, number>();
@@ -327,6 +348,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
             hasRoblox: false,
             priority: "NORMAL",
             displayMode: null,
+            startAt: null,
             dueAt: null,
             milestoneId,
             assigneeIds: selfAssign ? [b.viewer.userId] : [],
@@ -546,7 +568,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
         setFiltersOpen(true);
       },
       m: () => setFilters({ ...filters, mine: !filters.mine }),
-      v: () => setView(view === "CATEGORY" ? "PRODUCTION" : "CATEGORY"),
+      v: () => setView(({ CATEGORY: "PRODUCTION", PRODUCTION: "TIMELINE", TIMELINE: "CALENDAR", CALENDAR: "CATEGORY" } as const)[view]),
       r: () =>
         setFilters({
           ...filters,
@@ -651,6 +673,15 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
           </div>
         ) : null}
 
+        {view === "TIMELINE" ? (
+          <div className="min-h-0 flex-1">
+            <TimelineView projectId={projectId} projectSlug={board.project.slug} studioSlug={studioSlug} boardId={boardId} visibleCardIds={filtered ? visibleCardIds : null} onOpenCard={openTarget} />
+          </div>
+        ) : view === "CALENDAR" ? (
+          <div className="min-h-0 flex-1">
+            <BoardCalendar projectId={projectId} boardId={boardId} visibleCardIds={filtered ? visibleCardIds : null} onOpenCard={openTarget} />
+          </div>
+        ) : null}
         {view === "PRODUCTION" && columns.length > 0 ? (
           <div className="min-h-0 flex-1">
             <ProductionBoard
@@ -666,8 +697,8 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
             />
           </div>
         ) : null}
-        <div ref={scroller} className={cn("scrollbar-thin min-h-0 flex-1 overflow-x-auto overflow-y-hidden max-md:snap-x max-md:snap-mandatory", view === "PRODUCTION" && columns.length > 0 && "hidden")}>
-          {view === "PRODUCTION" && columns.length > 0 ? null : columns.length === 0 ? (
+        <div ref={scroller} className={cn("scrollbar-thin min-h-0 flex-1 overflow-x-auto overflow-y-hidden max-md:snap-x max-md:snap-mandatory", ((view === "PRODUCTION" && columns.length > 0) || scheduleView) && "hidden")}>
+          {(view === "PRODUCTION" && columns.length > 0) || scheduleView ? null : columns.length === 0 ? (
             <div className="flex h-full items-center justify-center p-6">
               <div className="w-full max-w-md rounded-xl border border-dashed border-border-strong bg-surface/70 p-6 text-center">
                 <Sparkles className="mx-auto size-6 text-accent" />

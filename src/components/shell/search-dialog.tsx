@@ -18,7 +18,8 @@ export function openBoardData(queryClient: ReturnType<typeof useQueryClient>, pr
   const queries = queryClient
     .getQueryCache()
     .findAll({ queryKey: qk.board(projectId) })
-    .filter((query) => query.state.data && "cards" in (query.state.data as object))
+    // Board views only: timeline/calendar data shares the key prefix (and also has `cards`).
+    .filter((query) => query.state.data && "columns" in (query.state.data as object))
     .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt);
   return queries[0]?.state.data as BoardDTO | undefined;
 }

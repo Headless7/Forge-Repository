@@ -215,8 +215,9 @@ export function CardModal({
     if (!card || viewedFor.current === card.id) return;
     viewedFor.current = card.id;
     void rpc("card.viewed", { cardId: card.id }).then(() => {
+      // Only the board views: the timeline/calendar caches share this key prefix.
       queryClient.setQueriesData({ queryKey: qk.board(projectId) }, (b: typeof board.board | undefined) =>
-        b ? { ...b, cards: b.cards.map((c) => (c.id === card.id ? { ...c, unread: false } : c)) } : b,
+        b && "columns" in b ? { ...b, cards: b.cards.map((c) => (c.id === card.id ? { ...c, unread: false } : c)) } : b,
       );
     });
   }, [card, projectId, queryClient]);

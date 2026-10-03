@@ -54,6 +54,8 @@ export const cards = pgTable(
     priority: text({ enum: PRIORITIES }).notNull().default("NORMAL"),
     /** Null → inherit from the column default, then the project default. */
     displayMode: text({ enum: ["VISUAL", "COMPACT"] }),
+    /** When work is planned to start (optional; the timeline draws start → due). */
+    startAt: tsz(),
     dueAt: tsz(),
     milestoneId: uuid().references(() => milestones.id, { onDelete: "set null" }),
     estimateHours: real(),

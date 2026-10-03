@@ -84,6 +84,8 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
       return <>restored the category {s(d.columnName)}</>;
     case "column.duplicated":
       return <>duplicated a category as {s(d.columnName)}</>;
+    case "card.start_changed":
+      return d.to ? <>set the start of {it} to {formatShortDate(s(d.to))}</> : <>removed the start date of {it}</>;
     case "board.created":
       return <>created the board <strong className="font-medium text-fg">{s(d.boardName)}</strong></>;
     case "board.renamed":

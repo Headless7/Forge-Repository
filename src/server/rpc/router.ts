@@ -4,6 +4,7 @@
  * validated input onto them. The client imports `AppRouter` as a type only.
  */
 import { z } from "zod";
+import type { DashboardListKey } from "@/lib/types";
 import {
   annotationSchema,
   cardLinkSchema,
@@ -41,7 +42,10 @@ import * as labels from "../services/labels";
 import * as media from "../services/media";
 import * as notifications from "../services/notifications";
 import * as production from "../services/production";
+import * as calendarFeed from "../services/calendar-feed";
+import * as dashboard from "../services/dashboard";
 import * as purge from "../services/purge";
+import * as schedule from "../services/schedule";
 import * as push from "../services/push";
 import * as projectTemplates from "../services/project-templates";
 import * as projects from "../services/projects";
@@ -56,6 +60,13 @@ import { proc } from "./procedure";
 
 const columnIcon = z.enum(COLUMN_ICONS).nullable().optional();
 const purgeTargetSchema = z.object({ type: z.enum(purge.PURGE_TYPES), id: idSchema });
+const dashboardFilters = z.object({
+  projectId: idSchema,
+  boardId: idSchema.nullable().optional(),
+  milestoneId: idSchema.nullable().optional(),
+  from: isoDateSchema,
+  to: isoDateSchema,
+});
 /** A deliverable-canvas connection point, e.g. "r-50" (see lib/canvas-points). */
 const canvasPointSchema = z.string().regex(/^[trbl]-\d{1,2}$/, "Unknown connection point.");
 /** A browser push subscription endpoint: an https capability URL issued by the browser's push service. */
@@ -162,7 +173,7 @@ export const appRouter = {
     handler: ({ actor }, i) => board.setColumnCollapsed(actor, i),
   }),
   "board.setView": proc({
-    input: z.object({ projectId: idSchema, boardId: idSchema.nullable().optional(), view: z.enum(["CATEGORY", "PRODUCTION"]) }),
+    input: z.object({ projectId: idSchema, boardId: idSchema.nullable().optional(), view: z.enum(["CATEGORY", "PRODUCTION", "TIMELINE", "CALENDAR"]) }),
     handler: ({ actor }, i) => board.setBoardView(actor, i),
   }),
 
@@ -176,6 +187,7 @@ export const appRouter = {
       description: text(50_000).optional(),
       priority: prioritySchema.optional(),
       displayMode: displayModeSchema.nullable().optional(),
+      startAt: isoDateSchema.nullable().optional(),
       dueAt: isoDateSchema.nullable().optional(),
       milestoneId: idSchema.nullable().optional(),
       assigneeIds: z.array(idSchema).max(20).optional(),
@@ -199,6 +211,7 @@ export const appRouter = {
       title: cardTitleSchema.optional(),
       description: text(50_000).optional(),
       priority: prioritySchema.optional(),
+      startAt: isoDateSchema.nullable().optional(),
       dueAt: isoDateSchema.nullable().optional(),
       milestoneId: idSchema.nullable().optional(),
       displayMode: displayModeSchema.nullable().optional(),
@@ -291,6 +304,7 @@ export const appRouter = {
       ownerId: idSchema.nullable().optional(),
       contributorIds: z.array(idSchema).max(20).optional(),
       reviewerId: idSchema.nullable().optional(),
+      startAt: isoDateSchema.nullable().optional(),
       dueAt: isoDateSchema.nullable().optional(),
       canvasX: z.number().finite().min(-100_000).max(100_000).optional(),
       canvasY: z.number().finite().min(-100_000).max(100_000).optional(),
@@ -309,6 +323,7 @@ export const appRouter = {
       ownerId: idSchema.nullable().optional(),
       contributorIds: z.array(idSchema).max(20).optional(),
       reviewerId: idSchema.nullable().optional(),
+      startAt: isoDateSchema.nullable().optional(),
       dueAt: isoDateSchema.nullable().optional(),
     }),
     handler: ({ actor }, i) => deliverables.updateDeliverable(actor, i),
@@ -786,6 +801,48 @@ export const appRouter = {
   "notification.setPreference": proc({
     input: z.object({ type: notificationTypeSchema, inApp: z.boolean().optional(), push: z.boolean().optional(), email: z.boolean().optional() }),
     handler: ({ actor }, i) => notifications.setNotificationPreference(actor, i),
+  }),
+
+  // ── Producer dashboard (Managers and above) ─────────────────────────────
+  "dashboard.project": proc({
+    input: dashboardFilters,
+    limit: { max: 120, windowMs: 60_000 },
+    handler: ({ actor }, i) => dashboard.projectDashboard(actor, i),
+  }),
+  "dashboard.list": proc({
+    input: dashboardFilters.extend({ key: z.string().regex(/^(state:(NOT_SUBMITTED|IN_PROGRESS|NEEDS_REVIEW|CHANGES_REQUESTED|APPROVED)|overdue|dueSoon|blocked|unassigned|stale|queue|person:[0-9a-f-]{36}|milestone:[0-9a-f-]{36})$/) }),
+    limit: { max: 240, windowMs: 60_000 },
+    handler: ({ actor }, i) => dashboard.dashboardList(actor, { ...i, key: i.key as DashboardListKey }),
+  }),
+  "dashboard.studio": proc({
+    input: z.object({ studioId: idSchema }),
+    limit: { max: 60, windowMs: 60_000 },
+    handler: ({ actor }, i) => dashboard.studioDashboard(actor, i),
+  }),
+
+  // ── Schedule (timeline, calendars, calendar subscriptions) ──────────────
+  "schedule.board": proc({
+    input: z.object({ projectId: idSchema, boardId: idSchema.nullable().optional(), from: isoDateSchema, to: isoDateSchema }),
+    limit: { max: 240, windowMs: 60_000 },
+    handler: ({ actor }, i) => schedule.boardSchedule(actor, i),
+  }),
+  "schedule.studio": proc({
+    input: z.object({ studioId: idSchema, from: isoDateSchema, to: isoDateSchema, scope: z.enum(["mine", "all"]) }),
+    limit: { max: 240, windowMs: 60_000 },
+    handler: ({ actor }, i) => schedule.studioSchedule(actor, i),
+  }),
+  "calendarFeed.get": proc({
+    input: z.object({}),
+    handler: ({ actor }) => calendarFeed.getCalendarFeed(actor),
+  }),
+  "calendarFeed.create": proc({
+    input: z.object({}),
+    limit: { max: 20, windowMs: 60 * 60_000 },
+    handler: ({ actor }) => calendarFeed.createCalendarFeed(actor),
+  }),
+  "calendarFeed.revoke": proc({
+    input: z.object({}),
+    handler: ({ actor }) => calendarFeed.revokeCalendarFeed(actor),
   }),
 
   // ── Device notifications (Web Push) ─────────────────────────────────────

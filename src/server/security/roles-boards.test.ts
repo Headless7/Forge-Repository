@@ -182,6 +182,24 @@ describe("boards", () => {
     expect((await board.getBoard(f.manager.actor, f.projectId, second)).cards.map((c) => c.id)).toEqual([card!.id]);
   });
 
+  it("are listed with their project for the sidebar: live ones, in switcher order", async () => {
+    const p = await projects.createProject(f.owner.actor, { studioId: f.studioId, name: `Sidebar ${Date.now()}`, template: "empty" });
+    const main = await board.defaultBoard(p.id);
+    const art = await board.createBoard(f.manager.actor, { projectId: p.id, name: "Art" });
+    const old = await board.createBoard(f.manager.actor, { projectId: p.id, name: "Old" });
+    await board.moveBoard(f.manager.actor, { boardId: art.id, index: 0 });
+    await board.setBoardArchived(f.manager.actor, { boardId: old.id, archived: true });
+    const listed = (await projects.listProjects(f.manager.actor, f.studioId)).find((x) => x.id === p.id)!;
+    expect(listed.boards).toEqual([
+      { id: art.id, number: art.number, name: "Art" },
+      { id: main.id, number: main.number, name: main.name },
+    ]);
+    expect(listed.canViewReports).toBe(true);
+    expect((await projects.listProjects(f.member.actor, f.studioId)).find((x) => x.id === p.id)!.canViewReports).toBe(false);
+    // A project someone can't open isn't listed, boards and all.
+    expect((await projects.listProjects(f.member.actor, f.studioId)).some((x) => x.id === privateProject)).toBe(false);
+  });
+
   it("can be deleted once archived (Owner/Admin), taking only their own content", async () => {
     const doomed = await board.createBoard(f.manager.actor, { projectId: f.projectId, name: "Doomed", columns: "roblox" });
     const col = (await board.getBoard(f.manager.actor, f.projectId, doomed.id)).columns[0]!;

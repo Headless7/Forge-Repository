@@ -62,6 +62,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       const p = pending.current;
       p.timer = null;
       for (const id of p.boards) void queryClient.invalidateQueries({ queryKey: qk.board(id) });
+      // The sidebar lists each project's boards and review counts.
+      if (p.boards.size) void queryClient.invalidateQueries({ queryKey: ["projects"] });
       for (const id of p.cards) {
         void queryClient.invalidateQueries({ queryKey: qk.card(id) });
         void queryClient.invalidateQueries({ queryKey: qk.cardActivity(id) });
@@ -85,6 +87,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // Catch up on changes made before the stream was open: between the server rendering the
         // page and this connection (first load), or while disconnected (reconnects).
         if (projectId) void queryClient.invalidateQueries({ queryKey: qk.board(projectId) });
+        void queryClient.invalidateQueries({ queryKey: ["projects"] });
         if (hadConnection) {
           void queryClient.invalidateQueries({ queryKey: ["card"] });
           void queryClient.invalidateQueries({ queryKey: qk.notifications() });

@@ -2,7 +2,7 @@ import { and, asc, count, eq, inArray, isNotNull, isNull, max, ne, sql } from "d
 import { ROBLOX_TEMPLATE } from "@/lib/column-icons";
 import { permissionsFor, roleHas } from "@/lib/permissions";
 import { POSITION_GAP, positionBetween, resolveInsertIndex, spacedPositions } from "@/lib/positions";
-import type { BoardDTO, BoardSummaryDTO, CardDisplayMode, ColumnDTO, LabelDTO, MilestoneDTO, ProjectDTO } from "@/lib/types";
+import type { BoardDTO, BoardSummaryDTO, BoardView, CardDisplayMode, ColumnDTO, LabelDTO, MilestoneDTO, ProjectDTO } from "@/lib/types";
 import { assertProjectPermission, getProjectAccessBySlug, requireProject, type ProjectAccess, type ProjectRow } from "../access";
 import { db, type Executor } from "../db";
 import { boardColumns, boards, cards, labels, milestones, notifications, projects, userBoardPrefs } from "../db/schema";
@@ -669,7 +669,7 @@ export async function setColumnCollapsed(actor: Actor, input: { columnId: string
 }
 
 /** Remembers, per board, whether this person looks at it by category or by production stage. */
-export async function setBoardView(actor: Actor, input: { projectId: string; boardId?: string | null; view: "CATEGORY" | "PRODUCTION" }) {
+export async function setBoardView(actor: Actor, input: { projectId: string; boardId?: string | null; view: BoardView }) {
   const access = await requireProject(actor.userId, input.projectId, "project.view");
   const board = await resolveBoard(access, { boardId: input.boardId });
   await db

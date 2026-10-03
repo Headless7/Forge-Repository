@@ -8,7 +8,7 @@ import { LABEL_COLORS } from "@/lib/column-icons";
 import { PRIORITY_META, PRIORITY_ORDER } from "@/lib/card-meta";
 import { qk, useCardMutation, useRpcMutation } from "@/lib/queries";
 import type { CardLink, MemberDTO, Priority } from "@/lib/types";
-import { cn, dueStatus, formatDateTime, timeAgo } from "@/lib/utils";
+import { cn, dueStatus, formatDateTime, timeAgo, toLocalInput } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBoard } from "../board/board-context";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
@@ -91,10 +91,6 @@ function PeoplePicker({
       </PopoverContent>
     </Popover>
   );
-}
-
-function toLocalInput(iso: string | null) {
-  return iso ? format(new Date(iso), "yyyy-MM-dd'T'HH:mm") : "";
 }
 
 function LinksEditor({ links, canEdit, onChange }: { links: CardLink[]; canEdit: boolean; onChange: (links: CardLink[]) => void }) {
@@ -254,6 +250,28 @@ export function CardSidebar({ onApprove, onRequestChanges, onSubmit, onUploadVer
             options={PRIORITY_ORDER.map((p) => ({ value: p, label: PRIORITY_META[p].label, icon: <PriorityIcon priority={p} /> }))}
             className="h-7"
           />
+        </Row>
+        <Row label="Start date">
+          {perms.canEdit ? (
+            <div className="flex items-center gap-1">
+              <input
+                type="datetime-local"
+                aria-label="Start date"
+                value={toLocalInput(card.startAt)}
+                onChange={(e) => update.mutate({ cardId: card.id, startAt: e.target.value ? new Date(e.target.value).toISOString() : null })}
+                className="h-7 min-w-0 flex-1 rounded-md border border-border-strong/70 bg-surface-3/60 px-2 text-[12.5px] outline-none focus:border-accent [color-scheme:dark] light:[color-scheme:light]"
+              />
+              {card.startAt ? (
+                <Button size="icon-xs" variant="ghost" aria-label="Clear start date" onClick={() => update.mutate({ cardId: card.id, startAt: null })}>
+                  <X />
+                </Button>
+              ) : null}
+            </div>
+          ) : card.startAt ? (
+            <span className="text-[12.5px]">{formatDateTime(card.startAt)}</span>
+          ) : (
+            <span className="text-fg-subtle">None</span>
+          )}
         </Row>
         <Row label="Due date">
           {perms.canEdit ? (

@@ -7,7 +7,7 @@ import { CARD_STATE_META } from "@/lib/card-meta";
 import { roleHas } from "@/lib/permissions";
 import { useCardMutation } from "@/lib/queries";
 import type { DeliverableDTO, MemberDTO } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, toLocalInput } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { StatePill } from "../domain/state";
 import { Button } from "../ui/button";
@@ -17,10 +17,6 @@ import { Input, Textarea } from "../ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip } from "../ui/menu";
 import { AddDeliverableDialog } from "./deliverables-panel";
 import { useScope, useWorkspace } from "./workspace-context";
-
-function toLocalInput(iso: string | null) {
-  return iso ? format(new Date(iso), "yyyy-MM-dd'T'HH:mm") : "";
-}
 
 /** Where you are: card › deliverable, with the way back to the card overview. */
 export function DeliverableBreadcrumb() {
@@ -288,6 +284,36 @@ export function DeliverableHeader() {
               <span className={cn(overdue({ ...d, dueAt: card.dueAt }) && "text-danger")}>Inherits the card&apos;s deadline · {formatDue(card.dueAt)}</span>
             ) : (
               "No deadline"
+            )}
+          </span>
+        </div>
+        <div className="grid gap-0.5">
+          <label htmlFor={`start-${d.id}`} className="text-[11px] text-fg-subtle">
+            Start (optional)
+          </label>
+          <input
+            id={`start-${d.id}`}
+            type="datetime-local"
+            aria-label="Deliverable start date"
+            aria-describedby={`start-note-${d.id}`}
+            disabled={!perms.canEdit}
+            value={toLocalInput(d.startAt)}
+            onChange={(e) => update.mutate({ deliverableId: d.id, startAt: e.target.value ? new Date(e.target.value).toISOString() : null })}
+            className="h-7 min-w-0 rounded-md border border-border-strong/70 bg-surface-3/60 px-2 text-[12.5px] outline-none focus:border-accent disabled:opacity-60 [color-scheme:dark] light:[color-scheme:light]"
+          />
+          <span id={`start-note-${d.id}`} className="flex flex-wrap items-center gap-1 text-[11px] text-fg-subtle">
+            {d.startAt ? (
+              card.startAt && perms.canEdit ? (
+                <button type="button" className="inline-flex min-h-6 items-center text-accent hover:underline" onClick={() => update.mutate({ deliverableId: d.id, startAt: null })}>
+                  Use the card&apos;s start instead
+                </button>
+              ) : (
+                "Its own start"
+              )
+            ) : card.startAt ? (
+              <span>Follows the card&apos;s start · {formatDue(card.startAt)}</span>
+            ) : (
+              "No start date"
             )}
           </span>
         </div>

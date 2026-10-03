@@ -84,3 +84,8 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   }
   return Boolean(target.closest("[role='textbox'], [contenteditable='true']"));
 }
+
+/** An ISO date as a <input type="datetime-local"> value, in the viewer's time zone. */
+export function toLocalInput(iso: string | null) {
+  return iso ? format(new Date(iso), "yyyy-MM-dd'T'HH:mm") : "";
+}

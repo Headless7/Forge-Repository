@@ -114,6 +114,7 @@ export interface CreateCardInput {
   description?: string;
   priority?: Priority;
   displayMode?: CardDisplayMode | null;
+  startAt?: string | null;
   dueAt?: string | null;
   milestoneId?: string | null;
   assigneeIds?: string[];
@@ -149,6 +150,7 @@ export async function createCard(actor: Actor, input: CreateCardInput): Promise<
         productionPosition,
         priority: input.priority ?? "NORMAL",
         displayMode: input.displayMode ?? null,
+        startAt: input.startAt ? new Date(input.startAt) : null,
         dueAt: input.dueAt ? new Date(input.dueAt) : null,
         milestoneId: input.milestoneId ?? null,
         createdById: actor.userId,
@@ -244,6 +246,7 @@ export interface UpdateCardInput {
   title?: string;
   description?: string;
   priority?: Priority;
+  startAt?: string | null;
   dueAt?: string | null;
   milestoneId?: string | null;
   displayMode?: CardDisplayMode | null;
@@ -284,6 +287,13 @@ export async function updateCard(actor: Actor, input: UpdateCardInput): Promise<
     patch.priority = input.priority;
     activities.push({ type: "card.priority_changed", data: { from: card.priority, to: input.priority } });
   }
+  if (input.startAt !== undefined) {
+    const next = input.startAt ? new Date(input.startAt) : null;
+    if ((next?.getTime() ?? null) !== (card.startAt?.getTime() ?? null)) {
+      patch.startAt = next;
+      activities.push({ type: "card.start_changed", data: { from: card.startAt?.toISOString() ?? null, to: next?.toISOString() ?? null } });
+    }
+  }
   if (input.dueAt !== undefined) {
     const next = input.dueAt ? new Date(input.dueAt) : null;
     if ((next?.getTime() ?? null) !== (card.dueAt?.getTime() ?? null)) {
@@ -292,6 +302,11 @@ export async function updateCard(actor: Actor, input: UpdateCardInput): Promise<
       activities.push({ type: "card.due_changed", data: { from: card.dueAt?.toISOString() ?? null, to: next?.toISOString() ?? null } });
       significant = next ? "changed the due date" : "removed the due date";
     }
+  }
+  {
+    const start = patch.startAt !== undefined ? patch.startAt : card.startAt;
+    const due = patch.dueAt !== undefined ? patch.dueAt : card.dueAt;
+    if (start && due && start.getTime() > due.getTime()) throw invalid("The start can't be after the deadline.");
   }
   if (input.milestoneId !== undefined && input.milestoneId !== card.milestoneId) {
     if (input.milestoneId) await assertMilestone(db, input.milestoneId, card.projectId);
@@ -572,6 +587,7 @@ export async function duplicateCardInTx(
       state: "NOT_SUBMITTED",
       priority: source.priority,
       displayMode: source.displayMode,
+      startAt: source.startAt,
       dueAt: source.dueAt,
       milestoneId: source.milestoneId,
       estimateHours: source.estimateHours,
@@ -632,6 +648,7 @@ export async function duplicateCardInTx(
         required: d.required,
         ownerId: options.include.assignees ? d.ownerId : null,
         reviewerId: d.reviewerId,
+        startAt: d.startAt,
         dueAt: d.dueAt,
         canvasX: d.canvasX,
         canvasY: d.canvasY,

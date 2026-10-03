@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { ROBLOX_TEMPLATE } from "@/lib/column-icons";
-import { canGrantRole, hasAutomaticProjectAccess, isStudioWideRole, memberCanOpenProject, normalizeRole, type Role } from "@/lib/permissions";
+import { canGrantRole, hasAutomaticProjectAccess, isStudioWideRole, memberCanOpenProject, normalizeRole, roleHas, type Role } from "@/lib/permissions";
 import { POSITION_GAP } from "@/lib/positions";
 import { projectKeyFrom, RESERVED_PROJECT_SLUGS, slugify } from "@/lib/slugs";
 import type { CardDisplayMode, ProjectDTO, ProjectListItemDTO, ProjectSettings, ProjectVisibility } from "@/lib/types";
@@ -55,7 +55,13 @@ export async function listProjects(actor: Actor, studioId: string, includeArchiv
     .where(includeArchived ? eq(projects.studioId, studioId) : and(eq(projects.studioId, studioId), isNull(projects.archivedAt)))
     .orderBy(asc(projects.name));
   const accessible: typeof rows = [];
-  for (const p of rows) if (await getProjectAccess(actor.userId, p.id)) accessible.push(p);
+  const roles = new Map<string, Role>();
+  for (const p of rows) {
+    const access = await getProjectAccess(actor.userId, p.id);
+    if (!access) continue;
+    accessible.push(p);
+    roles.set(p.id, access.role);
+  }
   if (accessible.length === 0) return [];
 
   const counts = await db
@@ -73,6 +79,13 @@ export async function listProjects(actor: Actor, studioId: string, includeArchiv
     .where(and(inArray(cards.projectId, accessible.map((p) => p.id)), isNull(cards.archivedAt), isNull(boardColumns.archivedAt), isNull(boards.archivedAt)))
     .groupBy(cards.projectId);
   const countMap = new Map(counts.map((c) => [c.projectId, c]));
+  const boardRows = await db
+    .select({ id: boards.id, projectId: boards.projectId, number: boards.number, name: boards.name })
+    .from(boards)
+    .where(and(inArray(boards.projectId, accessible.map((p) => p.id)), isNull(boards.archivedAt)))
+    .orderBy(asc(boards.position), asc(boards.number));
+  const boardMap = new Map<string, ProjectListItemDTO["boards"]>();
+  for (const { projectId, ...b } of boardRows) boardMap.set(projectId, [...(boardMap.get(projectId) ?? []), b]);
   return accessible.map((p) => {
     const c = countMap.get(p.id);
     return {
@@ -91,6 +104,8 @@ export async function listProjects(actor: Actor, studioId: string, includeArchiv
         approved: c?.approved ?? 0,
         inProgress: c?.inProgress ?? 0,
       },
+      boards: boardMap.get(p.id) ?? [],
+      canViewReports: roleHas(roles.get(p.id)!, "reports.view"),
     };
   });
 }

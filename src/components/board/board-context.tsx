@@ -8,6 +8,8 @@ export interface OpenCardOptions {
   queue?: "review";
   action?: "request-changes" | "approve";
   comment?: string;
+  /** Open this deliverable (by number) inside the card. */
+  deliverable?: number;
 }
 
 /** Files dropped on a card with several deliverables wait here until the card asks which deliverable they belong to. */
