@@ -12,6 +12,7 @@ import { timeAgo } from "@/lib/utils";
 import { useShell } from "../shell/shell-context";
 import { Button } from "../ui/button";
 import { ConfirmDialog, Dialog, DialogContent, DialogFooter } from "../ui/dialog";
+import { useTipOnOpen } from "../tutorial/tutorial";
 import { Skeleton } from "../ui/controls";
 import { Input } from "../ui/input";
 
@@ -110,6 +111,8 @@ export function MyCalendarPage() {
   const { studio, user } = useShell();
   const router = useRouter();
   const [subscribing, setSubscribing] = useState(false);
+  // Opening My calendar is opening the feature.
+  useTipOnOpen("schedule.dates");
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-surface/80 px-4 py-2.5">

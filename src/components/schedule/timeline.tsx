@@ -10,6 +10,7 @@ import { errorMessage, rpc } from "@/lib/rpc-client";
 import type { ScheduleCardDTO, ScheduleDeliverableDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { TipAnchor } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
 import { Agenda } from "./agenda";
 import { ScheduleItemDialog, type ScheduleSelection } from "./schedule-item-dialog";
@@ -96,6 +97,7 @@ export function TimelineView({
   const from = useMemo(() => startOfDay(anchor), [anchor]);
   const to = useMemo(() => addDays(from, days), [from, days]);
   const schedule = useBoardSchedule(projectId, boardId, from, to);
+  const canEditAny = Boolean(schedule.data?.cards.some((c) => c.canEdit));
   const [selection, setSelection] = useState<ScheduleSelection | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -183,7 +185,12 @@ export function TimelineView({
   if (narrow) {
     return (
       <div className="scrollbar-thin h-full overflow-y-auto">
-        <RangeBar from={from} to={to} onPrev={() => setAnchor(addDays(anchor, -step))} onNext={() => setAnchor(addDays(anchor, step))} onToday={() => setAnchor(anchorFor(zoom))} />
+        {/* Phones get the day list, so the calendar wording applies. */}
+        <TipAnchor tip="schedule.dates" facts={{ view: "calendar", canEditAny, ready: Boolean(schedule.data) }}>
+          <div>
+            <RangeBar from={from} to={to} onPrev={() => setAnchor(addDays(anchor, -step))} onNext={() => setAnchor(addDays(anchor, step))} onToday={() => setAnchor(anchorFor(zoom))} />
+          </div>
+        </TipAnchor>
         <Agenda entries={calendarEntries(schedule.data, { showStarts: true, visibleCardIds })} onSelect={setSelection} />
         <ScheduleItemDialog selection={selection} onClose={() => setSelection(null)} onOpenCard={(s) => onOpenCard(openTargetOf(s.card, s.deliverable))} />
       </div>
@@ -209,6 +216,7 @@ export function TimelineView({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <TipAnchor tip="schedule.dates" facts={{ view: "timeline", canEditAny, ready: Boolean(schedule.data) }}>
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface/60 px-3 py-1.5">
         <RangeBar inline from={from} to={to} onPrev={() => setAnchor(addDays(anchor, -step))} onNext={() => setAnchor(addDays(anchor, step))} onToday={() => setAnchor(anchorFor(zoom))} />
         <div role="radiogroup" aria-label="Zoom" className="flex h-7 items-center rounded-md border border-border-strong bg-surface-3/60 p-0.5">
@@ -234,6 +242,7 @@ export function TimelineView({
           </span>
         </span>
       </div>
+      </TipAnchor>
 
       <div ref={scroller} className="scrollbar-thin relative min-h-0 flex-1 overflow-auto" onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={() => setDrag(null)}>
         <div className="relative" style={{ width: `calc(var(--tl-label) + ${width}px)`, ["--tl-label" as string]: "clamp(170px, 22vw, 260px)" }}>

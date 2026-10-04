@@ -28,6 +28,7 @@ import {
   usernameSchema,
   displayNameSchema,
 } from "@/lib/validation";
+import { BOARD_ICONS } from "@/lib/board-icons";
 import { COLUMN_ICONS } from "@/lib/column-icons";
 import * as accounts from "../services/accounts";
 import * as archive from "../services/archive";
@@ -46,6 +47,7 @@ import * as calendarFeed from "../services/calendar-feed";
 import * as dashboard from "../services/dashboard";
 import * as purge from "../services/purge";
 import * as schedule from "../services/schedule";
+import * as tutorial from "../services/tutorial";
 import * as push from "../services/push";
 import * as projectTemplates from "../services/project-templates";
 import * as projects from "../services/projects";
@@ -90,7 +92,7 @@ export const appRouter = {
     handler: ({ actor }, i) => board.createBoard(actor, i),
   }),
   "board.update": proc({
-    input: z.object({ boardId: idSchema, name: boardNameSchema.optional(), description: text(2000).optional() }),
+    input: z.object({ boardId: idSchema, name: boardNameSchema.optional(), description: text(2000).optional(), icon: z.enum(BOARD_ICONS).nullable().optional() }),
     handler: ({ actor }, i) => board.updateBoard(actor, i),
   }),
   "board.move": proc({
@@ -888,6 +890,27 @@ export const appRouter = {
   "account.profile": proc({
     input: z.object({}),
     handler: ({ actor }) => accounts.getProfile(actor),
+  }),
+  // ── Contextual tutorial tips (progress is per person, across studios and devices) ──
+  "tutorial.get": proc({
+    input: z.object({}),
+    limit: { max: 60, windowMs: 60_000 },
+    handler: ({ actor }) => tutorial.tutorialState(actor.userId),
+  }),
+  "tutorial.dismiss": proc({
+    input: z.object({ tipId: z.string().min(1).max(80), version: z.number().int().min(1).max(1000) }),
+    limit: { max: 120, windowMs: 60_000 },
+    handler: ({ actor }, i) => tutorial.dismissTip(actor, i),
+  }),
+  "tutorial.setEnabled": proc({
+    input: z.object({ enabled: z.boolean() }),
+    limit: { max: 60, windowMs: 60_000 },
+    handler: ({ actor }, i) => tutorial.setTipsEnabled(actor, i.enabled),
+  }),
+  "tutorial.reset": proc({
+    input: z.object({}),
+    limit: { max: 20, windowMs: 60_000 },
+    handler: ({ actor }) => tutorial.resetTutorial(actor),
   }),
   "account.update": proc({
     input: z.object({ displayName: displayNameSchema.optional(), username: usernameSchema.optional(), theme: z.enum(["dark", "light", "system"]).optional() }),

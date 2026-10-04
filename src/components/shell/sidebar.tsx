@@ -11,7 +11,6 @@ import {
   House,
   Keyboard,
   KeyRound,
-  SquareKanban,
   LogOut,
   Monitor,
   Moon,
@@ -34,8 +33,11 @@ import type { ProjectListItemDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { Kbd } from "../ui/controls";
+import { BoardIcon } from "../domain/board-icon";
+import { useTutorial } from "../tutorial/tutorial";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -126,6 +128,7 @@ export function Sidebar({
   mobile?: boolean;
 }) {
   const { user, studio, studios, can, openSearch, openShortcuts } = useShell();
+  const tutorial = useTutorial();
   const pathname = usePathname();
   const params = useParams<{ studio?: string; project?: string }>();
   const router = useRouter();
@@ -270,7 +273,7 @@ export function Sidebar({
                       const boardPath = `${href}/b/${b.number}`;
                       return (
                         <li key={b.id}>
-                          <NavItem href={boardPath} icon={<SquareKanban />} label={b.name} active={pathname === boardPath || (i === 0 && pathname === href)} collapsed={false} indent onClick={onNavigate} />
+                          <NavItem href={boardPath} icon={<BoardIcon name={b.icon} />} label={b.name} active={pathname === boardPath || (i === 0 && pathname === href)} collapsed={false} indent onClick={onNavigate} />
                         </li>
                       );
                     })}
@@ -335,6 +338,11 @@ export function Sidebar({
             <DropdownMenuItem onSelect={openShortcuts} shortcut="?">
               <Keyboard /> Keyboard shortcuts
             </DropdownMenuItem>
+            {tutorial.available ? (
+              <DropdownMenuCheckboxItem checked={tutorial.enabled} onCheckedChange={(on) => tutorial.setEnabled(on === true)}>
+                Tutorial tips
+              </DropdownMenuCheckboxItem>
+            ) : null}
             <DropdownMenuItem onSelect={() => void signOut()}>
               <LogOut /> Sign out
             </DropdownMenuItem>

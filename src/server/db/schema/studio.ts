@@ -183,6 +183,8 @@ export const boards = pgTable(
     number: integer().notNull(),
     name: text().notNull().default("Board"),
     description: text().notNull().default(""),
+    /** Lucide name from lib/board-icons; null = the default board icon. Independent of project/column icons. */
+    icon: text(),
     /** Order in the board switcher; the first board is the project's default. */
     position: doublePrecision().notNull().default(0),
     archivedAt: tsz(),

@@ -1,5 +1,6 @@
 import "server-only";
 import type { ShellStudio, ShellUser } from "@/components/shell/shell-context";
+import type { TutorialStateDTO } from "@/lib/tutorial";
 import type { ProjectListItemDTO, StudioSummaryDTO } from "@/lib/types";
 import { getStudioAccessBySlug } from "./access";
 import type { ValidatedSession } from "./auth/session";
@@ -7,6 +8,7 @@ import { unreadCount } from "./services/notifications";
 import { isPlatformAdmin } from "./services/platform";
 import { listProjects } from "./services/projects";
 import { listStudiosForUser, rememberStudio } from "./services/studios";
+import { tutorialState } from "./services/tutorial";
 import { avatarUrl } from "./services/users-lookup";
 
 export interface ShellData {
@@ -15,6 +17,8 @@ export interface ShellData {
   studios: StudioSummaryDTO[];
   projects: ProjectListItemDTO[];
   unreadCount: number;
+  /** Loaded with the page so tips never flash or repeat before progress arrives. */
+  tutorial: TutorialStateDTO;
 }
 
 /** Everything the app chrome needs. Returns null when the user can't access the studio. */
@@ -29,10 +33,11 @@ export async function loadShell(session: ValidatedSession, studioSlug: string | 
   if (session.user.lastStudioId !== access.studioId) void rememberStudio(session.user.id, access.studioId).catch(() => {});
 
   const actor = { userId: session.user.id, sessionId: session.session.id };
-  const [projects, unread, avatar] = await Promise.all([
+  const [projects, unread, avatar, tutorial] = await Promise.all([
     listProjects(actor, access.studioId),
     unreadCount(session.user.id),
     avatarUrl(session.user.avatarKey),
+    tutorialState(session.user.id),
   ]);
   return {
     user: {
@@ -50,5 +55,6 @@ export async function loadShell(session: ValidatedSession, studioSlug: string | 
     studios,
     projects,
     unreadCount: unread,
+    tutorial,
   };
 }

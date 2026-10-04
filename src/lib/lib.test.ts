@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesFilters, parseFilters, writeFilters, EMPTY_FILTERS } from "@/components/board/filters";
+import { countMyWork, isMyWork, matchesFilters, parseFilters, writeFilters, EMPTY_FILTERS } from "@/components/board/filters";
 import { extractMentions } from "./mentions";
 import { canGrantRole, canManageMember, cardPermissions, roleHas } from "./permissions";
 import { positionBetween, resolveInsertIndex, spacedPositions } from "./positions";
@@ -132,6 +132,21 @@ describe("board filters", () => {
     expect(matchesFilters(onDeliverable, { ...EMPTY_FILTERS, mine: true }, ctx)).toBe(true);
     expect(matchesFilters(onDeliverable, { ...EMPTY_FILTERS, assignees: ["me"] }, ctx)).toBe(true);
     expect(matchesFilters(card({ assigneeIds: ["lead"] }), { ...EMPTY_FILTERS, mine: true }, ctx)).toBe(false);
+  });
+
+  it("counts My tasks exactly as the filter shows them, each card once", () => {
+    // Regression: the badge counted card assignees only, the filter also deliverable owners/contributors.
+    const cards = [
+      card({ id: "a", assigneeIds: ["me"] }), // assignee
+      card({ id: "b", assigneeIds: ["lead"], deliverableAssigneeIds: ["me"] }), // owns or contributes to a deliverable
+      card({ id: "c", assigneeIds: ["me"], deliverableAssigneeIds: ["me", "other"] }), // both: still one card
+      card({ id: "d", assigneeIds: ["other"], deliverableAssigneeIds: ["other"] }),
+    ];
+    const shown = cards.filter((c) => matchesFilters(c, { ...EMPTY_FILTERS, mine: true }, ctx));
+    expect(countMyWork(cards, "me")).toBe(3);
+    expect(countMyWork(cards, "me")).toBe(shown.length);
+    expect(shown.map((c) => c.id)).toEqual(["a", "b", "c"]);
+    expect(isMyWork(cards[3]!, "me")).toBe(false);
   });
 
   it("handles due-date and text filters", () => {

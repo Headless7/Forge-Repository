@@ -77,8 +77,15 @@ export function FilterPopover({
           {count ? <span className="rounded-full bg-accent px-1.5 text-[10.5px] font-semibold leading-4 text-accent-fg">{count}</span> : null}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[min(560px,calc(100vw-24px))] p-0">
-        <div className="grid sm:grid-cols-2">
+      {/* Never taller than the space available (narrow phones, short windows, zoom): the sections
+          scroll and the footer with Reset stays in view. */}
+      <PopoverContent
+        align="end"
+        collisionPadding={8}
+        aria-label="Board filters"
+        className="flex max-h-[var(--radix-popover-content-available-height)] w-[min(560px,calc(100vw-16px))] flex-col p-0"
+      >
+        <div className="scrollbar-thin grid min-h-0 flex-1 overflow-y-auto overscroll-contain sm:grid-cols-2">
           <div className="border-border sm:border-r">
             <Section title="People">
               <CheckRow checked={filters.mine} onChange={(v) => onChange({ ...filters, mine: v })}>
@@ -196,7 +203,7 @@ export function FilterPopover({
             </Section>
           </div>
         </div>
-        <div className="flex items-center justify-between border-t border-border px-3 py-2">
+        <div className="flex shrink-0 items-center justify-between border-t border-border px-3 py-2">
           <span className="text-xs text-fg-subtle">{count ? `${count} filter${count === 1 ? "" : "s"} active` : "No filters"}</span>
           <Button size="xs" variant="ghost" disabled={!count} onClick={() => onChange({ ...EMPTY_FILTERS, q: filters.q, milestone: filters.milestone })}>
             Reset filters

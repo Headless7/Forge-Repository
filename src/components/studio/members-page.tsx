@@ -13,6 +13,7 @@ import { emailSchema } from "@/lib/validation";
 import { formatShortDate, timeAgo } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { useShell } from "../shell/shell-context";
+import { TipAnchor, useTipOnOpen } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
 import { Badge, Checkbox, Select } from "../ui/controls";
 import { ConfirmDialog, Dialog, DialogContent, DialogFooter } from "../ui/dialog";
@@ -169,6 +170,8 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
 
 export function MembersPage({ initialMembers }: { initialMembers: MemberDTO[] }) {
   const { studio, user, can } = useShell();
+  const canManage = can("members.manage");
+  useTipOnOpen("access.scope", canManage, { place: "studio" });
   const router = useRouter();
   const queryClient = useQueryClient();
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -203,10 +206,12 @@ export function MembersPage({ initialMembers }: { initialMembers: MemberDTO[] })
     <div className="scrollbar-thin h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl px-4 py-8 md:px-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <p className="text-[12px] text-fg-subtle">{studio.name}</p>
-            <h1 className="mt-1 text-xl font-semibold tracking-tight">Members · {members.data.length}</h1>
-          </div>
+          <TipAnchor tip="access.scope" place="studio" facts={{ place: "studio", canManage }}>
+            <div>
+              <p className="text-[12px] text-fg-subtle">{studio.name}</p>
+              <h1 className="mt-1 text-xl font-semibold tracking-tight">Members · {members.data.length}</h1>
+            </div>
+          </TipAnchor>
           {can("members.invite") ? (
             <Button variant="primary" onClick={() => setInviteOpen(true)}>
               <MailPlus /> Invite member

@@ -16,10 +16,12 @@ import { cn, formatShortDate } from "@/lib/utils";
 import { ArchivedItems } from "../board/archived-dialog";
 import { CreateBoardDialog } from "../board/board-switcher";
 import { UserAvatar } from "../domain/avatar";
+import { BoardIcon } from "../domain/board-icon";
 import { LabelChip } from "../domain/state";
 import { PROJECT_EMOJIS } from "../shell/create-project-dialog";
 import { Button } from "../ui/button";
 import { Checkbox, Select, Switch } from "../ui/controls";
+import { TipAnchor, useTipOnOpen } from "../tutorial/tutorial";
 import { ConfirmDialog } from "../ui/dialog";
 import { Input, Label, Textarea } from "../ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/menu";
@@ -124,6 +126,8 @@ function General({ board, canEdit, studioSlug }: { board: BoardDTO; canEdit: boo
 function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
   const queryClient = useQueryClient();
   const p = board.project;
+  // Opening project settings is when project roles and access are being managed.
+  useTipOnOpen("access.scope", canEdit, { place: "project" });
   const access = useQuery({ queryKey: qk.projectAccess(p.id), queryFn: () => rpc("project.access", { projectId: p.id }) });
   const setMember = useRpcMutation("project.setMember", {
     onSuccess: (list) => {
@@ -140,6 +144,7 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
   });
   return (
     <Section id="members" title="Members & permissions" description="Studio roles apply by default. Give someone a different role on this project, or make the project private.">
+      <TipAnchor tip="access.scope" place="project" facts={{ place: "project", canManage: canEdit }}>
       <div className="mb-4 grid gap-2 sm:grid-cols-2">
         {(
           [
@@ -162,6 +167,7 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
           </button>
         ))}
       </div>
+      </TipAnchor>
       <ul className="divide-y divide-border rounded-lg border border-border">
         {(access.data ?? []).map((m) => {
           const privileged = m.studioRole === "OWNER" || m.studioRole === "ADMIN";
@@ -233,6 +239,7 @@ function Boards({ board, canManage, studioSlug }: { board: BoardDTO; canManage: 
       <ul className="divide-y divide-border rounded-lg border border-border">
         {list.map((b, i) => (
           <li key={b.id} className="flex flex-wrap items-start gap-2 px-3 py-2.5">
+            <BoardIcon name={b.icon} className="mt-2 size-4 text-fg-subtle" />
             <div className="min-w-0 flex-1 basis-56">
               {canManage ? (
                 <>

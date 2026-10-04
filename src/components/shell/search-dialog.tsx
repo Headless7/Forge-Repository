@@ -51,6 +51,10 @@ export function SearchDialog({
   const [scope, setScope] = useState<"project" | "studio">(currentProject ? "project" : "studio");
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  /** Focus before opening, restored on close (unless a result was opened). */
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const openedResult = useRef(false);
   const debounced = useDebounced(q.trim(), 140);
   const projectId = scope === "project" ? (currentProject?.id ?? null) : null;
 
@@ -100,6 +104,7 @@ export function SearchDialog({
   useEffect(() => setActive(0), [debounced, scope]);
 
   const openResult = (result: SearchResultDTO) => {
+    openedResult.current = true;
     onOpenChange(false);
     const projectPath = `/${studio.slug}/${result.project.slug}`;
     const boardPath = `${projectPath}/b/${result.board.number}`;
@@ -115,21 +120,36 @@ export function SearchDialog({
     }
   };
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
+  // Result navigation belongs to the search box (combobox); Tab and Shift+Tab move between controls.
+  const onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setActive((i) => Math.min(results.length - 1, i + 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive((i) => Math.max(0, i - 1));
+    } else if (e.key === "Home" && e.ctrlKey) {
+      e.preventDefault();
+      setActive(0);
+    } else if (e.key === "End" && e.ctrlKey) {
+      e.preventDefault();
+      setActive(Math.max(0, results.length - 1));
     } else if (e.key === "Enter" && results[active]) {
       e.preventDefault();
       openResult(results[active]!);
-    } else if (e.key === "Tab" && currentProject) {
-      e.preventDefault();
-      setScope((s) => (s === "project" ? "studio" : "project"));
     }
   };
+  const scopes = currentProject ? (["project", "studio"] as const) : null;
+  const onScopeKeyDown = (e: React.KeyboardEvent) => {
+    if (!scopes || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    const next = scope === "project" ? "studio" : "project";
+    setScope(next);
+    (e.currentTarget.querySelector(`[data-scope="${next}"]`) as HTMLElement | null)?.focus();
+  };
+  const optionId = (r: SearchResultDTO) => `search-result-${r.card.id}`;
+  const showList = Boolean(q.trim()) && results.length > 0;
+  const status = !q.trim() ? "" : results.length === 0 && !server.isFetching ? `No cards match “${q}”.` : results.length ? `${results.length} result${results.length === 1 ? "" : "s"}.` : "";
 
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
@@ -140,7 +160,17 @@ export function SearchDialog({
       <D.Portal>
         <D.Overlay className="fixed inset-0 z-50 bg-overlay data-[state=open]:animate-fade-in" />
         <D.Content
-          onKeyDown={onKeyDown}
+          onOpenAutoFocus={(e) => {
+            // Remember where focus was (opened by a shortcut or button, not a Radix trigger).
+            returnFocus.current = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+            openedResult.current = false;
+            e.preventDefault();
+            inputRef.current?.focus();
+          }}
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            if (!openedResult.current && returnFocus.current?.isConnected) returnFocus.current.focus();
+          }}
           className="fixed left-1/2 top-[10vh] z-50 flex max-h-[70vh] w-[calc(100vw-24px)] max-w-2xl -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border-strong bg-surface-2 shadow-lg outline-none data-[state=open]:animate-pop-in"
         >
           <VisuallyHidden.Root>
@@ -150,25 +180,32 @@ export function SearchDialog({
           <div className="flex items-center gap-2 border-b border-border px-3">
             <Search className="size-4 text-fg-subtle" />
             <input
-              autoFocus
+              ref={inputRef}
               value={q}
               onChange={(e) => setQ(e.target.value)}
+              onKeyDown={onInputKeyDown}
               placeholder={scope === "project" && currentProject ? `Search ${currentProject.name}…` : "Search all projects…"}
-              className="h-12 flex-1 bg-transparent text-[15px] outline-none"
+              className="h-12 min-w-0 flex-1 bg-transparent text-[15px] outline-none"
               aria-label="Search cards"
               role="combobox"
-              aria-expanded
+              aria-autocomplete="list"
+              aria-expanded={showList}
               aria-controls="search-results"
+              aria-activedescendant={showList && results[active] ? optionId(results[active]!) : undefined}
             />
-            {server.isFetching ? <span className="size-3.5 animate-spin rounded-full border-2 border-fg-subtle border-t-transparent" /> : null}
-            {currentProject ? (
-              <div className="flex rounded-md bg-surface-3 p-0.5 text-xs">
-                {(["project", "studio"] as const).map((s) => (
+            {server.isFetching ? <span className="size-3.5 animate-spin rounded-full border-2 border-fg-subtle border-t-transparent" aria-hidden /> : null}
+            {scopes ? (
+              <div role="radiogroup" aria-label="Search scope" onKeyDown={onScopeKeyDown} className="flex shrink-0 rounded-md bg-surface-3 p-0.5 text-xs">
+                {scopes.map((s) => (
                   <button
                     key={s}
                     type="button"
+                    role="radio"
+                    aria-checked={scope === s}
+                    data-scope={s}
+                    tabIndex={scope === s ? 0 : -1}
                     onClick={() => setScope(s)}
-                    className={cn("h-6 rounded px-2 font-medium", scope === s ? "bg-surface-4 text-fg" : "text-fg-muted hover:text-fg")}
+                    className={cn("h-6 rounded px-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent", scope === s ? "bg-surface-4 text-fg" : "text-fg-muted hover:text-fg")}
                   >
                     {s === "project" ? "This project" : "All projects"}
                   </button>
@@ -176,17 +213,22 @@ export function SearchDialog({
               </div>
             ) : null}
           </div>
-          <ul id="search-results" ref={listRef} role="listbox" className="scrollbar-thin flex-1 overflow-y-auto p-1.5">
-            {!q.trim() ? (
-              <li className="px-3 py-8 text-center text-[13px] text-fg-muted">
-                Search titles, descriptions, people, labels, columns and comments. Try <span className="font-mono text-fg">UTD-12</span>.
-              </li>
-            ) : results.length === 0 && !server.isFetching ? (
-              <li className="px-3 py-8 text-center text-[13px] text-fg-muted">No cards match “{q}”.</li>
-            ) : (
+          <p role="status" aria-live="polite" className="sr-only">
+            {status}
+          </p>
+          {!q.trim() ? (
+            <p className="px-3 py-8 text-center text-[13px] text-fg-muted">
+              Search titles, descriptions, people, labels, columns and comments. Try <span className="font-mono text-fg">UTD-12</span>.
+            </p>
+          ) : results.length === 0 && !server.isFetching ? (
+            <p className="px-3 py-8 text-center text-[13px] text-fg-muted">No cards match “{q}”.</p>
+          ) : null}
+          <ul id="search-results" ref={listRef} role="listbox" aria-label="Search results" hidden={!showList} className="scrollbar-thin flex-1 overflow-y-auto p-1.5">
+            {showList ? (
               results.map((r, i) => (
                 <li
                   key={r.card.id}
+                  id={optionId(r)}
                   data-index={i}
                   role="option"
                   aria-selected={i === active}
@@ -220,7 +262,7 @@ export function SearchDialog({
                   <StatePill state={r.card.state} size="sm" />
                 </li>
               ))
-            )}
+            ) : null}
           </ul>
           <footer className="flex items-center gap-3 border-t border-border px-3 py-2 text-[11px] text-fg-subtle">
             <span className="flex items-center gap-1">
@@ -233,11 +275,9 @@ export function SearchDialog({
               </Kbd>
               open
             </span>
-            {currentProject ? (
-              <span className="flex items-center gap-1">
-                <Kbd>Tab</Kbd> switch scope
-              </span>
-            ) : null}
+            <span className="flex items-center gap-1">
+              <Kbd>Esc</Kbd> close
+            </span>
           </footer>
         </D.Content>
       </D.Portal>

@@ -21,6 +21,7 @@ import { useHotkeys } from "@/hooks/use-hotkeys";
 import { CardModal } from "../card/card-modal";
 import type { OpenTarget } from "../schedule/schedule-utils";
 import { useRealtimeProject } from "../realtime";
+import { useTutorial } from "../tutorial/tutorial";
 import { UserAvatar } from "../domain/avatar";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/controls";
@@ -30,11 +31,13 @@ import { BoardContext, pendingCardDrops, type BoardContextValue, type OpenCardOp
 import { BoardHeader } from "./board-header";
 import { CardTile } from "./card-tile";
 import { AddColumn, BoardColumn, type ColumnActions } from "./column";
-import { activeFilterCount, EMPTY_FILTERS, hasAnyFilter, matchesFilters, parseFilters, writeFilters, type BoardFilters } from "./filters";
+import { activeFilterCount, countMyWork, EMPTY_FILTERS, hasAnyFilter, matchesFilters, parseFilters, writeFilters, type BoardFilters } from "./filters";
 import { NotReadyDialog, ProductionBoard, type NotReadyInfo } from "./production-board";
 import { useBoardDnd, type ItemsByColumn } from "./use-board-dnd";
 
 const byPosition = (a: { position: number }, b: { position: number }) => a.position - b.position;
+
+const VIEW_LABELS: Record<BoardViewMode, string> = { CATEGORY: "Categories", PRODUCTION: "Production", TIMELINE: "Timeline", CALENDAR: "Calendar" };
 
 // Timeline and calendar draw "today", date ranges and day labels in the viewer's time zone and
 // locale, so they render in the browser only (the server's clock and zone would differ).
@@ -113,7 +116,10 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
     [pathname],
   );
 
+  const tutorial = useTutorial();
   const closeCard = useCallback(() => {
+    // Back on the board after working in a card: the moment to show how to find your own work.
+    tutorial.trigger("board.my-work");
     if (pushedCard.current) {
       pushedCard.current = false;
       window.history.back();
@@ -123,7 +129,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
     for (const name of ["card", "d", "v", "queue", "action", "comment"]) params.delete(name);
     const query = params.toString();
     window.history.replaceState(null, "", `${pathname}${query ? `?${query}` : ""}`);
-  }, [pathname]);
+  }, [pathname, tutorial]);
 
   // ── Lookups & derived data ─────────────────────────────────────────────────
   const membersById = useMemo(() => new Map(board.members.map((m) => [m.id, m])), [board.members]);
@@ -152,12 +158,45 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
   // ── View: category columns or production stages (remembered per person) ──────
   const view: BoardViewMode = board.prefs.view ?? "CATEGORY";
   const setViewMutation = useRpcMutation("board.setView", { silent: true });
+  // The view is shown at once and saved in the background. If saving fails (and no newer choice
+  // superseded it) the board goes back to the saved view and says so — otherwise the next refresh
+  // would flip it back without explanation.
+  const viewRequest = useRef(0);
+  const viewsPending = useRef(0);
+  const savedView = useRef<BoardViewMode>(view);
+  if (viewsPending.current === 0) savedView.current = view;
+  const showView = useCallback(
+    (v: BoardViewMode) => queryClient.setQueryData<BoardDTO>(boardKey, (old) => (old ? { ...old, prefs: { ...old.prefs, view: v } } : old)),
+    [queryClient, boardKey],
+  );
   const setView = useCallback(
-    (next: BoardViewMode) => {
-      queryClient.setQueryData<BoardDTO>(boardKey, (old) => (old ? { ...old, prefs: { ...old.prefs, view: next } } : old));
-      setViewMutation.mutate({ projectId, boardId, view: next });
+    function choose(next: BoardViewMode) {
+      const request = ++viewRequest.current;
+      viewsPending.current++;
+      showView(next);
+      setViewMutation.mutate(
+        { projectId, boardId, view: next },
+        {
+          onSettled: () => {
+            viewsPending.current--;
+          },
+          onSuccess: () => {
+            savedView.current = next;
+          },
+          onError: (error) => {
+            if (request !== viewRequest.current) return;
+            showView(savedView.current);
+            toast.error(`Couldn't switch to the ${VIEW_LABELS[next]} view`, {
+              description: `${errorMessage(error)} The board stays on ${VIEW_LABELS[savedView.current]}.`,
+              action: { label: "Retry", onClick: () => choose(next) },
+            });
+          },
+        },
+      );
+      if (next === "PRODUCTION") tutorial.trigger("production.stages", { place: "board" });
+      else if (next === "TIMELINE" || next === "CALENDAR") tutorial.trigger("schedule.dates");
     },
-    [queryClient, boardKey, setViewMutation, projectId, boardId],
+    [showView, setViewMutation, projectId, boardId, tutorial],
   );
   const [notReady, setNotReady] = useState<NotReadyInfo | null>(null);
 
@@ -199,7 +238,8 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
     for (const c of scopeCards) counts[c.state] += 1;
     return counts;
   }, [scopeCards]);
-  const mineCount = useMemo(() => scopeCards.filter((c) => c.assigneeIds.includes(board.viewer.userId)).length, [scopeCards, board.viewer.userId]);
+  // Same definition (and scope) as the My tasks filter, so the badge matches what it shows.
+  const mineCount = useMemo(() => countMyWork(scopeCards, board.viewer.userId), [scopeCards, board.viewer.userId]);
 
   const reviewQueue = useMemo(() => {
     const order = new Map(columns.map((c, i) => [c.id, i]));
@@ -229,13 +269,18 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
       const prev = afterId ? cardsById.get(afterId)?.position : null;
       const next = beforeId ? cardsById.get(beforeId)?.position : null;
       const optimistic = positionBetween(prev, next) ?? (prev ?? next ?? 0) + 0.001;
+      const fromColumnId = cardsById.get(cardId)?.columnId;
       await queryClient.cancelQueries({ queryKey: boardKey });
       const snapshot = queryClient.getQueryData<BoardDTO>(boardKey);
       patchCard(cardId, { columnId: toColumnId, position: optimistic });
       moveCardMutation.mutate(
         { cardId, toColumnId, afterCardId: afterId, beforeCardId: beforeId, index },
         {
-          onSuccess: (result) => patchCard(cardId, { columnId: result.columnId, position: result.position }),
+          onSuccess: (result) => {
+            patchCard(cardId, { columnId: result.columnId, position: result.position });
+            // Moving between categories is when "columns aren't status" matters.
+            if (fromColumnId && fromColumnId !== result.columnId) tutorial.trigger("board.status");
+          },
           onError: (error) => {
             if (snapshot) queryClient.setQueryData(boardKey, snapshot);
             toast.error(`Couldn't move the card — it was put back. ${errorMessage(error)}`);
@@ -243,7 +288,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
         },
       );
     },
-    [cardsById, queryClient, boardKey, patchCard, moveCardMutation],
+    [cardsById, queryClient, boardKey, patchCard, moveCardMutation, tutorial],
   );
 
   /** Moves a card between production stages (or reorders inside one). Never touches review state. */
@@ -389,8 +434,16 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
     [board.cards, board.viewer.userId, filters.milestone, filters.mine, patchBoard, projectId, openCard],
   );
 
-  // Column actions
-  const columnUpdate = useRpcMutation("column.update", { onError: refreshBoard });
+  // Column actions. A failed change resyncs from the server only when it's the column's latest
+  // change, so it never undoes a newer one that's still saving (the error toast says what failed).
+  const columnUpdate = useRpcMutation("column.update");
+  const columnRequests = useRef(new Map<string, number>());
+  const nextColumnRequest = (columnId: string) => {
+    const n = (columnRequests.current.get(columnId) ?? 0) + 1;
+    columnRequests.current.set(columnId, n);
+    return n;
+  };
+  const isLatestColumnRequest = (columnId: string, n: number) => columnRequests.current.get(columnId) === n;
   const columnArchive = useRpcMutation("column.archive", { onSuccess: refreshBoard });
   const columnDelete = useRpcMutation("column.delete", { onSuccess: refreshBoard });
   const columnDuplicate = useRpcMutation("column.duplicate", { onSuccess: () => { refreshBoard(); toast.success("Column duplicated."); } });
@@ -400,12 +453,14 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
   const columnActions = useMemo<ColumnActions>(
     () => ({
       rename: (column, name) => {
+        const request = nextColumnRequest(column.id);
         patchBoard((b) => ({ ...b, columns: b.columns.map((c) => (c.id === column.id ? { ...c, name } : c)) }));
-        columnUpdate.mutate({ columnId: column.id, name });
+        columnUpdate.mutate({ columnId: column.id, name }, { onError: () => isLatestColumnRequest(column.id, request) && refreshBoard() });
       },
       update: (column, patch) => {
+        const request = nextColumnRequest(column.id);
         patchBoard((b) => ({ ...b, columns: b.columns.map((c) => (c.id === column.id ? { ...c, ...patch } : c)) }));
-        columnUpdate.mutate({ columnId: column.id, ...patch });
+        columnUpdate.mutate({ columnId: column.id, ...patch }, { onError: () => isLatestColumnRequest(column.id, request) && refreshBoard() });
       },
       archive: (column) => {
         patchBoard((b) => ({ ...b, columns: b.columns.filter((c) => c.id !== column.id), cards: b.cards.filter((c) => c.columnId !== column.id) }));
@@ -422,15 +477,32 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
       remove: (column) => columnDelete.mutate({ columnId: column.id }),
       duplicate: (column, withCards) => columnDuplicate.mutate({ columnId: column.id, withCards }),
       toggleCollapsed: (column) => {
-        const collapsed = board.prefs.collapsedColumnIds.includes(column.id);
-        patchBoard((b) => ({
-          ...b,
-          prefs: {
-            ...b.prefs,
-            collapsedColumnIds: collapsed ? b.prefs.collapsedColumnIds.filter((id) => id !== column.id) : [...b.prefs.collapsedColumnIds, column.id],
-          },
-        }));
-        columnCollapse.mutate({ columnId: column.id, collapsed: !collapsed });
+        const showCollapsed = (collapsed: boolean) =>
+          patchBoard((b) => ({
+            ...b,
+            prefs: {
+              ...b.prefs,
+              collapsedColumnIds: collapsed ? [...new Set([...b.prefs.collapsedColumnIds, column.id])] : b.prefs.collapsedColumnIds.filter((id) => id !== column.id),
+            },
+          }));
+        const collapse = (collapsed: boolean) => {
+          const request = nextColumnRequest(`collapse:${column.id}`);
+          showCollapsed(collapsed);
+          columnCollapse.mutate(
+            { columnId: column.id, collapsed },
+            {
+              onError: (error) => {
+                if (!isLatestColumnRequest(`collapse:${column.id}`, request)) return;
+                showCollapsed(!collapsed);
+                toast.error(`Couldn't ${collapsed ? "collapse" : "expand"} “${column.name}”`, {
+                  description: errorMessage(error),
+                  action: { label: "Retry", onClick: () => collapse(collapsed) },
+                });
+              },
+            },
+          );
+        };
+        collapse(!board.prefs.collapsedColumnIds.includes(column.id));
       },
       createCard,
       move: (column, direction) => {

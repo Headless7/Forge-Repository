@@ -13,6 +13,7 @@ import { cn, formatDateTime, timeAgo } from "@/lib/utils";
 import { displayNameSchema, emailSchema, passwordSchema, usernameSchema } from "@/lib/validation";
 import { UserAvatar } from "../domain/avatar";
 import { Button } from "../ui/button";
+import { useTutorial } from "../tutorial/tutorial";
 import { Skeleton, Switch } from "../ui/controls";
 import { FieldError, Input, Label } from "../ui/input";
 
@@ -187,7 +188,38 @@ export function ProfilePage({ initial }: { initial: Profile }) {
           ))}
         </div>
       </Card>
+
+      <TutorialTipsCard />
     </div>
+  );
+}
+
+/** Turn contextual tips on or off, or see dismissed ones again. */
+function TutorialTipsCard() {
+  const tutorial = useTutorial();
+  if (!tutorial.available) return null;
+  return (
+    <Card title="Tutorial tips" description="Short tips that appear beside a feature the first time you use it. Progress is saved to your account, so each tip appears once on any device.">
+      <div className="flex items-center justify-between gap-4">
+        <label htmlFor="tutorial-tips" className="min-w-0 text-[13px] font-medium">
+          Show tutorial tips
+        </label>
+        <Switch id="tutorial-tips" checked={tutorial.enabled} onCheckedChange={(on) => tutorial.setEnabled(on)} />
+      </div>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+        <p className="min-w-0 flex-1 text-[12.5px] text-fg-muted">Bring back tips you&apos;ve dismissed. Each one appears again the next time you use its feature — nothing opens straight away.</p>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            tutorial.reset();
+            toast.success("Tutorial tips reset. They'll appear again as you use each feature.");
+          }}
+        >
+          Reset tips
+        </Button>
+      </div>
+    </Card>
   );
 }
 

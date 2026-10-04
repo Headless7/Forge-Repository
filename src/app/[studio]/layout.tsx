@@ -11,7 +11,7 @@ export default async function StudioLayout({ children, params }: { children: Rea
   const shell = await loadShell(session, studio);
   if (!shell) notFound();
   return (
-    <AppShell user={shell.user} studio={shell.studio} studios={shell.studios} projects={shell.projects} unreadCount={shell.unreadCount}>
+    <AppShell user={shell.user} studio={shell.studio} studios={shell.studios} projects={shell.projects} unreadCount={shell.unreadCount} tutorial={shell.tutorial}>
       {children}
     </AppShell>
   );

@@ -15,6 +15,7 @@ import { ColumnIcon } from "../domain/column-icon";
 import { DeliverableProgress, ProductionPill } from "../domain/production";
 import { StatePill } from "../domain/state";
 import type { VideoPlayerHandle } from "../media/video-player";
+import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
 import { Kbd, Skeleton } from "../ui/controls";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
@@ -222,6 +223,15 @@ export function CardModal({
     });
   }, [card, projectId, queryClient]);
 
+  // Opening a card is the moment for card-level tips, most important first (one shows, if any).
+  const tutorial = useTutorial();
+  const tipsFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!card || tipsFor.current === card.id) return;
+    tipsFor.current = card.id;
+    tutorial.trigger(["card.workspace", "card.review-decision", "card.resolve-feedback", "card.deliverables", "card.canvas", "card.pending-changes", "production.stages"]);
+  }, [card, tutorial]);
+
   // ── Deliverable scope ──────────────────────────────────────────────────────
   const deliverables = useMemo<DeliverableDTO[]>(() => (card ? card.deliverables.filter((d) => !d.archivedAt) : []), [card]);
   const multi = deliverables.length > 1;
@@ -327,8 +337,10 @@ export function CardModal({
       setActiveId(id);
       const d = id ? deliverables.find((x) => x.id === id) : null;
       writeDeliverableParam(multi && d ? d.number : null);
+      // Opening a deliverable: its review state decides what's worth explaining.
+      if (d) tutorial.trigger(["card.review-decision", "card.resolve-feedback"]);
     },
-    [viewKey, deliverables, multi],
+    [viewKey, deliverables, multi, tutorial],
   );
 
   // Restore where you were in each view (overview canvas/list, each deliverable).
@@ -635,7 +647,11 @@ export function CardModal({
                       </>
                     ) : (
                       <div>
-                        <TitleEditor card={card} />
+                        <TipAnchor tip="card.workspace" facts={{}}>
+                          <div>
+                            <TitleEditor card={card} />
+                          </div>
+                        </TipAnchor>
                         <div className="mt-1.5">{mode === "overview" ? <DeliverableProgress progress={card.progress} detailed className="max-w-xl" /> : <FeedbackSummary />}</div>
                       </div>
                     )}

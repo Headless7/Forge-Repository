@@ -106,17 +106,27 @@ export interface FilterContext {
   labels: Map<string, LabelDTO>;
 }
 
-/** Someone works on the card: as one of its assignees, or on one of its deliverables. */
-function worksOn(card: CardSummaryDTO, userId: string) {
+/**
+ * "Work assigned to me" — the one definition behind the My tasks filter and its count: the person
+ * is one of the card's assignees (who are responsible for deliverables without an owner of their
+ * own), or the owner or a contributor of one of its live deliverables. A card counts once however
+ * many of these apply.
+ */
+export function isMyWork(card: Pick<CardSummaryDTO, "assigneeIds" | "deliverableAssigneeIds">, userId: string) {
   return card.assigneeIds.includes(userId) || card.deliverableAssigneeIds.includes(userId);
 }
 
+/** How many cards are the person's work (each card once). */
+export function countMyWork(cards: ReadonlyArray<Pick<CardSummaryDTO, "assigneeIds" | "deliverableAssigneeIds">>, userId: string) {
+  return cards.filter((c) => isMyWork(c, userId)).length;
+}
+
 export function matchesFilters(card: CardSummaryDTO, f: BoardFilters, ctx: FilterContext): boolean {
-  if (f.mine && !worksOn(card, ctx.userId)) return false;
+  if (f.mine && !isMyWork(card, ctx.userId)) return false;
   if (f.states.length && !f.states.includes(card.state)) return false;
   if (f.categories.length && !f.categories.includes(card.columnId)) return false;
   if (f.stages.length && !f.stages.includes(card.productionStatus)) return false;
-  if (f.assignees.length && !f.assignees.some((id) => worksOn(card, id))) return false;
+  if (f.assignees.length && !f.assignees.some((id) => isMyWork(card, id))) return false;
   if (f.labels.length && !f.labels.some((id) => card.labelIds.includes(id))) return false;
   if (f.priorities.length && !f.priorities.includes(card.priority)) return false;
   if (f.milestone === "none" && card.milestoneId) return false;

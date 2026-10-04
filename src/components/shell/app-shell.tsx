@@ -7,9 +7,11 @@ import { toast } from "sonner";
 import { useHotkeys } from "@/hooks/use-hotkeys";
 import { syncDevicePush } from "@/lib/push-client";
 import { rpc, errorMessage } from "@/lib/rpc-client";
+import type { TutorialStateDTO } from "@/lib/tutorial";
 import type { ProjectListItemDTO, StudioSummaryDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { RealtimeProvider } from "../realtime";
+import { TutorialProvider } from "../tutorial/tutorial";
 import { UploadProvider } from "../upload/upload-manager";
 import { Button } from "../ui/button";
 import { Dialog, SheetContent } from "../ui/dialog";
@@ -81,6 +83,7 @@ export function AppShell({
   studios,
   projects: initialProjects,
   unreadCount: initialUnread,
+  tutorial,
   children,
 }: {
   user: ShellUser;
@@ -88,6 +91,7 @@ export function AppShell({
   studios: StudioSummaryDTO[];
   projects: ProjectListItemDTO[];
   unreadCount: number;
+  tutorial: TutorialStateDTO;
   children: ReactNode;
 }) {
   const params = useParams<{ project?: string }>();
@@ -165,6 +169,7 @@ export function AppShell({
     <ShellContext.Provider value={value}>
       <RealtimeProvider>
         <UploadProvider>
+        <TutorialProvider initial={tutorial}>
         <div className="flex h-dvh overflow-hidden">
           <aside className={cn("hidden shrink-0 transition-[width] duration-200 md:block", collapsed ? "w-14" : "w-60")}>
             <Sidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} {...sidebarProps} />
@@ -199,6 +204,7 @@ export function AppShell({
         <NotificationsSheet open={notificationsOpen} onOpenChange={setNotificationsOpen} />
         <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
         <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} studio={studio} />
+        </TutorialProvider>
         </UploadProvider>
       </RealtimeProvider>
     </ShellContext.Provider>

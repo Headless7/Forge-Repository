@@ -18,6 +18,7 @@ import { Button } from "../ui/button";
 import { Checkbox, Select } from "../ui/controls";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Input, Textarea } from "../ui/input";
+import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Tooltip } from "../ui/menu";
 import type { CanvasActions } from "./deliverable-canvas";
 import { DeliverableWork } from "./deliverable-work";
@@ -244,7 +245,12 @@ function DeliverableRow({ d, index, total, canEdit, onMove }: { d: DeliverableDT
 export function DeliverablesPanel() {
   const { card, deliverables, openDeliverable } = useWorkspace();
   const queryClient = useQueryClient();
-  const [view, setView] = useDeliverableView();
+  const tutorial = useTutorial();
+  const [view, setViewState] = useDeliverableView();
+  const setView = (next: typeof view) => {
+    setViewState(next);
+    if (next === "canvas") tutorial.trigger("card.canvas");
+  };
   const [adding, setAdding] = useState(false);
   const canEdit = card.permissions.canEdit;
   const refresh = () => {
@@ -265,7 +271,11 @@ export function DeliverablesPanel() {
           toast.error(`Couldn't save the layout — ${errorMessage(error)}`);
           refresh();
         }),
-    link: (input) => link.mutateAsync({ cardId: card.id, ...input }).catch(() => {}),
+    link: (input) =>
+      link
+        .mutateAsync({ cardId: card.id, ...input })
+        .then(() => tutorial.trigger("card.canvas"))
+        .catch(() => {}),
     unlink: (linkId) => unlink.mutate({ linkId }),
     reverse: (linkId) => updateLink.mutate({ linkId, reverse: true }),
     setPoints: (linkId, points) => updateLink.mutate({ linkId, ...points }),
@@ -283,9 +293,12 @@ export function DeliverablesPanel() {
   return (
     <section id="deliverables" aria-label="Deliverables" className="grid gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-[14px] font-semibold">Deliverables</h3>
+        <TipAnchor tip="card.deliverables" facts={{ deliverableCount: deliverables.length }}>
+          <h3 className="text-[14px] font-semibold">Deliverables</h3>
+        </TipAnchor>
         <span className="rounded-full bg-surface-4 px-1.5 text-[11px] font-medium text-fg-muted">{deliverables.length}</span>
         <DeliverableProgress progress={card.progress} className="min-w-40 flex-1" detailed />
+        <TipAnchor tip="card.canvas" facts={{ deliverableCount: deliverables.length }}>
         <div role="radiogroup" aria-label="Deliverable view" className="flex h-7 items-center rounded-md border border-border-strong bg-surface-3/60 p-0.5">
           {(
             [
@@ -305,6 +318,7 @@ export function DeliverablesPanel() {
             </button>
           ))}
         </div>
+        </TipAnchor>
         {canEdit ? (
           <Button size="sm" variant="secondary" onClick={() => setAdding(true)}>
             <Plus /> Add deliverable

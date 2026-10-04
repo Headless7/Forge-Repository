@@ -1,4 +1,5 @@
 import { and, asc, count, eq, inArray, isNotNull, isNull, max, ne, sql } from "drizzle-orm";
+import { isBoardIcon } from "@/lib/board-icons";
 import { ROBLOX_TEMPLATE } from "@/lib/column-icons";
 import { permissionsFor, roleHas } from "@/lib/permissions";
 import { POSITION_GAP, positionBetween, resolveInsertIndex, spacedPositions } from "@/lib/positions";
@@ -58,7 +59,7 @@ export function milestoneToDTO(m: typeof milestones.$inferSelect): MilestoneDTO 
 }
 
 export function boardToDTO(b: BoardRow, cardCount = 0): BoardSummaryDTO {
-  return { id: b.id, number: b.number, name: b.name, description: b.description, position: b.position, cards: cardCount };
+  return { id: b.id, number: b.number, name: b.name, description: b.description, icon: b.icon, position: b.position, cards: cardCount };
 }
 
 /** The project's default board: the first active one in switcher order. */
@@ -267,13 +268,13 @@ async function nextBoardNumber(ex: Executor, projectId: string): Promise<number>
 /** Inserts a board (inside the caller's transaction) with the next number, at the end of the switcher. */
 export async function insertBoard(
   ex: Executor,
-  input: { projectId: string; name: string; description?: string; createdById: string | null; position?: number },
+  input: { projectId: string; name: string; description?: string; icon?: string | null; createdById: string | null; position?: number },
 ): Promise<BoardRow> {
   const number = await nextBoardNumber(ex, input.projectId);
   const position = input.position ?? (await boardPositionAt(input.projectId, ex, {}));
   const [row] = await ex
     .insert(boards)
-    .values({ projectId: input.projectId, number, name: input.name.trim() || "Board", description: input.description?.trim() ?? "", position, createdById: input.createdById })
+    .values({ projectId: input.projectId, number, name: input.name.trim() || "Board", description: input.description?.trim() ?? "", icon: isBoardIcon(input.icon) ? input.icon : null, position, createdById: input.createdById })
     .returning();
   return row!;
 }
@@ -331,11 +332,18 @@ export async function createBoard(actor: Actor, input: { projectId: string; name
   return boardToDTO(board);
 }
 
-export async function updateBoard(actor: Actor, input: { boardId: string; name?: string; description?: string }): Promise<BoardSummaryDTO> {
+export async function updateBoard(actor: Actor, input: { boardId: string; name?: string; description?: string; icon?: string | null }): Promise<BoardSummaryDTO> {
   const { board, access } = await loadBoard(actor, input.boardId);
   const patch: Partial<BoardRow> = {};
   if (input.name !== undefined) patch.name = input.name.trim() || board.name;
   if (input.description !== undefined) patch.description = input.description.trim();
+  if (input.icon !== undefined) {
+    // Archived boards are read-only until restored (archived projects are refused by requireProject).
+    if (board.archivedAt) throw invalid("Restore the board before changing its icon.");
+    if (input.icon !== null && !isBoardIcon(input.icon)) throw invalid("Unknown board icon.");
+    patch.icon = input.icon;
+  }
+  if (!Object.keys(patch).length) return boardToDTO(board);
   const updated = await db.transaction(async (tx) => {
     const [row] = await tx.update(boards).set(patch).where(eq(boards.id, board.id)).returning();
     if (patch.name && patch.name !== board.name) {

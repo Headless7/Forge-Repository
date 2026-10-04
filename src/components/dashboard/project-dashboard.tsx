@@ -10,6 +10,7 @@ import type { CardState, DashboardItemDTO, DashboardListKey, DurationStatDTO, Pr
 import { cn, formatShortDate } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { StatePill } from "../domain/state";
+import { TipAnchor, useTipOnOpen } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
 import { Select, Skeleton } from "../ui/controls";
 import { Dialog, DialogContent } from "../ui/dialog";
@@ -296,6 +297,8 @@ export function ProjectDashboard({ projectId, studioSlug, projectSlug, projectNa
   const list = useQuery({ queryKey: ["dashboard-list", filters, drill?.key], queryFn: () => rpc("dashboard.list", { ...filters, key: drill!.key }), enabled: Boolean(drill) });
   const open = (key: DashboardListKey, title: string) => setDrill({ key, title });
   const d = data.data;
+  // Opening the dashboard is opening the feature (once its numbers are there to point at).
+  useTipOnOpen("dashboard.reading", Boolean(d));
 
   const exportSummary = () => {
     if (!d) return;
@@ -382,13 +385,15 @@ export function ProjectDashboard({ projectId, studioSlug, projectSlug, projectNa
             </div>
 
             <Card title="Needs attention" description="Unapproved work, as of now">
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-                <Tile label="Overdue" value={d.risk.overdue} icon={<CircleAlert className="size-3.5 text-danger" />} onClick={() => open("overdue", "Overdue")} />
-                <Tile label="Due in 7 days" value={d.risk.dueSoon} icon={<Clock className="size-3.5 text-warning" />} onClick={() => open("dueSoon", "Due in the next 7 days")} />
-                <Tile label="Blocked" value={d.risk.blocked} icon={<Lock className="size-3.5 text-state-review" />} onClick={() => open("blocked", "Blocked by unfinished work")} />
-                <Tile label="Unassigned" value={d.risk.unassigned} icon={<UserX className="size-3.5 text-fg-muted" />} onClick={() => open("unassigned", "Nobody responsible")} />
-                <Tile label="Stale (14+ days)" value={d.risk.stale} icon={<Link2Off className="size-3.5 text-fg-muted" />} onClick={() => open("stale", "No activity for 14+ days")} />
-              </div>
+              <TipAnchor tip="dashboard.reading" facts={{}}>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                  <Tile label="Overdue" value={d.risk.overdue} icon={<CircleAlert className="size-3.5 text-danger" />} onClick={() => open("overdue", "Overdue")} />
+                  <Tile label="Due in 7 days" value={d.risk.dueSoon} icon={<Clock className="size-3.5 text-warning" />} onClick={() => open("dueSoon", "Due in the next 7 days")} />
+                  <Tile label="Blocked" value={d.risk.blocked} icon={<Lock className="size-3.5 text-state-review" />} onClick={() => open("blocked", "Blocked by unfinished work")} />
+                  <Tile label="Unassigned" value={d.risk.unassigned} icon={<UserX className="size-3.5 text-fg-muted" />} onClick={() => open("unassigned", "Nobody responsible")} />
+                  <Tile label="Stale (14+ days)" value={d.risk.stale} icon={<Link2Off className="size-3.5 text-fg-muted" />} onClick={() => open("stale", "No activity for 14+ days")} />
+                </div>
+              </TipAnchor>
             </Card>
 
             <Card

@@ -80,7 +80,7 @@ export async function listProjects(actor: Actor, studioId: string, includeArchiv
     .groupBy(cards.projectId);
   const countMap = new Map(counts.map((c) => [c.projectId, c]));
   const boardRows = await db
-    .select({ id: boards.id, projectId: boards.projectId, number: boards.number, name: boards.name })
+    .select({ id: boards.id, projectId: boards.projectId, number: boards.number, name: boards.name, icon: boards.icon })
     .from(boards)
     .where(and(inArray(boards.projectId, accessible.map((p) => p.id)), isNull(boards.archivedAt)))
     .orderBy(asc(boards.position), asc(boards.number));

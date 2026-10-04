@@ -30,6 +30,7 @@ import { PRODUCTION_META } from "@/lib/deliverables";
 import type { CardDisplayMode, CardSummaryDTO } from "@/lib/types";
 import { cn, formatDuration } from "@/lib/utils";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
+import { BoardIcon } from "../domain/board-icon";
 import { ColumnIcon } from "../domain/column-icon";
 import { DeliverableProgress, PRODUCTION_COLOR, PRODUCTION_ICONS, PRODUCTION_ORDER, ProductionPill } from "../domain/production";
 import { DueChip, LabelChip, PriorityIcon, STATE_ICONS, StatePill } from "../domain/state";
@@ -192,6 +193,7 @@ function QuickActions({ card, onRename }: { card: CardSummaryDTO; onRename: () =
                 .filter((b) => b.id !== board.boardId)
                 .map((b) => (
                   <DropdownMenuItem key={b.id} onSelect={() => moveCardToBoard(card, b.id)}>
+                    <BoardIcon name={b.icon} />
                     <span className="flex-1 truncate">{b.name}</span>
                   </DropdownMenuItem>
                 ))}

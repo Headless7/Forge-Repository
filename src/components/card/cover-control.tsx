@@ -7,6 +7,7 @@ import type { AttachmentDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/menu";
+import { TipAnchor } from "../tutorial/tutorial";
 import { useUploads } from "../upload/upload-manager";
 import { useWorkspace } from "./workspace-context";
 
@@ -75,6 +76,7 @@ export function CoverControl() {
   };
 
   return (
+    <TipAnchor tip="card.attachments" place="cover" facts={{ place: "cover", canUpload: card.permissions.canUpload, canEdit }}>
     <div className="grid gap-1.5">
       <div className="flex items-center gap-2">
         <Thumb file={card.cover} className="h-12 w-[86px]" />
@@ -152,5 +154,6 @@ export function CoverControl() {
         </div>
       ) : null}
     </div>
+    </TipAnchor>
   );
 }

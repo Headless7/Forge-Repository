@@ -9,6 +9,7 @@ import { timeAgo } from "@/lib/utils";
 import { PRODUCTION_COLOR, PRODUCTION_ICONS, ProductionPill } from "../domain/production";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
+import { TipAnchor } from "../tutorial/tutorial";
 import { Textarea } from "../ui/input";
 import { useWorkspace } from "./workspace-context";
 
@@ -52,9 +53,11 @@ export function ProductionPanel() {
 
   return (
     <section aria-label="Production" className="rounded-xl border border-border bg-surface-2 p-3">
-      <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
-        <Icon className="size-3.5" style={{ color: PRODUCTION_COLOR[status] }} /> Production stage
-      </p>
+      <TipAnchor tip="production.stages" place="card" facts={{ place: "card", relevant: readiness.ready || status !== "TODO" }}>
+        <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
+          <Icon className="size-3.5" style={{ color: PRODUCTION_COLOR[status] }} /> Production stage
+        </p>
+      </TipAnchor>
       <ProductionPill status={status} size="md" pending={readiness.pendingChanges.length > 0} />
       <p className="mt-1.5 text-[12px] text-fg-muted">{PRODUCTION_META[status].description}</p>
       {last && status !== "TODO" ? (
@@ -79,6 +82,7 @@ export function ProductionPanel() {
       ) : null}
 
       {readiness.pendingChanges.length ? (
+        <TipAnchor tip="card.pending-changes" facts={{ pendingCount: readiness.pendingChanges.length, status, canPublish: perms.canPublish }}>
         <div className="mt-2 rounded-md border border-state-review/40 bg-state-review/[0.07] p-2 text-[12px]">
           <p className="font-semibold text-state-review">Changed since it was {PRODUCTION_META[status].label.toLowerCase()}</p>
           <ul className="mt-1 grid gap-1">
@@ -97,6 +101,7 @@ export function ProductionPanel() {
           </ul>
           <p className="mt-1 text-fg-subtle">The recorded revisions above are unchanged. New work is never treated as approved or released.</p>
         </div>
+        </TipAnchor>
       ) : null}
 
       {status === "TODO" ? (

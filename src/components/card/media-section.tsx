@@ -31,6 +31,7 @@ import { CompareView } from "../media/compare-view";
 import { ImageViewer, type ImageMarker } from "../media/image-viewer";
 import { VideoPlayer, type VideoMarker } from "../media/video-player";
 import { Button } from "../ui/button";
+import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Checkbox, EmptyState } from "../ui/controls";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Textarea } from "../ui/input";
@@ -207,6 +208,7 @@ export function FeedbackPanel({
 }) {
   const ws = useScope();
   const { card, scope, pending, setPending, timeline, comments } = ws;
+  const tutorial = useTutorial();
   const [filter, setFilter] = useState<"open" | "resolved" | "all">("all");
   const [kind, setKind] = useState<"FEEDBACK" | "DISCUSSION">("FEEDBACK");
   const [stamp, setStamp] = useState(true);
@@ -269,6 +271,8 @@ export function FeedbackPanel({
       attachmentIds,
     });
     setPending(null);
+    // Having just written one, it's the moment to explain feedback versus comments.
+    tutorial.trigger("card.feedback");
   };
 
   const header = timed ? (
@@ -339,13 +343,24 @@ export function FeedbackPanel({
       </div>
       {card.permissions.canComment ? (
         <div ref={composerWrap} className="border-t border-border p-2">
-          <div className="mb-1.5 flex items-center gap-1 text-[11.5px]">
-            {(["FEEDBACK", "DISCUSSION"] as const).map((k) => (
-              <button key={k} type="button" onClick={() => setKind(k)} aria-pressed={kind === k} className={cn("h-6 rounded-md px-2 font-medium", kind === k ? "bg-surface-4 text-fg" : "text-fg-muted hover:text-fg")}>
-                {k === "FEEDBACK" ? "Feedback (actionable)" : "Comment"}
-              </button>
-            ))}
-          </div>
+          <TipAnchor tip="card.feedback" facts={{ canComment: card.permissions.canComment, media: media?.kind === "IMAGE" ? "image" : timed ? "timed" : "other" }}>
+            <div className="mb-1.5 flex items-center gap-1 text-[11.5px]">
+              {(["FEEDBACK", "DISCUSSION"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => {
+                    setKind(k);
+                    tutorial.trigger("card.feedback");
+                  }}
+                  aria-pressed={kind === k}
+                  className={cn("h-6 rounded-md px-2 font-medium", kind === k ? "bg-surface-4 text-fg" : "text-fg-muted hover:text-fg")}
+                >
+                  {k === "FEEDBACK" ? "Feedback (actionable)" : "Comment"}
+                </button>
+              ))}
+            </div>
+          </TipAnchor>
           <Composer
             members={ws.members}
             card={scope.uploadTarget}
@@ -370,7 +385,13 @@ function stageLabel(kind: AttachmentDTO["kind"]) {
 
 export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: File[]) => void }) {
   const ws = useScope();
-  const { card, scope, multi, versionId, setVersionId, attachmentId, setAttachmentId, activeCommentId, setActiveCommentId, pending, setPending, player, timeline, focusFeedbackComposer } = ws;
+  const { card, scope, multi, versionId, setVersionId: selectVersion, attachmentId, setAttachmentId, activeCommentId, setActiveCommentId, pending, setPending, player, timeline, focusFeedbackComposer } = ws;
+  const tutorial = useTutorial();
+  // Moving between revisions is when "earlier revisions keep their feedback" matters.
+  const setVersionId = (id: string | null) => {
+    selectVersion(id);
+    tutorial.trigger("card.revisions");
+  };
   const [compare, setCompare] = useState(false);
   const [over, setOver] = useState(false);
   // Tracked only while paused (seeks/steps), so playback doesn't re-render the panel every frame.
@@ -481,6 +502,7 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
   return (
     <section id="media" aria-label={current ? stageLabel(current.kind) : "Files"} className="grid gap-2">
       <div className="flex flex-wrap items-center gap-1.5">
+        <TipAnchor tip="card.revisions" facts={{ revisionCount: versions.length }}>
         <div className="flex items-center rounded-lg border border-border-strong bg-surface-2">
           <Tooltip content="Previous revision">
             <button type="button" aria-label="Previous revision" disabled={idx <= 0} onClick={() => setVersionId(versions[idx - 1]!.id)} className="flex size-8 items-center justify-center text-fg-muted hover:text-fg disabled:opacity-30">
@@ -520,6 +542,7 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
             </button>
           </Tooltip>
         </div>
+        </TipAnchor>
         {media.length > 1 ? (
           <div className="scrollbar-none flex max-w-full items-center gap-1 overflow-x-auto" role="tablist" aria-label="Files in this revision">
             {media.map((a) => {

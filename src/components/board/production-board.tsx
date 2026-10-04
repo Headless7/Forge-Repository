@@ -14,6 +14,7 @@ import { Button } from "../ui/button";
 import { Select } from "../ui/controls";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Tooltip } from "../ui/menu";
+import { TipAnchor } from "../tutorial/tutorial";
 import { useBoard } from "./board-context";
 import { CardTile, SortableCard } from "./card-tile";
 import { QuickAdd } from "./quick-add";
@@ -194,10 +195,12 @@ export const ProductionBoard = memo(function ProductionBoard({
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 px-4 pt-3 text-[12px] text-fg-muted">
-        <span>
-          <strong className="text-fg">{done}</strong> of {all} cards completed or published
-          {filtered ? <span className="text-fg-subtle"> · showing {shown}</span> : null}
-        </span>
+        <TipAnchor tip="production.stages" place="board" facts={{ place: "board", relevant: true }}>
+          <span>
+            <strong className="text-fg">{done}</strong> of {all} cards completed or published
+            {filtered ? <span className="text-fg-subtle"> · showing {shown}</span> : null}
+          </span>
+        </TipAnchor>
         <div className="flex h-1.5 w-48 overflow-hidden rounded-full bg-surface-4" role="img" aria-label={`${totals.PUBLISHED} published, ${totals.COMPLETED} completed, ${totals.TODO} to do`}>
           <span style={{ width: `${all ? (totals.PUBLISHED / all) * 100 : 0}%`, backgroundColor: PRODUCTION_COLOR.PUBLISHED }} />
           <span style={{ width: `${all ? (totals.COMPLETED / all) * 100 : 0}%`, backgroundColor: PRODUCTION_COLOR.COMPLETED }} />

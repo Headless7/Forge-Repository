@@ -3,7 +3,7 @@
 import { Pencil, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { useCardMutation } from "@/lib/queries";
-import { RpcError } from "@/lib/rpc-client";
+import { errorMessage, RpcError } from "@/lib/rpc-client";
 import { RichText } from "../comments/rich-text";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/input";
@@ -20,8 +20,11 @@ export function Description() {
   const [draft, setDraft] = useState(card.description);
   const [base, setBase] = useState(card.description);
   const [conflict, setConflict] = useState<string | null>(null);
+  /** Any other failure (permission, validation, server): explained here, the draft kept. */
+  const [failure, setFailure] = useState<string | null>(null);
   const save = useCardMutation("card.update", card.id, card.projectId, {
-    silent: true,
+    silent: true, // explained in the editor (one message, not also a toast)
+    onMutate: () => setFailure(null),
     onSuccess: () => {
       setEditing(false);
       setConflict(null);
@@ -29,6 +32,8 @@ export function Description() {
     onError: (error) => {
       if (error instanceof RpcError && error.code === "CONFLICT") {
         setConflict(String(error.details?.current ?? ""));
+      } else {
+        setFailure(errorMessage(error));
       }
     },
   });
@@ -38,6 +43,7 @@ export function Description() {
     setDraft(card.description);
     setBase(card.description);
     setConflict(null);
+    setFailure(null);
     setEditing(true);
   };
 
@@ -110,7 +116,17 @@ export function Description() {
         }}
         placeholder="Supports **bold**, *italic*, `code`, - lists, links and @mentions"
         className="min-h-32"
+        aria-describedby={failure ? "description-save-error" : undefined}
       />
+      {failure ? (
+        <p id="description-save-error" role="alert" className="mt-2 flex items-start gap-1.5 text-[12.5px] text-danger">
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" /> Couldn&apos;t save the description: {failure} Your text is still here — select Save to try again.
+        </p>
+      ) : save.isPaused ? (
+        <p role="status" className="mt-2 text-[12.5px] text-fg-muted">
+          Waiting for a connection — it will be saved when you&apos;re back online.
+        </p>
+      ) : null}
       <div className="mt-2 flex items-center gap-2">
         <Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate({ cardId: card.id, description: draft, base: { description: base } })}>
           Save

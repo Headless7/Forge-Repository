@@ -34,6 +34,7 @@ import { cn, formatShortDate } from "@/lib/utils";
 import { useRealtimeStatus } from "../realtime";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
 import { Button } from "../ui/button";
+import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Select } from "../ui/controls";
 import { ConfirmDialog } from "../ui/dialog";
 import {
@@ -46,13 +47,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Popover,
+  PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
   Tooltip,
 } from "../ui/menu";
-import { BoardSwitcher, CreateBoardDialog, EditBoardDialog } from "./board-switcher";
+import { useMenuPopover } from "@/hooks/use-menu-popover";
+import { BoardIcon } from "../domain/board-icon";
+import { BoardIconPicker, BoardSwitcher, CreateBoardDialog, EditBoardDialog, useBoardIcon } from "./board-switcher";
 import { FilterPopover } from "./filter-popover";
-import type { BoardFilters } from "./filters";
+import { countMyWork, type BoardFilters } from "./filters";
 
 function Toggle({
   active,
@@ -245,6 +249,8 @@ export function BoardHeader({
   const project = board.project;
   const canManageBoards = board.viewer.permissions.includes("board.manage") && !project.archived;
   const [editingBoard, setEditingBoard] = useState(false);
+  const iconPicker = useMenuPopover();
+  const changeIcon = useBoardIcon(board);
   const [creatingBoard, setCreatingBoard] = useState(false);
   const [archivingBoard, setArchivingBoard] = useState(false);
   const archiveBoard = useRpcMutation("board.archive", {
@@ -259,8 +265,12 @@ export function BoardHeader({
   const milestones = board.milestones.filter((m) => !m.archived);
   const activeMilestone = milestones.find((m) => m.id === filters.milestone);
   const milestoneText = activeMilestone?.name ?? (filters.milestone === "none" ? "No milestone" : "All milestones");
-  const toggleState = (state: CardState) =>
+  const tutorial = useTutorial();
+  const toggleState = (state: CardState) => {
     onFiltersChange({ ...filters, states: filters.states.includes(state) ? filters.states.filter((s) => s !== state) : [...filters.states, state] });
+    tutorial.trigger("board.status");
+  };
+  const worksOnCount = countMyWork(board.cards, board.viewer.userId);
   const canCreate = board.viewer.permissions.includes("card.create") && !project.archived;
 
   return (
@@ -337,50 +347,64 @@ export function BoardHeader({
           ) : null}
         </div>
         <div className="scrollbar-none flex min-w-0 items-center gap-0.5 overflow-x-auto">
-          <Toggle active={filters.mine} onClick={() => onFiltersChange({ ...filters, mine: !filters.mine })} count={mineCount} shortcut="M" icon={<UserRound />} label="My tasks" />
-          <Toggle
-            active={filters.states.includes("NEEDS_REVIEW")}
-            onClick={() => toggleState("NEEDS_REVIEW")}
-            count={stateCounts.NEEDS_REVIEW}
-            tone="bg-state-review/20 text-state-review"
-            shortcut="R"
-            icon={<Eye className="text-state-review" />}
-            label="Needs review"
-          />
-          <Toggle
-            active={filters.states.includes("CHANGES_REQUESTED")}
-            onClick={() => toggleState("CHANGES_REQUESTED")}
-            count={stateCounts.CHANGES_REQUESTED}
-            tone="bg-state-changes/20 text-state-changes"
-            icon={<CircleAlert className="text-state-changes" />}
-            label="Changes requested"
-          />
-          <Toggle
-            active={filters.states.includes("APPROVED")}
-            onClick={() => toggleState("APPROVED")}
-            count={stateCounts.APPROVED}
-            tone="bg-state-approved/20 text-state-approved"
-            icon={<CircleCheck className="text-state-approved" />}
-            label="Approved"
-          />
+          <TipAnchor tip="board.my-work" facts={{ worksOnCount }}>
+            <span className="inline-flex shrink-0">
+              <Toggle active={filters.mine} onClick={() => onFiltersChange({ ...filters, mine: !filters.mine })} count={mineCount} shortcut="M" icon={<UserRound />} label="My tasks" />
+            </span>
+          </TipAnchor>
+          <TipAnchor tip="board.status" facts={{}}>
+            <span role="group" aria-label="Review status filters" className="inline-flex shrink-0 items-center gap-0.5">
+              <Toggle
+                active={filters.states.includes("NEEDS_REVIEW")}
+                onClick={() => toggleState("NEEDS_REVIEW")}
+                count={stateCounts.NEEDS_REVIEW}
+                tone="bg-state-review/20 text-state-review"
+                shortcut="R"
+                icon={<Eye className="text-state-review" />}
+                label="Needs review"
+              />
+              <Toggle
+                active={filters.states.includes("CHANGES_REQUESTED")}
+                onClick={() => toggleState("CHANGES_REQUESTED")}
+                count={stateCounts.CHANGES_REQUESTED}
+                tone="bg-state-changes/20 text-state-changes"
+                icon={<CircleAlert className="text-state-changes" />}
+                label="Changes requested"
+              />
+              <Toggle
+                active={filters.states.includes("APPROVED")}
+                onClick={() => toggleState("APPROVED")}
+                count={stateCounts.APPROVED}
+                tone="bg-state-approved/20 text-state-approved"
+                icon={<CircleCheck className="text-state-approved" />}
+                label="Approved"
+              />
+            </span>
+          </TipAnchor>
         </div>
         <FilterPopover board={board} filters={filters} onChange={onFiltersChange} open={filtersOpen} onOpenChange={onFiltersOpenChange} />
         <span className="mx-0.5 hidden h-5 w-px bg-border md:block" />
         <div className="hidden md:block">
           <MembersPopover board={board} studioSlug={studioSlug} />
         </div>
+        <Popover open={iconPicker.open} onOpenChange={iconPicker.setOpen}>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="icon-sm" variant="ghost" aria-label="Board settings">
-              <Settings />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <PopoverAnchor asChild>
+            <DropdownMenuTrigger asChild>
+              <Button ref={iconPicker.triggerRef} size="icon-sm" variant="ghost" aria-label="Board settings">
+                <Settings />
+              </Button>
+            </DropdownMenuTrigger>
+          </PopoverAnchor>
+          <DropdownMenuContent align="end" className="w-56" onCloseAutoFocus={iconPicker.onMenuCloseAutoFocus}>
             <DropdownMenuLabel className="truncate">{board.board.name}</DropdownMenuLabel>
             {canManageBoards ? (
               <>
                 <DropdownMenuItem onSelect={() => setEditingBoard(true)}>
                   <PencilLine /> Rename or describe board
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={iconPicker.request}>
+                  <BoardIcon name={board.board.icon} /> Change icon
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setCreatingBoard(true)}>
                   <LayoutGrid /> Create board
@@ -421,9 +445,20 @@ export function BoardHeader({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        {canManageBoards ? (
+          <BoardIconPicker
+            board={board}
+            contentProps={iconPicker.contentProps}
+            onPick={(icon) => {
+              iconPicker.setOpen(false);
+              if (icon !== board.board.icon) changeIcon(icon);
+            }}
+          />
+        ) : null}
+        </Popover>
         <AddCardPopover board={board} onCreate={onCreateCard} disabled={!canCreate} />
       </div>
-      <EditBoardDialog open={editingBoard} onOpenChange={setEditingBoard} board={board} />
+      <EditBoardDialog open={editingBoard} onOpenChange={setEditingBoard} board={board} returnFocusRef={iconPicker.triggerRef} />
       <CreateBoardDialog open={creatingBoard} onOpenChange={setCreatingBoard} board={board} studioSlug={studioSlug} />
       <ConfirmDialog
         open={archivingBoard}

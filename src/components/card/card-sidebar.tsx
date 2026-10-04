@@ -2,7 +2,7 @@
 
 import { format } from "date-fns";
 import { Archive, ArchiveRestore, Bell, BellOff, Check, Copy, ExternalLink, Link2, Plus, Trash2, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { LABEL_COLORS } from "@/lib/column-icons";
 import { PRIORITY_META, PRIORITY_ORDER } from "@/lib/card-meta";
@@ -13,6 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useBoard } from "../board/board-context";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
 import { DueChip, LabelChip, PriorityIcon, StatePill } from "../domain/state";
+import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
 import { Select } from "../ui/controls";
 import { ConfirmDialog } from "../ui/dialog";
@@ -39,6 +40,7 @@ function PeoplePicker({
   onToggle,
   emptyLabel,
   filter,
+  onClosed,
 }: {
   selected: string[];
   members: MemberDTO[];
@@ -46,8 +48,11 @@ function PeoplePicker({
   onToggle: (userId: string, add: boolean) => void;
   emptyLabel: string;
   filter?: (m: MemberDTO) => boolean;
+  /** The picker closed; `changed` says whether anyone was added or removed. */
+  onClosed?: (changed: boolean) => void;
 }) {
   const { membersById } = useWorkspace();
+  const changed = useRef(false);
   const people = selected.map((id) => membersById.get(id)).filter((m): m is MemberDTO => Boolean(m));
   const content =
     people.length === 0 ? (
@@ -64,7 +69,13 @@ function PeoplePicker({
     );
   if (!canEdit) return content;
   return (
-    <Popover>
+    <Popover
+      onOpenChange={(open) => {
+        if (open) return;
+        onClosed?.(changed.current);
+        changed.current = false;
+      }}
+    >
       <PopoverTrigger asChild>
         <button type="button" className="-mx-1.5 w-[calc(100%+12px)] rounded-md px-1.5 py-1 text-left hover:bg-surface-3">
           {content}
@@ -76,7 +87,14 @@ function PeoplePicker({
             const on = selected.includes(m.id);
             return (
               <li key={m.id}>
-                <button type="button" onClick={() => onToggle(m.id, !on)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    changed.current = true;
+                    onToggle(m.id, !on);
+                  }}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4"
+                >
                   <UserAvatar user={m} size="xs" online={m.online} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate">{m.displayName}</span>
@@ -150,6 +168,7 @@ export function CardSidebar({ onApprove, onRequestChanges, onSubmit, onUploadVer
   const { board, studioSlug, can } = useBoard();
   const queryClient = useQueryClient();
   const perms = card.permissions;
+  const tutorial = useTutorial();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirmKey, setConfirmKey] = useState("");
   const update = useCardMutation("card.update", card.id, card.projectId);
@@ -212,15 +231,21 @@ export function CardSidebar({ onApprove, onRequestChanges, onSubmit, onUploadVer
       <ProductionPanel />
 
       <section className="rounded-xl border border-border bg-surface-2 px-3 py-1.5">
-        <Row label="Assignees">
-          <PeoplePicker
-            selected={card.assigneeIds}
-            members={perms.canAssign ? members : members.filter((m) => m.id === viewerId)}
-            canEdit={perms.canAssign || perms.canSelfAssign}
-            emptyLabel={perms.canSelfAssign ? "Assign yourself" : "Nobody"}
-            onToggle={(userId, add) => assignees.mutate({ cardId: card.id, ...(add ? { add: [userId] } : { remove: [userId] }) })}
-          />
-        </Row>
+        <TipAnchor tip="card.assignment" facts={{ canAssign: perms.canAssign, multi }}>
+          <div>
+            <Row label="Assignees">
+              <PeoplePicker
+                selected={card.assigneeIds}
+                members={perms.canAssign ? members : members.filter((m) => m.id === viewerId)}
+                canEdit={perms.canAssign || perms.canSelfAssign}
+                emptyLabel={perms.canSelfAssign ? "Assign yourself" : "Nobody"}
+                onToggle={(userId, add) => assignees.mutate({ cardId: card.id, ...(add ? { add: [userId] } : { remove: [userId] }) })}
+                // After assigning (picker closed): who's responsible for what.
+                onClosed={(changedAny) => changedAny && tutorial.trigger("card.assignment")}
+              />
+            </Row>
+          </div>
+        </TipAnchor>
         <Row label="Reviewers">
           <PeoplePicker
             selected={card.reviewerIds}

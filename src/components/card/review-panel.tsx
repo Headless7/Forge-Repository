@@ -7,6 +7,7 @@ import { useCardMutation } from "@/lib/queries";
 import type { CommentDTO, ReviewDTO } from "@/lib/types";
 import { cn, formatTimecode, timeAgo } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
+import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/controls";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
@@ -47,7 +48,8 @@ export function ReviewBanner({
   onNext: () => void;
   decidedInQueue: boolean;
 }) {
-  const { scope, membersById, comments, focusComment, mentionSet } = useWorkspace();
+  const { scope, membersById, comments, focusComment, mentionSet, multi } = useWorkspace();
+  const tutorial = useTutorial();
   if (!scope) return null;
   const feedback = allFeedback(scope.comments);
   const unresolved = feedback.filter((c) => !c.resolvedAt);
@@ -72,6 +74,10 @@ export function ReviewBanner({
     const version = versionOf(review?.versionId ?? null);
     return (
       <section aria-label="Changes requested" className="overflow-hidden rounded-xl border border-state-changes/50 bg-state-changes/[0.07]">
+        <TipAnchor
+          tip="card.resolve-feedback"
+          facts={{ canResolveFeedback: perms.canResolveFeedback, canUpload: perms.canUpload, canSubmit: perms.canSubmit, state: scope.state, unresolved: unresolved.length }}
+        >
         <div className="flex flex-wrap items-center gap-3 border-b border-state-changes/25 px-4 py-2.5">
           <CircleAlert className="size-5 text-state-changes" />
           <div className="min-w-0 flex-1">
@@ -89,6 +95,7 @@ export function ReviewBanner({
             </Button>
           ) : null}
         </div>
+        </TipAnchor>
         {review?.note ? <RichText text={review.note} mentions={mentionSet} className="border-b border-state-changes/15 px-4 py-2 text-fg" /> : null}
         {unresolved.length ? (
           <ul className="divide-y divide-state-changes/10">
@@ -96,7 +103,16 @@ export function ReviewBanner({
               const v = versionOf(c.versionId);
               return (
                 <li key={c.id} className="flex items-start gap-2.5 px-4 py-2">
-                  <Checkbox className="mt-0.5" checked={false} disabled={!perms.canResolveFeedback} onCheckedChange={() => comments.resolve(c.id, true)} aria-label="Mark resolved" />
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={false}
+                    disabled={!perms.canResolveFeedback}
+                    onCheckedChange={() => {
+                      comments.resolve(c.id, true);
+                      tutorial.trigger("card.resolve-feedback");
+                    }}
+                    aria-label="Mark resolved"
+                  />
                   <button type="button" onClick={() => focusComment(c)} className="min-h-6 min-w-0 flex-1 text-left text-[13px] hover:text-fg">
                     {c.annotation?.type === "TIMESTAMP" && c.annotation.timestampMs != null ? (
                       <span className="mr-1.5 rounded bg-state-changes/15 px-1 font-mono text-[11px] font-semibold text-state-changes">{formatTimecode(c.annotation.timestampMs)}</span>
@@ -133,14 +149,16 @@ export function ReviewBanner({
           {submission?.note ? <p className="mt-1 text-[12.5px] text-fg">“{submission.note}”</p> : null}
         </div>
         {perms.canReview ? (
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" className="border-state-changes/60 text-state-changes hover:bg-state-changes/10" onClick={onRequestChanges}>
-              <CircleAlert /> Request changes
-            </Button>
-            <Button size="sm" variant="success" onClick={onApprove}>
-              <Check /> Approve
-            </Button>
-          </div>
+          <TipAnchor tip="card.review-decision" facts={{ canReview: perms.canReview, state: scope.state, deliverableName: multi ? scope.deliverable.name : null }}>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" className="border-state-changes/60 text-state-changes hover:bg-state-changes/10" onClick={onRequestChanges}>
+                <CircleAlert /> Request changes
+              </Button>
+              <Button size="sm" variant="success" onClick={onApprove}>
+                <Check /> Approve
+              </Button>
+            </div>
+          </TipAnchor>
         ) : null}
       </section>
     );
@@ -420,9 +438,11 @@ export function ReviewActions({ onApprove, onRequestChanges, onSubmit, onUploadV
         </>
       ) : null}
       {state !== "NEEDS_REVIEW" && perms.canSubmit ? (
-        <Button variant={state === "APPROVED" || !worksOnCard ? "secondary" : "primary"} onClick={onSubmit}>
-          <Send /> {state === "CHANGES_REQUESTED" ? "Resubmit for review" : "Submit for review"}
-        </Button>
+        <TipAnchor tip="card.upload-vs-submit" facts={{ canSubmit: perms.canSubmit, state }}>
+          <Button variant={state === "APPROVED" || !worksOnCard ? "secondary" : "primary"} onClick={onSubmit}>
+            <Send /> {state === "CHANGES_REQUESTED" ? "Resubmit for review" : "Submit for review"}
+          </Button>
+        </TipAnchor>
       ) : null}
       {state === "NEEDS_REVIEW" && perms.canSubmit && !perms.canReview ? (
         <Button variant="ghost" loading={withdraw.isPending} onClick={() => withdraw.mutate({ deliverableId: scope.deliverable.id })}>

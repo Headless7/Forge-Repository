@@ -102,6 +102,7 @@ export async function previewProjectTemplate(actor: Actor, input: { studioId: st
     boards: boardRows.map((b) => ({
       name: b.name,
       description: b.description,
+      icon: b.icon,
       columns: columnRows.filter((c) => c.boardId === b.id).map((c) => ({ name: c.name, icon: c.icon, color: c.color })),
     })),
     labels: labelRows.map((l) => ({ name: l.name, color: l.color })),
@@ -152,8 +153,9 @@ export async function copyProjectTemplate(
     templatePeople(tx, creator, source),
   ]);
 
-  for (const b of boardRows.length ? boardRows : [{ id: null, name: "Board", description: "" }]) {
-    const board = await insertBoard(tx, { projectId: target.id, name: b.name, description: b.description, createdById: actor.userId });
+  for (const b of boardRows.length ? boardRows : [{ id: null, name: "Board", description: "", icon: null }]) {
+    // Board configuration (name, description, icon, columns) is copied; never its cards.
+    const board = await insertBoard(tx, { projectId: target.id, name: b.name, description: b.description, icon: b.icon, createdById: actor.userId });
     const columns = columnRows.filter((c) => c.boardId === b.id);
     if (columns.length) {
       await tx.insert(boardColumns).values(

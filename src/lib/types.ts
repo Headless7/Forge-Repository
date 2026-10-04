@@ -185,7 +185,7 @@ export interface ViewerDTO {
 /** What creating a project from a template would copy (and leave out). */
 export interface ProjectTemplatePreviewDTO {
   source: { id: string; name: string; icon: string; color: string; key: string };
-  boards: Array<{ name: string; description: string; columns: Array<{ name: string; icon: string | null; color: string | null }> }>;
+  boards: Array<{ name: string; description: string; icon: string | null; columns: Array<{ name: string; icon: string | null; color: string | null }> }>;
   labels: Array<{ name: string; color: string }>;
   settings: {
     visibility: ProjectVisibility;
@@ -362,6 +362,8 @@ export interface BoardSummaryDTO {
   number: number;
   name: string;
   description: string;
+  /** Lucide name (lib/board-icons); null = the default icon. */
+  icon: string | null;
   position: number;
   /** Active cards on the board. */
   cards: number;
@@ -656,7 +658,7 @@ export interface ProjectListItemDTO {
   archived: boolean;
   counts: { cards: number; needsReview: number; changesRequested: number; approved: number; inProgress: number };
   /** Live boards in switcher order (the first is where the project opens). */
-  boards: Array<{ id: string; number: number; name: string }>;
+  boards: Array<{ id: string; number: number; name: string; icon: string | null }>;
   /** The viewer's effective role here allows the producer dashboard (project overrides count). */
   canViewReports: boolean;
 }

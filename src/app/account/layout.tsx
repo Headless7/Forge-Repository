@@ -11,7 +11,7 @@ export default async function AccountLayout({ children }: { children: ReactNode 
   const shell = await loadShell(session, null);
   if (!shell) redirect("/onboarding");
   return (
-    <AppShell user={shell.user} studio={shell.studio} studios={shell.studios} projects={shell.projects} unreadCount={shell.unreadCount}>
+    <AppShell user={shell.user} studio={shell.studio} studios={shell.studios} projects={shell.projects} unreadCount={shell.unreadCount} tutorial={shell.tutorial}>
       <div className="scrollbar-thin h-full overflow-y-auto">
         <div className="mx-auto max-w-3xl px-4 py-8 md:px-8">
           <p className="text-xs text-fg-subtle">

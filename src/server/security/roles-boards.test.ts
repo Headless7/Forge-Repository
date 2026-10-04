@@ -191,8 +191,8 @@ describe("boards", () => {
     await board.setBoardArchived(f.manager.actor, { boardId: old.id, archived: true });
     const listed = (await projects.listProjects(f.manager.actor, f.studioId)).find((x) => x.id === p.id)!;
     expect(listed.boards).toEqual([
-      { id: art.id, number: art.number, name: "Art" },
-      { id: main.id, number: main.number, name: main.name },
+      { id: art.id, number: art.number, name: "Art", icon: null },
+      { id: main.id, number: main.number, name: main.name, icon: null },
     ]);
     expect(listed.canViewReports).toBe(true);
     expect((await projects.listProjects(f.member.actor, f.studioId)).find((x) => x.id === p.id)!.canViewReports).toBe(false);

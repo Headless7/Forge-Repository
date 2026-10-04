@@ -35,6 +35,7 @@ import type { TimelineHandle } from "../card/workspace-context";
 import { PortalContainer, Select } from "../ui/controls";
 import { keyBelongsToControl } from "../ui/keys";
 import { Tooltip } from "../ui/menu";
+import { TipAnchor, useTipOnOpen } from "../tutorial/tutorial";
 import { EffectRuntime, type EffectInfo } from "./effects";
 import { EffectsPanel, ExplorerPanel, FidelityPanel, PropertiesPanel, ResourcesPanel, type ResourceActions } from "./panels";
 import { ResourceStore, type ResolvedResource } from "./resources";
@@ -168,6 +169,8 @@ function IconButton({ label, onClick, active, children, shortcut, disabled }: { 
 
 export default function RobloxViewer(props: ViewerProps) {
   const { manifest, rig, resources, initialMode, timelineRef, onTimelineActive, onPlayingChange, onTimeChange } = props;
+  // The preview opening is the moment to explain inspection, missing resources and fidelity.
+  useTipOnOpen("roblox.preview");
   const container = useRef<HTMLDivElement>(null);
   const canvasHost = useRef<HTMLDivElement>(null);
 
@@ -914,6 +917,7 @@ export default function RobloxViewer(props: ViewerProps) {
           </div>
 
           {/* Camera & scene toolbar */}
+          <TipAnchor tip="roblox.preview" facts={{}}>
           <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg bg-black/55 p-1 backdrop-blur">
             {mode !== "ui" ? (
               <>
@@ -971,6 +975,7 @@ export default function RobloxViewer(props: ViewerProps) {
               </Tooltip>
             ) : null}
           </div>
+          </TipAnchor>
 
           {/* Bottom bars */}
           {mode === "animation" ? (

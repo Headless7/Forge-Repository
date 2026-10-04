@@ -246,3 +246,31 @@ export const calendarFeeds = pgTable(
   },
   (t) => [uniqueIndex("calendar_feeds_token_uq").on(t.tokenHash), uniqueIndex("calendar_feeds_user_uq").on(t.userId)],
 );
+
+/**
+ * Contextual tutorial progress: one row per tip a person has dismissed, so dismissals from several
+ * devices at once can't overwrite each other. `version` only ever grows (a reworded tip keeps its
+ * id and version; a changed workflow bumps the version so it shows again).
+ */
+export const tutorialProgress = pgTable(
+  "tutorial_progress",
+  {
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tipId: text().notNull(),
+    version: integer().notNull().default(1),
+    dismissedAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.tipId] })],
+);
+
+/** Per-person tutorial preference. No row means tips are on. */
+export const tutorialSettings = pgTable("tutorial_settings", {
+  userId: uuid()
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  tipsEnabled: boolean().notNull().default(true),
+  resetAt: tsz(),
+  updatedAt: updatedAt(),
+});

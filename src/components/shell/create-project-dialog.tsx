@@ -13,6 +13,7 @@ import type { ProjectTemplatePreviewDTO } from "@/lib/types";
 import { projectNameSchema } from "@/lib/validation";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
+import { BoardIcon } from "../domain/board-icon";
 import { Button } from "../ui/button";
 import { Checkbox, Select, Skeleton } from "../ui/controls";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
@@ -33,6 +34,7 @@ function TemplatePreview({ preview, included, onToggle }: { preview: ProjectTemp
         <ul className="grid gap-1">
           {preview.boards.map((b, i) => (
             <li key={i} className="rounded-md bg-surface-3/60 px-2 py-1.5">
+              <BoardIcon name={b.icon} className="mr-1.5 inline size-3.5 align-[-2px] text-fg-subtle" />
               <span className="font-medium">{b.name}</span>
               <span className="text-fg-muted"> · {b.columns.length ? b.columns.map((c) => c.name).join(", ") : "no columns"}</span>
             </li>

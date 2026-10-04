@@ -7,6 +7,7 @@ import type { ScheduleDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/menu";
+import { TipAnchor } from "../tutorial/tutorial";
 import { Agenda } from "./agenda";
 import { ScheduleItemDialog, type ScheduleSelection } from "./schedule-item-dialog";
 import { addDays, calendarEntries, dateKey, formatTime, openTargetOf, sameDay, startOfDay, startOfWeek, useBoardSchedule, useStudioSchedule, type CalendarEntry, type OpenTarget } from "./schedule-utils";
@@ -99,7 +100,9 @@ function CalendarGrid({ entries, from, to, mode, onSelect }: { entries: Calendar
   );
 }
 
-function Toolbar({ title, mode, setMode, showStarts, setShowStarts, children, onPrev, onNext, onToday, from, to }: {
+function Toolbar({ title, mode, setMode, showStarts, setShowStarts, children, onPrev, onNext, onToday, from, to, canEditAny, ready }: {
+  canEditAny: boolean;
+  ready: boolean;
   title: string;
   mode: Mode;
   setMode: (m: Mode) => void;
@@ -113,6 +116,7 @@ function Toolbar({ title, mode, setMode, showStarts, setShowStarts, children, on
   to: Date;
 }) {
   return (
+    <TipAnchor tip="schedule.dates" facts={{ view: "calendar", canEditAny, ready }}>
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface/60 px-3 py-1.5">
       <RangeBar inline from={from} to={to} onPrev={onPrev} onNext={onNext} onToday={onToday} />
       <h2 className="sr-only">{title}</h2>
@@ -130,6 +134,7 @@ function Toolbar({ title, mode, setMode, showStarts, setShowStarts, children, on
       <span className="flex-1" />
       {children}
     </div>
+    </TipAnchor>
   );
 }
 
@@ -155,6 +160,8 @@ function CalendarBody({ schedule, entries, state, onOpenCard, toolbarExtra, empt
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Toolbar
+        canEditAny={Boolean(schedule.data?.cards.some((c) => c.canEdit))}
+        ready={Boolean(schedule.data)}
         title={state.title}
         mode={state.mode}
         setMode={state.setMode}

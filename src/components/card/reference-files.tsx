@@ -6,6 +6,7 @@ import { useCardMutation } from "@/lib/queries";
 import { formatBytes, timeAgo } from "@/lib/utils";
 import { Button } from "../ui/button";
 import { Tooltip } from "../ui/menu";
+import { TipAnchor } from "../tutorial/tutorial";
 import { useUploads } from "../upload/upload-manager";
 import { useWorkspace } from "./workspace-context";
 
@@ -21,9 +22,11 @@ export function ReferenceFiles() {
   return (
     <section aria-label="Attachments">
       <div className="mb-1.5 flex items-center justify-between">
-        <h3 className="text-[13px] font-semibold">
-          Attachments {files.length ? <span className="font-normal text-fg-muted">({files.length})</span> : null}
-        </h3>
+        <TipAnchor tip="card.attachments" place="attachments" facts={{ place: "attachments", canUpload: card.permissions.canUpload, canEdit: card.permissions.canEdit }}>
+          <h3 className="text-[13px] font-semibold">
+            Attachments {files.length ? <span className="font-normal text-fg-muted">({files.length})</span> : null}
+          </h3>
+        </TipAnchor>
         {card.permissions.canUpload ? (
           <>
             <Button size="xs" variant="ghost" onClick={() => input.current?.click()}>

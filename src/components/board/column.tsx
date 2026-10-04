@@ -21,10 +21,12 @@ import {
 } from "lucide-react";
 import { memo, useState, type CSSProperties } from "react";
 import { ACCENT_COLORS, COLUMN_ICONS, type ColumnIconName } from "@/lib/column-icons";
+import { useMenuPopover } from "@/hooks/use-menu-popover";
 import { resolveDisplayMode } from "@/lib/card-meta";
 import type { CardDisplayMode, ColumnDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { COLUMN_ICON_COMPONENTS, ColumnIcon } from "../domain/column-icon";
+import { IconGrid } from "../domain/icon-grid";
 import { Button } from "../ui/button";
 import {
   DropdownMenu,
@@ -64,30 +66,15 @@ export interface ColumnActions {
 
 function IconColorPicker({ column, onChange }: { column: ColumnDTO; onChange: ColumnActions["update"] }) {
   return (
-    <div className="w-64">
+    <div className="w-64 max-w-full">
       <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">Icon</p>
-      <div className="grid grid-cols-8 gap-1">
-        {COLUMN_ICONS.map((name) => {
-          const Icon = COLUMN_ICON_COMPONENTS[name];
-          return (
-            <button
-              key={name}
-              type="button"
-              aria-label={name}
-              aria-pressed={column.icon === name}
-              onClick={() => onChange(column, { icon: name })}
-              className={cn("flex size-7 items-center justify-center rounded-md hover:bg-surface-4", column.icon === name && "bg-accent-soft ring-1 ring-accent")}
-            >
-              <Icon className="size-4" style={{ color: column.color ?? undefined }} />
-            </button>
-          );
-        })}
-      </div>
+      <IconGrid label={`${column.name} column icon`} icons={COLUMN_ICONS} components={COLUMN_ICON_COMPONENTS} value={column.icon} color={column.color} onSelect={(icon) => onChange(column, { icon })} />
       <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">Accent</p>
-      <div className="flex flex-wrap gap-1.5">
+      <div role="group" aria-label={`${column.name} column accent colour`} className="flex flex-wrap gap-1.5">
         <button
           type="button"
           aria-label="No accent colour"
+          aria-pressed={!column.color}
           onClick={() => onChange(column, { color: null })}
           className={cn("size-6 rounded-full border border-border-strong bg-surface-3", !column.color && "ring-2 ring-accent ring-offset-2 ring-offset-surface-2")}
         />
@@ -96,6 +83,7 @@ function IconColorPicker({ column, onChange }: { column: ColumnDTO; onChange: Co
             key={color}
             type="button"
             aria-label={`Accent ${color}`}
+            aria-pressed={column.color === color}
             onClick={() => onChange(column, { color })}
             className={cn("size-6 rounded-full", column.color === color && "ring-2 ring-accent ring-offset-2 ring-offset-surface-2")}
             style={{ backgroundColor: color }}
@@ -107,21 +95,21 @@ function IconColorPicker({ column, onChange }: { column: ColumnDTO; onChange: Co
 }
 
 function ColumnMenu({ column, actions, onRename, canManage }: { column: ColumnDTO; actions: ColumnActions; onRename: () => void; canManage: boolean }) {
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const picker = useMenuPopover();
   const { board } = useBoard();
   const order = [...board.columns].sort((a, b) => a.position - b.position).map((c) => c.id);
   const index = order.indexOf(column.id);
   return (
-    <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+    <Popover open={picker.open} onOpenChange={picker.setOpen}>
       <DropdownMenu>
         <PopoverAnchor asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-xs" aria-label={`${column.name} column actions`}>
+            <Button ref={picker.triggerRef} variant="ghost" size="icon-xs" aria-label={`${column.name} column actions`}>
               <Ellipsis />
             </Button>
           </DropdownMenuTrigger>
         </PopoverAnchor>
-        <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuContent align="end" className="w-56" onCloseAutoFocus={picker.onMenuCloseAutoFocus}>
           <DropdownMenuItem onSelect={() => actions.toggleCollapsed(column)}>
             <ChevronsRightLeft /> Collapse column
           </DropdownMenuItem>
@@ -130,7 +118,7 @@ function ColumnMenu({ column, actions, onRename, canManage }: { column: ColumnDT
               <DropdownMenuItem onSelect={onRename}>
                 <Pencil /> Rename
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setPickerOpen(true)}>
+              <DropdownMenuItem onSelect={picker.request}>
                 <Palette /> Icon & colour
               </DropdownMenuItem>
               <DropdownMenuItem disabled={index <= 0} onSelect={() => actions.move(column, -1)}>
@@ -170,7 +158,13 @@ function ColumnMenu({ column, actions, onRename, canManage }: { column: ColumnDT
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
-      <PopoverContent align="end">
+      <PopoverContent
+        align="end"
+        collisionPadding={8}
+        aria-label={`${column.name} icon and colour`}
+        className="max-h-[var(--radix-popover-content-available-height)] max-w-[calc(100vw-16px)] overflow-y-auto overscroll-contain"
+        {...picker.contentProps}
+      >
         <IconColorPicker column={column} onChange={actions.update} />
       </PopoverContent>
     </Popover>
