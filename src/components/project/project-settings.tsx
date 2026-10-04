@@ -18,6 +18,7 @@ import { CreateBoardDialog } from "../board/board-switcher";
 import { UserAvatar } from "../domain/avatar";
 import { BoardIcon } from "../domain/board-icon";
 import { LabelChip } from "../domain/state";
+import { ProjectDiscordFeeds, useDiscordStatus } from "../integrations/discord-settings";
 import { PROJECT_EMOJIS } from "../shell/create-project-dialog";
 import { Button } from "../ui/button";
 import { Checkbox, Select, Switch } from "../ui/controls";
@@ -599,6 +600,8 @@ export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: Bo
   });
   const perms = new Set(board.viewer.permissions);
   const canEdit = perms.has("project.update");
+  const discordStatus = useDiscordStatus(board.project.studioId, perms.has("board.manage"));
+  const showDiscord = perms.has("board.manage") && Boolean(discordStatus.data?.configured);
   const nav = [
     ["general", "General"],
     ["members", "Members & permissions"],
@@ -606,6 +609,7 @@ export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: Bo
     ["workflow", "Board & workflow"],
     ["labels", "Labels"],
     ["milestones", "Milestones"],
+    ...(showDiscord ? [["discord", "Discord feeds"]] : []),
     ["archived", "Archived items"],
     ...(perms.has("project.delete") ? [["danger", "Danger zone"]] : []),
   ];
@@ -635,6 +639,7 @@ export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: Bo
           <Workflow board={board} canEdit={canEdit} />
           <Labels board={board} canEdit={perms.has("label.manage")} />
           <Milestones board={board} canEdit={perms.has("milestone.manage")} />
+          {showDiscord && discordStatus.data ? <ProjectDiscordFeeds board={board} status={discordStatus.data} studioSlug={studioSlug} canManage={!board.project.archived} /> : null}
           <Section id="archived" title="Archived items" description="Restore anything that was archived — boards, columns, cards, deliverables and files.">
             <ArchivedItems projectId={board.project.id} canDelete={perms.has("card.delete")} canRestoreColumns={perms.has("column.manage")} />
           </Section>

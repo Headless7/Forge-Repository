@@ -7,6 +7,7 @@ import { emitNotifications, emitProjectChange } from "../realtime/bus";
 export class Effects {
   private projects = new Map<string, { cardIds: Set<string>; board: boolean }>();
   private notified = new Set<string>();
+  private discordQueued = false;
 
   project(projectId: string, cardIds: Array<string | null | undefined> = [], board = true) {
     const entry = this.projects.get(projectId) ?? { cardIds: new Set<string>(), board: false };
@@ -25,6 +26,12 @@ export class Effects {
     return this;
   }
 
+  /** Discord feed messages were queued with the change. */
+  discord(queued: number | boolean = true) {
+    if (queued) this.discordQueued = true;
+    return this;
+  }
+
   flush(clientId?: string | null) {
     for (const [projectId, entry] of this.projects) {
       emitProjectChange(projectId, [...entry.cardIds], { board: entry.board, clientId });
@@ -34,7 +41,9 @@ export class Effects {
       // Device notifications queued with the change go out now that it has committed.
       void import("./push").then((m) => m.schedulePushDelivery()).catch(() => {});
     }
+    if (this.discordQueued) void import("./discord").then((m) => m.scheduleDiscordDelivery()).catch(() => {});
     this.projects.clear();
     this.notified.clear();
+    this.discordQueued = false;
   }
 }

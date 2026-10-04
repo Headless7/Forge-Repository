@@ -10,6 +10,7 @@ import { useRpcMutation } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
+import { StudioDiscord } from "../integrations/discord-settings";
 import { PROJECT_EMOJIS } from "../shell/create-project-dialog";
 import { ArchivedProjects } from "./archived-projects";
 import { useShell } from "../shell/shell-context";
@@ -39,6 +40,11 @@ const AUDIT_TEXT: Record<string, string> = {
   "invitation.revoked": "revoked an invitation",
   "invitation.accepted": "accepted an invitation",
   "card.deleted": "permanently deleted a card",
+  "discord.connected": "connected Discord",
+  "discord.disconnected": "disconnected Discord",
+  "discord.feed_added": "added a Discord feed",
+  "discord.feed_updated": "changed a Discord feed",
+  "discord.feed_removed": "removed a Discord feed",
 };
 
 function auditDetail(data: Record<string, unknown>) {
@@ -49,6 +55,8 @@ function auditDetail(data: Record<string, unknown>) {
   if (typeof data.from === "string" && typeof data.to === "string") parts.push(`${roleLabel(data.from)} → ${roleLabel(data.to)}`);
   if (typeof data.role === "string" && !data.from) parts.push(roleLabel(data.role).toLowerCase());
   if (data.access === "PROJECTS" && !data.from) parts.push("projects only");
+  if (typeof data.guildName === "string") parts.push(data.guildName);
+  if (typeof data.channel === "string") parts.push(`#${data.channel}`);
   return parts.join(" · ");
 }
 
@@ -71,7 +79,7 @@ export function StudioSettings() {
 
   return (
     <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-3xl gap-6 px-4 py-8 md:px-8">
+      <div className="mx-auto grid max-w-3xl grid-cols-1 gap-6 px-4 py-8 md:px-8">
         <div>
           <p className="text-[12px] text-fg-subtle">{studio.name}</p>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">Studio settings</h1>
@@ -138,6 +146,8 @@ export function StudioSettings() {
             <Skeleton className="mt-4 h-8" />
           )}
         </section>
+
+        <StudioDiscord studioId={studio.id} studioSlug={studio.slug} />
 
         {studio.role === "OWNER" ? <ArchivedProjects studioId={studio.id} /> : null}
 

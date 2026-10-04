@@ -6,7 +6,7 @@ import { createdAt, pk, tsz, updatedAt } from "./columns";
 import { deliverables } from "./deliverables";
 import { comments } from "./feedback";
 import { assetVersions } from "./media";
-import { projects, studios } from "./studio";
+import { boards, projects, studios } from "./studio";
 
 export const notifications = pgTable(
   "notifications",
@@ -274,3 +274,80 @@ export const tutorialSettings = pgTable("tutorial_settings", {
   resetAt: tsz(),
   updatedAt: updatedAt(),
 });
+
+/**
+ * A studio's connected Discord server (one per studio). The Forge bot was added to it through
+ * Discord's install screen by an Admin or Owner. `lostAt`: Discord says the bot is no longer there.
+ */
+export const discordConnections = pgTable(
+  "discord_connections",
+  {
+    studioId: uuid()
+      .primaryKey()
+      .references(() => studios.id, { onDelete: "cascade" }),
+    guildId: text().notNull(),
+    guildName: text().notNull(),
+    guildIcon: text(),
+    connectedById: uuid().references(() => users.id, { onDelete: "set null" }),
+    connectedAt: createdAt(),
+    lostAt: tsz(),
+  },
+  (t) => [index("discord_connections_guild_idx").on(t.guildId)],
+);
+
+/**
+ * A team feed: which of a project's events (all boards, or one) go to which Discord channel.
+ * Private projects only post once someone confirmed who can read the channel.
+ */
+export const discordRoutes = pgTable(
+  "discord_routes",
+  {
+    id: pk(),
+    studioId: uuid()
+      .notNull()
+      .references(() => studios.id, { onDelete: "cascade" }),
+    projectId: uuid()
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** Null: every board of the project. */
+    boardId: uuid().references(() => boards.id, { onDelete: "cascade" }),
+    channelId: text().notNull(),
+    channelName: text().notNull(),
+    events: text().array().notNull(),
+    privateConfirmedAt: tsz(),
+    privateConfirmedById: uuid().references(() => users.id, { onDelete: "set null" }),
+    createdById: uuid().references(() => users.id, { onDelete: "set null" }),
+    lastSentAt: tsz(),
+    lastError: text(),
+    lastErrorAt: tsz(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("discord_routes_project_idx").on(t.projectId), index("discord_routes_studio_idx").on(t.studioId)],
+);
+
+/**
+ * Discord messages waiting to go out (one per feed and event). Queued in the same transaction as
+ * the change they describe; the content is built and access re-checked when it's sent.
+ */
+export const discordDeliveries = pgTable(
+  "discord_deliveries",
+  {
+    id: pk(),
+    routeId: uuid()
+      .notNull()
+      .references(() => discordRoutes.id, { onDelete: "cascade" }),
+    /** What happened (ids and small facts); see services/discord. */
+    event: jsonb().notNull(),
+    /** One message per feed per occurrence (e.g. "review:<id>", "digest:2026-10-05"). */
+    dedupeKey: text().notNull(),
+    status: text({ enum: ["QUEUED", "SENDING", "SENT", "FAILED", "SKIPPED"] }).notNull().default("QUEUED"),
+    attempts: integer().notNull().default(0),
+    nextAttemptAt: tsz().notNull().default(sql`now()`),
+    error: text(),
+    messageId: text(),
+    sentAt: tsz(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("discord_deliveries_route_key_uq").on(t.routeId, t.dedupeKey), index("discord_deliveries_due_idx").on(t.status, t.nextAttemptAt)],
+);

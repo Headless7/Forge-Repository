@@ -11,6 +11,7 @@ import { logActivity } from "./activity";
 import { loadDeliverableFacts } from "./card-dto";
 import { cardNotificationData, watcherIds } from "./cards";
 import type { Actor } from "./context";
+import { queueDiscordEvent } from "./discord";
 import { Effects } from "./effects";
 import { notify } from "./notifications";
 
@@ -158,15 +159,27 @@ export async function moveProduction(
       patch.publishedById = null;
     }
     await tx.update(cards).set(patch).where(eq(cards.id, ctx.card.id));
-    await tx.insert(productionEvents).values({
-      cardId: ctx.card.id,
-      actorId: actor.userId,
-      fromStatus: from,
-      toStatus: to,
-      note: input.note?.trim() ?? "",
-      snapshot,
-      createdAt: at,
-    });
+    const [recorded] = await tx
+      .insert(productionEvents)
+      .values({
+        cardId: ctx.card.id,
+        actorId: actor.userId,
+        fromStatus: from,
+        toStatus: to,
+        note: input.note?.trim() ?? "",
+        snapshot,
+        createdAt: at,
+      })
+      .returning({ id: productionEvents.id });
+    if (to === "COMPLETED" || to === "PUBLISHED") {
+      fx.discord(
+        await queueDiscordEvent(
+          tx,
+          { type: to, projectId: ctx.card.projectId, boardId: ctx.card.boardId, cardId: ctx.card.id, actorId: actor.userId, at: at.toISOString() },
+          `production:${recorded!.id}`,
+        ),
+      );
+    }
     await logActivity(tx, {
       studioId: ctx.access.studioId,
       projectId: ctx.card.projectId,

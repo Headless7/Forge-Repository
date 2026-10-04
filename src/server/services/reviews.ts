@@ -12,6 +12,7 @@ import { loadCardDetail } from "./card-dto";
 import { addWatchers, cardNotificationData, watcherIds } from "./cards";
 import type { Actor } from "./context";
 import { recomputeCardRollup } from "./deliverables";
+import { queueDiscordEvent } from "./discord";
 import { Effects } from "./effects";
 import { listProjectMembers } from "./members-query";
 import { NotificationBatch } from "./notifications";
@@ -111,15 +112,18 @@ export async function submitForReview(
         .set({ status: "IN_REVIEW", submittedAt: at, submittedById: actor.userId, decidedAt: null, decidedById: null })
         .where(eq(assetVersions.id, version.id));
     }
-    await tx.insert(reviews).values({
-      cardId: ctx.card.id,
-      deliverableId: ctx.deliverable.id,
-      versionId: version?.id ?? null,
-      actorId: actor.userId,
-      action: "SUBMITTED",
-      note: input.note?.trim() ?? "",
-      createdAt: at,
-    });
+    const [submitted] = await tx
+      .insert(reviews)
+      .values({
+        cardId: ctx.card.id,
+        deliverableId: ctx.deliverable.id,
+        versionId: version?.id ?? null,
+        actorId: actor.userId,
+        action: "SUBMITTED",
+        note: input.note?.trim() ?? "",
+        createdAt: at,
+      })
+      .returning({ id: reviews.id });
     await setState(tx, ctx, "NEEDS_REVIEW", actor.userId);
     await addWatchers(tx, ctx.card.id, [actor.userId]);
     const deliverableName = await scopeLabel(tx, ctx);
@@ -157,6 +161,13 @@ export async function submitForReview(
       })
       .send(tx);
     fx.notify(notified).card(ctx.card.projectId, ctx.card.id);
+    fx.discord(
+      await queueDiscordEvent(
+        tx,
+        { type: "REVIEW_SUBMITTED", projectId: ctx.card.projectId, boardId: ctx.card.boardId, cardId: ctx.card.id, deliverableId: ctx.deliverable.id, actorId: actor.userId, versionNumber: version?.versionNumber ?? null, resubmission: Boolean(earlier), at: at.toISOString() },
+        `review:${submitted!.id}`,
+      ),
+    );
   });
   fx.flush(actor.clientId);
   return detail(actor, ctx.card.id);
@@ -277,6 +288,13 @@ export async function approve(
       data: { ...data, change: deliverableName ? `approved ${deliverableName}` : "approved it" },
     });
     fx.notify(await batch.send(tx)).card(ctx.card.projectId, ctx.card.id);
+    fx.discord(
+      await queueDiscordEvent(
+        tx,
+        { type: "APPROVED", projectId: ctx.card.projectId, boardId: ctx.card.boardId, cardId: ctx.card.id, deliverableId: ctx.deliverable.id, actorId: actor.userId, versionNumber: version?.versionNumber ?? null, at: now().toISOString() },
+        `review:${review!.id}`,
+      ),
+    );
   });
   fx.flush(actor.clientId);
   return detail(actor, ctx.card.id);
@@ -385,6 +403,13 @@ export async function requestChanges(
       data: { ...data, change: deliverableName ? `requested changes on ${deliverableName}` : "requested changes" },
     });
     fx.notify(await batch.send(tx)).card(ctx.card.projectId, ctx.card.id);
+    fx.discord(
+      await queueDiscordEvent(
+        tx,
+        { type: "CHANGES_REQUESTED", projectId: ctx.card.projectId, boardId: ctx.card.boardId, cardId: ctx.card.id, deliverableId: ctx.deliverable.id, actorId: actor.userId, versionNumber: version?.versionNumber ?? null, at: now().toISOString() },
+        `review:${review!.id}`,
+      ),
+    );
   });
   fx.flush(actor.clientId);
   return detail(actor, ctx.card.id);

@@ -29,6 +29,7 @@ import {
   displayNameSchema,
 } from "@/lib/validation";
 import { BOARD_ICONS } from "@/lib/board-icons";
+import { DISCORD_EVENTS } from "@/lib/discord";
 import { COLUMN_ICONS } from "@/lib/column-icons";
 import * as accounts from "../services/accounts";
 import * as archive from "../services/archive";
@@ -48,6 +49,7 @@ import * as dashboard from "../services/dashboard";
 import * as purge from "../services/purge";
 import * as schedule from "../services/schedule";
 import * as tutorial from "../services/tutorial";
+import * as discord from "../services/discord";
 import * as push from "../services/push";
 import * as projectTemplates from "../services/project-templates";
 import * as projects from "../services/projects";
@@ -890,6 +892,50 @@ export const appRouter = {
   "account.profile": proc({
     input: z.object({}),
     handler: ({ actor }) => accounts.getProfile(actor),
+  }),
+  // ── Discord team feeds (connect: Admins/Owner; feeds: Managers and above) ──
+  "discord.status": proc({
+    input: z.object({ studioId: idSchema }),
+    handler: ({ actor }, i) => discord.discordStatus(actor, i.studioId),
+  }),
+  "discord.disconnect": proc({
+    input: z.object({ studioId: idSchema }),
+    limit: { max: 10, windowMs: 60_000 },
+    handler: ({ actor }, i) => discord.disconnectDiscord(actor, i.studioId),
+  }),
+  "discord.studioFeeds": proc({
+    input: z.object({ studioId: idSchema }),
+    handler: ({ actor }, i) => discord.listStudioFeeds(actor, i.studioId),
+  }),
+  "discord.channels": proc({
+    input: z.object({ projectId: idSchema }),
+    limit: { max: 30, windowMs: 60_000 },
+    handler: ({ actor }, i) => discord.listDiscordChannels(actor, i.projectId),
+  }),
+  "discord.feeds": proc({
+    input: z.object({ projectId: idSchema }),
+    handler: ({ actor }, i) => discord.listProjectFeeds(actor, i.projectId),
+  }),
+  "discord.saveFeed": proc({
+    input: z.object({
+      projectId: idSchema,
+      feedId: idSchema.nullable().optional(),
+      boardId: idSchema.nullable(),
+      channelId: z.string().regex(/^\d{5,25}$/, "Choose a channel."),
+      events: z.array(z.enum(DISCORD_EVENTS)).min(1, "Choose at least one kind of event.").max(DISCORD_EVENTS.length),
+      confirmPrivate: z.boolean().default(false),
+    }),
+    limit: { max: 30, windowMs: 60_000 },
+    handler: ({ actor }, i) => discord.saveDiscordFeed(actor, i),
+  }),
+  "discord.deleteFeed": proc({
+    input: z.object({ feedId: idSchema }),
+    handler: ({ actor }, i) => discord.deleteDiscordFeed(actor, i.feedId),
+  }),
+  "discord.testFeed": proc({
+    input: z.object({ feedId: idSchema }),
+    limit: { max: 10, windowMs: 60_000 },
+    handler: ({ actor }, i) => discord.testDiscordFeed(actor, i.feedId),
   }),
   // ── Contextual tutorial tips (progress is per person, across studios and devices) ──
   "tutorial.get": proc({

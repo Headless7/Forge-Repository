@@ -63,8 +63,16 @@ const schema = z.object({
   VAPID_PRIVATE_KEY: optional,
   VAPID_SUBJECT: optional,
 
+  /**
+   * Discord: the client id/secret also enable "Sign in with Discord". The application id and bot
+   * token let studios connect a Discord server and post team feeds (all four are needed for that).
+   */
   DISCORD_CLIENT_ID: optional,
   DISCORD_CLIENT_SECRET: optional,
+  DISCORD_APPLICATION_ID: optional,
+  DISCORD_BOT_TOKEN: optional,
+  /** Override for tests; defaults to Discord's v10 API. */
+  DISCORD_API_BASE: z.string().url().default("https://discord.com/api/v10"),
   GOOGLE_CLIENT_ID: optional,
   GOOGLE_CLIENT_SECRET: optional,
 
