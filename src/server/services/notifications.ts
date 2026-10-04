@@ -1,4 +1,5 @@
 import { and, count, desc, eq, gt, inArray, isNull, lt, or, type SQL } from "drizzle-orm";
+import { isDiscordDmType } from "@/lib/discord";
 import { channelDefault, NOTIFICATION_TYPES, notificationText, type NotificationChannelId, type NotificationType } from "@/lib/notifications";
 import type { NotificationDTO } from "@/lib/types";
 import { accessibleProjectIds } from "../access";
@@ -10,8 +11,11 @@ import {
   boards,
   cards,
   deliverables,
+  discordDmDeliveries,
+  discordDmRecipients,
   notificationPreferences,
   notifications,
+  oauthAccounts,
   projects,
   pushDeliveries,
   pushSubscriptions,
@@ -23,6 +27,7 @@ import {
 import { appOrigin } from "../env";
 import { invalid } from "../errors";
 import type { Actor } from "./context";
+import { discordDmsConfigured } from "./discord-config";
 import { Effects } from "./effects";
 import { emailDeliveryConfigured, sendEmail } from "./email";
 import { filterProjectMembers } from "./members-query";
@@ -168,6 +173,20 @@ async function liveSubscriptions(ex: Executor, userIds: string[]) {
     .where(and(inArray(pushSubscriptions.userId, userIds), gt(sessions.expiresAt, now())));
 }
 
+/**
+ * People who get Discord direct messages: they connected a Discord account and messaging them
+ * isn't paused (a pause belongs to the account it happened with; a newly connected one starts fresh).
+ */
+async function discordDmUsers(ex: Executor, userIds: string[]): Promise<Set<string>> {
+  if (!userIds.length || !discordDmsConfigured()) return new Set();
+  const rows = await ex
+    .select({ userId: oauthAccounts.userId })
+    .from(oauthAccounts)
+    .leftJoin(discordDmRecipients, and(eq(discordDmRecipients.userId, oauthAccounts.userId), eq(discordDmRecipients.discordUserId, oauthAccounts.providerAccountId)))
+    .where(and(eq(oauthAccounts.provider, "discord"), inArray(oauthAccounts.userId, userIds), isNull(discordDmRecipients.pausedAt)));
+  return new Set(rows.map((r) => r.userId));
+}
+
 // ── Creating notifications ──────────────────────────────────────────────────
 
 /** Queues notification emails in the caller's transaction: they're sent only if it commits. */
@@ -215,7 +234,9 @@ async function queueEmails(ex: Executor, input: NotifyInput, recipients: Array<{
  * own action. Each person's channels are decided independently from their choices for this type:
  *  - in-app: an inbox entry counting towards the unread badge;
  *  - device: a queued push to each of their subscribed devices (even with in-app off);
- *  - email: a queued email, when the server can send email.
+ *  - email: a queued email, when the server can send email;
+ *  - Discord: a queued direct message, for the types in DISCORD_DM_TYPES, to people who connected
+ *    their Discord account (not a per-type choice).
  * One record per person backs all channels, so dedupe keys hold across them. Deliveries are queued
  * in the transaction and sent only after it commits. Returns who was notified on any channel.
  */
@@ -242,14 +263,16 @@ export async function notify(ex: Executor, input: NotifyInput): Promise<string[]
   const on = (userId: string, channel: NotificationChannelId) => choices.get(userId)?.[channel] ?? channelDefault(input.type, channel);
   const devices = pushConfigured() ? await liveSubscriptions(ex, candidates) : [];
   const emailOn = emailDeliveryConfigured();
+  const dms = isDiscordDmType(input.type) ? await discordDmUsers(ex, candidates) : new Set<string>();
   const plan = candidates
     .map((userId) => ({
       userId,
       inbox: on(userId, "IN_APP"),
       devices: on(userId, "PUSH") ? devices.filter((d) => d.userId === userId).map((d) => d.id) : [],
       email: emailOn && on(userId, "EMAIL"),
+      discord: dms.has(userId),
     }))
-    .filter((p) => p.inbox || p.devices.length || p.email);
+    .filter((p) => p.inbox || p.devices.length || p.email || p.discord);
   if (plan.length === 0) return [];
 
   const createdAt = now();
@@ -278,6 +301,8 @@ export async function notify(ex: Executor, input: NotifyInput): Promise<string[]
   const byUser = new Map(plan.map((p) => [p.userId, p]));
   const pushRows = inserted.flatMap((n) => (byUser.get(n.userId)?.devices ?? []).map((subscriptionId) => ({ notificationId: n.id, subscriptionId, userId: n.userId })));
   if (pushRows.length) await ex.insert(pushDeliveries).values(pushRows).onConflictDoNothing();
+  const dmRows = inserted.filter((n) => byUser.get(n.userId)?.discord).map((n) => ({ userId: n.userId, notificationId: n.id, dedupeKey: `notification:${n.id}` }));
+  if (dmRows.length) await ex.insert(discordDmDeliveries).values(dmRows).onConflictDoNothing();
   await queueEmails(
     ex,
     input,

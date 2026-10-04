@@ -40,6 +40,7 @@ export class Effects {
       emitNotifications(this.notified);
       // Device notifications queued with the change go out now that it has committed.
       void import("./push").then((m) => m.schedulePushDelivery()).catch(() => {});
+      void import("./discord-dm").then((m) => m.scheduleDiscordDmDelivery()).catch(() => {});
     }
     if (this.discordQueued) void import("./discord").then((m) => m.scheduleDiscordDelivery()).catch(() => {});
     this.projects.clear();

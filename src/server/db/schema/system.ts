@@ -351,3 +351,48 @@ export const discordDeliveries = pgTable(
   },
   (t) => [uniqueIndex("discord_deliveries_route_key_uq").on(t.routeId, t.dedupeKey), index("discord_deliveries_due_idx").on(t.status, t.nextAttemptAt)],
 );
+
+/**
+ * Discord direct messages, per person: the DM channel Forge opened with their connected Discord
+ * account, and whether messaging them currently works. Discord refuses DMs unless the person shares
+ * a server with the Forge bot and allows DMs from its members; then DMs pause (with the reason)
+ * until a retry or a reconnect succeeds.
+ */
+export const discordDmRecipients = pgTable("discord_dm_recipients", {
+  userId: uuid()
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  /** The Discord account the channel and pause belong to (reset when another account is connected). */
+  discordUserId: text().notNull(),
+  channelId: text(),
+  welcomedAt: tsz(),
+  pausedAt: tsz(),
+  pausedReason: text(),
+  updatedAt: updatedAt(),
+});
+
+/**
+ * Queued direct messages: one per notification (or the welcome after connecting). Content is built
+ * and access re-checked when sent; deadline reminders that are due together go out as one message.
+ */
+export const discordDmDeliveries = pgTable(
+  "discord_dm_deliveries",
+  {
+    id: pk(),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    notificationId: uuid().references(() => notifications.id, { onDelete: "cascade" }),
+    kind: text({ enum: ["NOTIFICATION", "WELCOME"] }).notNull().default("NOTIFICATION"),
+    /** "notification:<id>" or "welcome:<n>". */
+    dedupeKey: text().notNull(),
+    status: text({ enum: ["QUEUED", "SENDING", "SENT", "FAILED", "SKIPPED"] }).notNull().default("QUEUED"),
+    attempts: integer().notNull().default(0),
+    nextAttemptAt: tsz().notNull().default(sql`now()`),
+    error: text(),
+    messageId: text(),
+    sentAt: tsz(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("discord_dm_deliveries_user_key_uq").on(t.userId, t.dedupeKey), index("discord_dm_deliveries_due_idx").on(t.status, t.nextAttemptAt)],
+);

@@ -20,6 +20,7 @@ export async function register() {
   const { processStorageDeletions } = await import("./server/services/purge");
   const { processPushDeliveries } = await import("./server/services/push");
   const { processDiscordDeliveries, runDiscordDueDigests } = await import("./server/services/discord");
+  const { processDiscordDmDeliveries } = await import("./server/services/discord-dm");
 
   const safely = (name: string, fn: () => Promise<unknown>) => () =>
     fn().catch((error) => console.error(`[forge] scheduled job "${name}" failed`, error));
@@ -33,9 +34,11 @@ export async function register() {
   // Device notifications go out right after each event; this catches retries and anything missed.
   setTimeout(safely("push-delivery", () => processPushDeliveries()), 20_000);
   setInterval(safely("push-delivery", () => processPushDeliveries()), 60_000);
-  // Discord feeds: like device notifications, plus the once-a-day deadline summary.
+  // Discord feeds and direct messages: like device notifications, plus the once-a-day deadline summary.
   setTimeout(safely("discord-delivery", () => processDiscordDeliveries()), 25_000);
   setInterval(safely("discord-delivery", () => processDiscordDeliveries()), 60_000);
+  setTimeout(safely("discord-dm-delivery", () => processDiscordDmDeliveries()), 30_000);
+  setInterval(safely("discord-dm-delivery", () => processDiscordDmDeliveries()), 60_000);
   setInterval(safely("discord-digest", () => runDiscordDueDigests()), 5 * 60_000);
   // Roblox assets fetched for previews are freed after 7 days without being requested.
   setTimeout(safely("roblox-cache", evictStaleRobloxAssets), 60_000);

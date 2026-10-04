@@ -25,3 +25,26 @@ export function isDiscordEvent(value: string): value is DiscordEventType {
 
 /** The daily summary goes out at this hour (UTC) or the first check after it. */
 export const DISCORD_DIGEST_HOUR_UTC = 9;
+
+/**
+ * Direct messages: the notifications Forge sends as a Discord DM to everyone who has connected
+ * their Discord account (no per-type settings; disconnecting Discord stops them). Like device
+ * notifications they say who did what, never comment or feedback text.
+ */
+export const DISCORD_DM_TYPES = [
+  "DUE_SOON",
+  "OVERDUE",
+  "REVIEW_REQUESTED",
+  "CHANGES_REQUESTED",
+  "APPROVED",
+  "REVIEWER_ASSIGNED",
+  "ASSIGNED",
+  "UNBLOCKED",
+  "BLOCKED",
+  "MENTIONED",
+  "REPLY",
+] as const;
+
+export function isDiscordDmType(type: string): boolean {
+  return (DISCORD_DM_TYPES as readonly string[]).includes(type);
+}

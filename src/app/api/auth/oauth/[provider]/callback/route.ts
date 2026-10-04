@@ -36,21 +36,36 @@ export async function GET(req: Request, context: { params: Promise<{ provider: s
     return fail("Sign-in expired or was tampered with. Please try again.");
   }
 
+  // Someone already signed in is connecting an account (Account → Security): the outcome is shown
+  // where they started, not on the sign-in page.
+  let connecting = false;
   try {
     const accessToken = await exchangeCode(provider, code, state.verifier);
     const profile = await provider.fetchProfile(accessToken);
     const token = sessionTokenFrom(req);
     const current = token ? await validateSessionToken(token) : null;
+    connecting = Boolean(current);
     const { session, isNew } = await completeOAuth(provider.id, profile, current?.user.id ?? null, {
       ip: clientIp(req),
       userAgent: userAgent(req),
     });
-    const res = NextResponse.redirect(`${appOrigin()}${isNew ? "/onboarding" : state.next}`);
+    const res = NextResponse.redirect(`${appOrigin()}${isNew ? "/onboarding" : connecting ? withParam(state.next, "connected", provider.id) : state.next}`);
     const cookie = sessionCookie(session.token, session.expiresAt);
     res.cookies.set(cookie.name, cookie.value, cookie.options);
     res.cookies.delete({ name: OAUTH_COOKIE, path: "/api/auth/oauth" });
     return res;
   } catch (error) {
-    return fail(error instanceof AppError ? error.message : "Sign-in failed. Please try again.");
+    const message = error instanceof AppError ? error.message : "Sign-in failed. Please try again.";
+    if (!connecting) return fail(message);
+    const res = NextResponse.redirect(`${appOrigin()}${withParam(state.next, "oauthError", message)}`);
+    res.cookies.delete({ name: OAUTH_COOKIE, path: "/api/auth/oauth" });
+    return res;
   }
+}
+
+/** `next` is an app path (checked when the flow started); adds one query parameter to it. */
+function withParam(next: string, key: string, value: string) {
+  const url = new URL(next, appOrigin());
+  url.searchParams.set(key, value.slice(0, 300));
+  return `${url.pathname}${url.search}${url.hash}`;
 }

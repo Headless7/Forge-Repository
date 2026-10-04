@@ -11,6 +11,7 @@ import { renderAvatar } from "../media/process";
 import { enforceSharedRateLimit, sharedRateLimiter } from "../rate-limit";
 import { avatarKey, storage } from "../storage";
 import type { Actor } from "./context";
+import { discordDmStatus, onDiscordAccountUnlinked } from "./discord-dm";
 import { sendEmail } from "./email";
 import { claimKey, findUsableKey, isPlatformAdminEmail } from "./platform";
 import { avatarUrl } from "./users-lookup";
@@ -293,11 +294,31 @@ export async function getProfile(actor: Actor) {
     theme: user.themePreference,
     hasPassword: Boolean(user.passwordHash),
     oauth: linked.map((a) => ({ provider: a.provider, username: a.providerUsername })),
+    discordDms: await discordDmStatus(user.id),
     oauthProviders: {
       discord: Boolean(env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET),
       google: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
     },
   };
+}
+
+/**
+ * Disconnects a sign-in provider. Refused when it's the only way in (no password, no other
+ * provider). Disconnecting Discord also stops Forge's direct messages.
+ */
+export async function disconnectOAuth(actor: Actor, input: { provider: "discord" | "google" }) {
+  const [user] = await db.select({ passwordHash: users.passwordHash }).from(users).where(eq(users.id, actor.userId));
+  if (!user) throw notFound("User");
+  const linked = await db.select().from(oauthAccounts).where(eq(oauthAccounts.userId, actor.userId));
+  const account = linked.find((a) => a.provider === input.provider);
+  if (account) {
+    if (!user.passwordHash && linked.length === 1) {
+      throw invalid(`Set a password first, so you can still sign in without ${input.provider === "discord" ? "Discord" : "Google"}.`);
+    }
+    await db.delete(oauthAccounts).where(eq(oauthAccounts.id, account.id));
+    if (input.provider === "discord") await onDiscordAccountUnlinked(actor.userId);
+  }
+  return getProfile(actor);
 }
 
 export async function updateProfile(

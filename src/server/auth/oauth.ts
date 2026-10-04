@@ -11,6 +11,7 @@ import { appOrigin, env } from "../env";
 import { conflict, forbidden, invalid } from "../errors";
 import { now } from "../clock";
 import { pickAvatarColor, suggestUsername } from "../services/accounts";
+import { onDiscordAccountLinked } from "../services/discord-dm";
 import { hasPendingInvitation, isPlatformAdminEmail } from "../services/platform";
 import { generateToken, hmac, safeEqual } from "./crypto";
 import { createSession, invalidateUserSessions } from "./session";
@@ -198,5 +199,8 @@ export async function completeOAuth(
     isNew = true;
   }
   await db.insert(oauthAccounts).values({ userId, provider: providerId, providerAccountId: profile.id, providerUsername: profile.username });
+  // Connecting Discord also turns on direct messages: start fresh and send a welcome.
+  // Best effort: signing in never fails because the welcome couldn't be queued.
+  if (providerId === "discord") await onDiscordAccountLinked(userId, profile.id).catch((error) => console.error("[discord] couldn't start direct messages", error));
   return { session: await createSession(userId, meta), isNew };
 }

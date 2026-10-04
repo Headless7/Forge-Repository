@@ -50,6 +50,7 @@ import * as purge from "../services/purge";
 import * as schedule from "../services/schedule";
 import * as tutorial from "../services/tutorial";
 import * as discord from "../services/discord";
+import * as discordDm from "../services/discord-dm";
 import * as push from "../services/push";
 import * as projectTemplates from "../services/project-templates";
 import * as projects from "../services/projects";
@@ -892,6 +893,16 @@ export const appRouter = {
   "account.profile": proc({
     input: z.object({}),
     handler: ({ actor }) => accounts.getProfile(actor),
+  }),
+  "account.disconnectAccount": proc({
+    input: z.object({ provider: z.enum(["discord", "google"]) }),
+    limit: { max: 10, windowMs: 60_000 },
+    handler: ({ actor }, i) => accounts.disconnectOAuth(actor, i),
+  }),
+  "account.retryDiscordDms": proc({
+    input: z.object({}),
+    limit: { max: 5, windowMs: 60_000 },
+    handler: ({ actor }) => discordDm.retryDiscordDms(actor),
   }),
   // ── Discord team feeds (connect: Admins/Owner; feeds: Managers and above) ──
   "discord.status": proc({

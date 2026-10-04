@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDiscordMessage, escapeMarkdown, eventSummary, truncate } from "./discord-message";
+import { buildDiscordMessage, dmSentence, escapeMarkdown, eventSummary, truncate } from "./discord-message";
 
 describe("Discord messages", () => {
   it("escape what people typed so it can't format, link or ping", () => {
@@ -21,5 +21,16 @@ describe("Discord messages", () => {
     expect(message.embeds[0]!.description!.length).toBe(4000);
     expect(message.components[0]!.components[0]).toEqual({ type: 2, style: 5, label: "Open in Forge", url: "https://forge.example/s/p/b/1?card=P-1" });
     expect(truncate("abc", 5)).toBe("abc");
+  });
+
+  it("word direct messages without repeating the card, which is the title", () => {
+    const card = { cardKey: "UTD-4", cardTitle: "Sword" };
+    expect(dmSentence("REVIEW_REQUESTED", { ...card, versionNumber: 2, deliverable: "Rig", resubmission: true }, "James")).toBe("**James** resubmitted **V2** of **Rig** for your review.");
+    expect(dmSentence("ASSIGNED", { ...card, role: "contributor" }, "Lena")).toBe("**Lena** made you a contributor to this card.");
+    expect(dmSentence("MENTIONED", card, "*Lena*")).toBe("**\\*Lena\\*** mentioned you in a comment.");
+    expect(dmSentence("OVERDUE", { ...card, dueAt: "2026-10-04T12:00:00.000Z" }, null)).toBe("Was due <t:1791115200:R> (<t:1791115200:f>).");
+    for (const type of ["ASSIGNED", "REVIEWER_ASSIGNED", "REVIEW_REQUESTED", "CHANGES_REQUESTED", "APPROVED", "UNBLOCKED", "BLOCKED", "MENTIONED", "REPLY", "DUE_SOON", "OVERDUE"]) {
+      expect(dmSentence(type, card, "Lena")).not.toMatch(/UTD-4|Sword/);
+    }
   });
 });

@@ -30,7 +30,7 @@ export function discordRedirectUri() {
 
 // ── Discord API ─────────────────────────────────────────────────────────────────────────────
 
-interface ApiResult<T> {
+export interface ApiResult<T> {
   ok: boolean;
   status: number;
   data: T | null;
@@ -40,7 +40,7 @@ interface ApiResult<T> {
   retryAfterMs: number | null;
 }
 
-async function discordApi<T>(path: string, init: { method?: string; body?: unknown; form?: Record<string, string>; basicAuth?: boolean } = {}): Promise<ApiResult<T>> {
+export async function discordApi<T>(path: string, init: { method?: string; body?: unknown; form?: Record<string, string>; basicAuth?: boolean } = {}): Promise<ApiResult<T>> {
   const headers: Record<string, string> = { "User-Agent": "DiscordBot (https://forge.local, 1)" };
   let body: string | undefined;
   if (init.form) {

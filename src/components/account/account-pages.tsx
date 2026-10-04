@@ -1,8 +1,8 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellOff, BellRing, Camera, Laptop, LogOut, MailCheck, MailWarning, Monitor, Moon, Send, Smartphone, Sun, Trash2 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { AlertTriangle, BellOff, BellRing, Camera, Laptop, LogOut, MailCheck, MailWarning, Monitor, Moon, Send, Smartphone, Sun, Trash2 } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { NOTIFICATION_TYPE_META } from "@/lib/notifications";
@@ -15,6 +15,7 @@ import { UserAvatar } from "../domain/avatar";
 import { Button } from "../ui/button";
 import { useTutorial } from "../tutorial/tutorial";
 import { Skeleton, Switch } from "../ui/controls";
+import { ConfirmDialog } from "../ui/dialog";
 import { FieldError, Input, Label } from "../ui/input";
 
 type Profile = RpcOutput<"account.profile">;
@@ -547,19 +548,83 @@ export function SecurityPage({ initial }: { initial: Profile }) {
         )}
       </Card>
 
-      <Card title="Connected accounts" description="Sign in faster with Discord or Google. Accounts are matched by verified email.">
-        <ul className="grid gap-2">
-          {(["discord", "google"] as const).map((provider) => {
-            const linked = profile.oauth.find((o) => o.provider === provider);
-            const available = profile.oauthProviders[provider];
-            return (
-              <li key={provider} className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
-                <span className="text-[13px] font-medium capitalize">
-                  {provider}
+      <ConnectedAccounts profile={profile} />
+    </div>
+  );
+}
+
+const PROVIDER_LABELS = { discord: "Discord", google: "Google" } as const;
+
+/** Sign-in providers. Connecting Discord also turns on Forge's direct messages there. */
+function ConnectedAccounts({ profile }: { profile: Profile }) {
+  const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
+  // Back from connecting an account (?connected=discord or ?oauthError=…): shown once, then the URL is tidied.
+  const [notice, setNotice] = useState<{ tone: "success" | "error"; text: string } | null>(() => {
+    const error = searchParams.get("oauthError");
+    if (error) return { tone: "error", text: error.slice(0, 300) };
+    const connected = searchParams.get("connected");
+    if (connected === "discord") return { tone: "success", text: "Discord connected. Forge sent you a welcome message there." };
+    if (connected === "google") return { tone: "success", text: "Google connected." };
+    return null;
+  });
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const connected = url.searchParams.get("connected");
+    if (!connected && !url.searchParams.has("oauthError")) return;
+    url.searchParams.delete("connected");
+    url.searchParams.delete("oauthError");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    if (connected !== "discord") return;
+    // The welcome message goes out right away; if Discord refuses it, show that here.
+    const timer = setTimeout(() => void queryClient.invalidateQueries({ queryKey: qk.profile() }), 4000);
+    return () => clearTimeout(timer);
+  }, [queryClient]);
+  const [disconnecting, setDisconnecting] = useState<"discord" | "google" | null>(null);
+  const disconnect = useRpcMutation("account.disconnectAccount", {
+    onSuccess: (next, { provider }) => {
+      queryClient.setQueryData(qk.profile(), next);
+      setDisconnecting(null);
+      setNotice(null);
+      toast.success(`${PROVIDER_LABELS[provider]} disconnected.`);
+    },
+  });
+  const retry = useRpcMutation("account.retryDiscordDms", {
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.profile() });
+      toast.success("Forge can message you on Discord again.");
+    },
+    onError: () => void queryClient.invalidateQueries({ queryKey: qk.profile() }),
+  });
+  // Without a password, the last connected account is the only way to sign in.
+  const onlyWayIn = !profile.hasPassword && profile.oauth.length === 1;
+  const dms = profile.discordDms;
+
+  return (
+    <Card title="Connected accounts" description="Sign in faster with Discord or Google. Accounts are matched by verified email.">
+      {notice ? (
+        <p
+          role={notice.tone === "error" ? "alert" : "status"}
+          className={cn("mb-3 rounded-lg border px-3 py-2 text-[12.5px]", notice.tone === "error" ? "border-danger/40 bg-danger/10 text-danger" : "border-state-approved/40 bg-state-approved/10")}
+        >
+          {notice.text}
+        </p>
+      ) : null}
+      <ul className="grid gap-2">
+        {(["discord", "google"] as const).map((provider) => {
+          const linked = profile.oauth.find((o) => o.provider === provider);
+          const available = profile.oauthProviders[provider];
+          return (
+            <li key={provider} className="rounded-lg border border-border px-3 py-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="min-w-0 text-[13px] font-medium">
+                  {PROVIDER_LABELS[provider]}
                   {linked ? <span className="ml-2 font-normal text-fg-muted">connected{linked.username ? ` as ${linked.username}` : ""}</span> : null}
                 </span>
                 {linked ? (
-                  <span className="text-[12px] text-state-approved">Connected</span>
+                  <Button size="xs" variant="ghost" disabled={onlyWayIn} onClick={() => setDisconnecting(provider)}>
+                    Disconnect
+                  </Button>
                 ) : available ? (
                   <Button size="xs" variant="secondary" asChild>
                     <a href={`/api/auth/oauth/${provider}?next=/account/security`}>Connect</a>
@@ -567,11 +632,43 @@ export function SecurityPage({ initial }: { initial: Profile }) {
                 ) : (
                   <span className="text-[12px] text-fg-subtle">Not configured on this server</span>
                 )}
-              </li>
-            );
-          })}
-        </ul>
-      </Card>
-    </div>
+              </div>
+              {provider === "discord" && dms.available && linked && dms.paused ? (
+                <div role="alert" className="mt-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-[12.5px]">
+                  <p className="flex items-start gap-1.5 font-medium">
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" /> Forge can&apos;t send you direct messages
+                  </p>
+                  <p className="mt-0.5 text-fg-muted">{dms.reason}</p>
+                  {dms.servers.length ? <p className="mt-0.5 text-fg-muted">The Forge bot is in: {dms.servers.join(", ")}.</p> : null}
+                  <Button className="mt-2" size="xs" variant="secondary" loading={retry.isPending} onClick={() => retry.mutate({})}>
+                    Try again
+                  </Button>
+                </div>
+              ) : provider === "discord" && dms.available && linked ? (
+                <p className="mt-1 text-[12px] text-fg-muted">
+                  Forge sends you direct messages on Discord when your work is due soon or overdue, about reviews and assignments, and when someone mentions or replies to you.
+                </p>
+              ) : provider === "discord" && dms.available && available ? (
+                <p className="mt-1 text-[12px] text-fg-muted">Connect it to also get direct messages from Forge about your deadlines, reviews and mentions.</p>
+              ) : null}
+              {linked && onlyWayIn ? <p className="mt-1 text-[11.5px] text-fg-subtle">To disconnect, set a password above first, so you can still sign in.</p> : null}
+            </li>
+          );
+        })}
+      </ul>
+      <ConfirmDialog
+        open={Boolean(disconnecting)}
+        onOpenChange={(open) => !open && setDisconnecting(null)}
+        title={`Disconnect ${disconnecting ? PROVIDER_LABELS[disconnecting] : ""}?`}
+        description={
+          disconnecting === "discord"
+            ? "You won't be able to sign in with Discord, and Forge stops sending you direct messages there. You can connect it again any time."
+            : "You won't be able to sign in with Google. You can connect it again any time."
+        }
+        confirmLabel="Disconnect"
+        loading={disconnect.isPending}
+        onConfirm={() => disconnecting && disconnect.mutate({ provider: disconnecting })}
+      />
+    </Card>
   );
 }

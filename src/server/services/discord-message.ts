@@ -7,10 +7,13 @@
 import type { DiscordEventType } from "@/lib/discord";
 
 export interface DiscordEmbed {
+  /** The small line above the title. */
+  author?: { name: string };
   title?: string;
   url?: string;
   description?: string;
   color?: number;
+  fields?: Array<{ name: string; value: string; inline?: boolean }>;
   footer?: { text: string };
   timestamp?: string;
 }
@@ -53,14 +56,22 @@ export function buildDiscordMessage(input: {
   footer: string;
   timestamp?: string;
   buttonLabel?: string;
+  /** Overrides the event's colour (direct messages use their own). */
+  color?: number;
+  /** A short label above the title ("📥 Review requested"). */
+  author?: string;
+  /** Small facts shown under the description (markdown values). */
+  fields?: Array<{ name: string; value: string; inline?: boolean }>;
 }): DiscordMessage {
   return {
     embeds: [
       {
+        ...(input.author ? { author: { name: truncate(input.author, 256) } } : {}),
         title: truncate(input.title, 256),
         url: input.url,
         description: truncate(input.description, 4000),
-        color: DISCORD_COLORS[input.type],
+        color: input.color ?? DISCORD_COLORS[input.type],
+        ...(input.fields?.length ? { fields: input.fields.slice(0, 25).map((f) => ({ name: truncate(f.name, 256), value: truncate(f.value, 1024), ...(f.inline ? { inline: true } : {}) })) } : {}),
         footer: { text: truncate(input.footer, 2048) },
         ...(input.timestamp ? { timestamp: input.timestamp } : {}),
       },
@@ -94,5 +105,74 @@ export function eventSummary(input: {
       return `${who} marked it **Completed**, recording the approved revisions.`;
     case "PUBLISHED":
       return `${who} marked it **Published**. (Forge tracks releases; it doesn't deploy anything.)`;
+  }
+}
+
+// ── Direct messages ─────────────────────────────────────────────────────────────────────────
+
+/** How each kind of direct message looks: the label above the title, its colour and its button. */
+export const DM_STYLES: Record<string, { label: string; color: number; button: string }> = {
+  ASSIGNED: { label: "👤 Assigned to you", color: 0x7c6cf2, button: "Open card" },
+  REVIEWER_ASSIGNED: { label: "🔍 You're the reviewer", color: 0x7c6cf2, button: "Open card" },
+  REVIEW_REQUESTED: { label: "📥 Review requested", color: 0xf5a524, button: "Review in Forge" },
+  CHANGES_REQUESTED: { label: "🔁 Changes requested", color: 0xf0524f, button: "See feedback" },
+  APPROVED: { label: "✅ Approved", color: 0x2ec27e, button: "Open card" },
+  UNBLOCKED: { label: "🟢 Ready to start", color: 0x2ec27e, button: "Open card" },
+  BLOCKED: { label: "⛔ Waiting again", color: 0xf0524f, button: "Open card" },
+  MENTIONED: { label: "💬 You were mentioned", color: 0x5b8def, button: "Open comment" },
+  REPLY: { label: "↩️ New reply", color: 0x5b8def, button: "Open comment" },
+  DUE_SOON: { label: "⏰ Due soon", color: 0xf5a524, button: "Open card" },
+  OVERDUE: { label: "🚨 Overdue", color: 0xf0524f, button: "Open card" },
+};
+export const DM_DEFAULT_STYLE = { label: "🔔 Forge", color: 0x7c6cf2, button: "Open in Forge" };
+
+/** Discord shows <t:…> in each reader's own time zone: "in 5 hours" (R) or a full date (f). */
+export function discordTime(iso: string | null | undefined, style: "R" | "f"): string | null {
+  const ms = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(ms) ? `<t:${Math.floor(ms / 1000)}:${style}>` : null;
+}
+
+/**
+ * The sentence of a direct message. The card is the message's title, so this says what happened
+ * without repeating it: "**James Walker** submitted **V2** of **Rig** for your review."
+ */
+export function dmSentence(type: string, data: Record<string, unknown>, actor: string | null): string {
+  const text = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const who = actor ? `**${escapeMarkdown(actor)}**` : "Someone";
+  const deliverable = text(data.deliverable) ? `**${escapeMarkdown(text(data.deliverable)!)}**` : null;
+  const version = typeof data.versionNumber === "number" && data.versionNumber > 0 ? `**V${data.versionNumber}**` : null;
+  const target = deliverable ?? "this card";
+  const work = [version, deliverable].filter(Boolean).join(" of ") || target;
+  const due = (prefix: string) => {
+    const relative = discordTime(text(data.dueAt), "R");
+    return relative ? `${prefix} ${relative} (${discordTime(text(data.dueAt), "f")}).` : null;
+  };
+  switch (type) {
+    case "ASSIGNED": {
+      const role = data.role === "contributor" ? "a contributor to" : data.role === "reviewer" ? "the reviewer of" : "responsible for";
+      return `${who} made you ${role} ${target}.`;
+    }
+    case "REVIEWER_ASSIGNED":
+      return `${who} made you the reviewer of ${target}.`;
+    case "REVIEW_REQUESTED":
+      return `${who} ${data.resubmission ? "resubmitted" : "submitted"} ${work} for your review.`;
+    case "CHANGES_REQUESTED":
+      return `${who} requested changes on ${work}.`;
+    case "APPROVED":
+      return `${who} approved ${work}.`;
+    case "UNBLOCKED":
+      return `Everything ${target} waits on is approved, so it's ready to start.`;
+    case "BLOCKED":
+      return `${deliverable ?? "This card"} is waiting again: ${text(data.prerequisite) ? `**${escapeMarkdown(text(data.prerequisite)!)}**` : "a prerequisite"} is no longer approved.`;
+    case "MENTIONED":
+      return `${who} mentioned you in a comment.`;
+    case "REPLY":
+      return `${who} replied to you.`;
+    case "DUE_SOON":
+      return due("Due") ?? "Due soon.";
+    case "OVERDUE":
+      return due("Was due") ?? "Overdue.";
+    default:
+      return `${who} updated ${target}.`;
   }
 }
