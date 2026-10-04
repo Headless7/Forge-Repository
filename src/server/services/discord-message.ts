@@ -4,7 +4,7 @@
  * Messages say who did what and link back to Forge; they never include comment or feedback text
  * or files. Mentions are always disabled: a card title like "@everyone" must never ping anyone.
  */
-import type { DiscordEventType } from "@/lib/discord";
+import { DISCORD_EVENT_META, type DiscordEventType } from "@/lib/discord";
 
 export interface DiscordEmbed {
   /** The small line above the title. */
@@ -102,10 +102,27 @@ export function eventSummary(input: {
     case "APPROVED":
       return `${who} approved ${subject}.`;
     case "COMPLETED":
-      return `${who} marked it **Completed**, recording the approved revisions.`;
+      return `${who} marked the card **Completed**.`;
     case "PUBLISHED":
-      return `${who} marked it **Published**. (Forge tracks releases; it doesn't deploy anything.)`;
+      return `${who} marked the card **Published**.`;
   }
+}
+
+/** The label above a feed post's title: "📥 Submitted for review". */
+export function feedLabel(type: DiscordEventType, resubmission = false): string {
+  const meta = DISCORD_EVENT_META[type];
+  return `${meta.emoji} ${type === "REVIEW_SUBMITTED" && resubmission ? "Resubmitted for review" : type === "DUE_DIGEST" ? "Daily deadlines" : meta.label}`;
+}
+
+/** A feed post's button names the next step. */
+export function feedButton(type: DiscordEventType): string {
+  return type === "REVIEW_SUBMITTED" ? "Review in Forge" : type === "CHANGES_REQUESTED" ? "See feedback" : type === "DUE_DIGEST" ? "Open the project" : "Open card";
+}
+
+/** People's names for a post (escaped, never pings): "Lena Fischer, James Walker +2". */
+export function nameList(names: string[], max = 3): string {
+  const shown = names.slice(0, max).map(escapeMarkdown).join(", ");
+  return names.length > max ? `${shown} +${names.length - max}` : shown;
 }
 
 // ── Direct messages ─────────────────────────────────────────────────────────────────────────

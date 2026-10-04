@@ -7,13 +7,13 @@ export const DISCORD_EVENTS = ["REVIEW_SUBMITTED", "CHANGES_REQUESTED", "APPROVE
 
 export type DiscordEventType = (typeof DISCORD_EVENTS)[number];
 
-export const DISCORD_EVENT_META: Record<DiscordEventType, { label: string; hint: string }> = {
-  REVIEW_SUBMITTED: { label: "Submitted for review", hint: "A revision is waiting for a reviewer." },
-  CHANGES_REQUESTED: { label: "Changes requested", hint: "A reviewer sent work back." },
-  APPROVED: { label: "Approved", hint: "A revision was approved." },
-  COMPLETED: { label: "Completed", hint: "A card was marked completed." },
-  PUBLISHED: { label: "Published", hint: "A card was marked published (released)." },
-  DUE_DIGEST: { label: "Daily deadline summary", hint: "Once a day: overdue work and work due in the next two days." },
+export const DISCORD_EVENT_META: Record<DiscordEventType, { label: string; hint: string; emoji: string }> = {
+  REVIEW_SUBMITTED: { label: "Submitted for review", hint: "A revision is waiting for a reviewer.", emoji: "📥" },
+  CHANGES_REQUESTED: { label: "Changes requested", hint: "A reviewer sent work back.", emoji: "🔁" },
+  APPROVED: { label: "Approved", hint: "A revision was approved.", emoji: "✅" },
+  COMPLETED: { label: "Completed", hint: "A card was marked completed.", emoji: "🏁" },
+  PUBLISHED: { label: "Published", hint: "A card was marked published (released).", emoji: "🚀" },
+  DUE_DIGEST: { label: "Daily deadline summary", hint: "Once a day: overdue work and work due in the next two days.", emoji: "📅" },
 };
 
 /** What a new feed gets unless someone changes it. */

@@ -1,18 +1,18 @@
 import "server-only";
 import crypto from "node:crypto";
 import { and, arrayContains, asc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
-import { DISCORD_DIGEST_HOUR_UTC, DISCORD_EVENT_META, isDiscordEvent, type DiscordEventType } from "@/lib/discord";
+import { DISCORD_DIGEST_HOUR_UTC, DISCORD_EVENT_META, DISCORD_EVENTS, isDiscordEvent, type DiscordEventType } from "@/lib/discord";
 import { roleHas } from "@/lib/permissions";
 import { requireProject, requireStudio } from "../access";
 import { hmac, safeEqual } from "../auth/crypto";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
-import { boardColumns, boards, cards, deliverables, discordConnections, discordDeliveries, discordRoutes, projects, studios, users } from "../db/schema";
+import { boardColumns, boards, cardAssignees, cardReviewers, cards, deliverables, discordConnections, discordDeliveries, discordRoutes, projects, studios, users } from "../db/schema";
 import { appOrigin, env } from "../env";
 import { conflict, invalid, notFound } from "../errors";
 import { audit } from "./activity";
 import type { Actor } from "./context";
-import { buildDiscordMessage, escapeMarkdown, eventSummary, type DiscordMessage } from "./discord-message";
+import { buildDiscordMessage, DISCORD_COLORS, discordTime, escapeMarkdown, eventSummary, feedButton, feedLabel, nameList, type DiscordMessage } from "./discord-message";
 
 // ── Configuration ───────────────────────────────────────────────────────────────────────────
 
@@ -374,12 +374,16 @@ export async function testDiscordFeed(actor: Actor, feedId: string): Promise<{ o
   const connection = await activeConnection(db, access.studioId);
   if (!connection) return { ok: false, error: "Discord isn't connected for this studio." };
   const url = `${appOrigin()}/${access.studioSlug}/${access.project.slug}`;
+  const [board] = route.boardId ? await db.select({ name: boards.name }).from(boards).where(eq(boards.id, route.boardId)) : [];
+  const events = DISCORD_EVENTS.filter((e) => route.events.includes(e));
   const message = buildDiscordMessage({
     type: "TEST",
-    title: `${access.project.name} is connected`,
+    author: "🧪 Test message",
+    title: `${access.project.name} posts here`,
     url,
-    description: `Forge will post ${route.events.filter(isDiscordEvent).map((e) => DISCORD_EVENT_META[e].label.toLowerCase()).join(", ")} here.`,
-    footer: "Forge · test message",
+    description: ["This channel gets:", ...events.map((e) => `${DISCORD_EVENT_META[e].emoji} ${DISCORD_EVENT_META[e].label}`)].join("\n"),
+    footer: `${access.project.name} · ${board?.name ?? "all boards"}`,
+    buttonLabel: "Open the project",
   });
   const result = await postMessage(route, message);
   return { ok: result.ok, error: result.ok ? null : result.routeError ?? result.error };
@@ -500,22 +504,40 @@ async function messageFor(route: RouteRow, event: DiscordEventPayload): Promise<
 
   if (!event.cardId) return { skip: "Nothing to show." };
   const [card] = await db
-    .select({ id: cards.id, number: cards.number, title: cards.title, archivedAt: cards.archivedAt, boardNumber: boards.number, boardName: boards.name, boardArchivedAt: boards.archivedAt, columnArchivedAt: boardColumns.archivedAt })
+    .select({ id: cards.id, number: cards.number, title: cards.title, dueAt: cards.dueAt, archivedAt: cards.archivedAt, boardNumber: boards.number, boardName: boards.name, boardArchivedAt: boards.archivedAt, columnArchivedAt: boardColumns.archivedAt })
     .from(cards)
     .innerJoin(boards, eq(boards.id, cards.boardId))
     .innerJoin(boardColumns, eq(boardColumns.id, cards.columnId))
     .where(eq(cards.id, event.cardId));
   if (!card || card.archivedAt || card.boardArchivedAt || card.columnArchivedAt) return { skip: "The card was archived or removed." };
-  const live = await db.select({ id: deliverables.id, name: deliverables.name, number: deliverables.number }).from(deliverables).where(and(eq(deliverables.cardId, card.id), isNull(deliverables.archivedAt)));
+  const live = await db
+    .select({ id: deliverables.id, name: deliverables.name, number: deliverables.number, dueAt: deliverables.dueAt })
+    .from(deliverables)
+    .where(and(eq(deliverables.cardId, card.id), isNull(deliverables.archivedAt)));
   const deliverable = event.deliverableId ? live.find((d) => d.id === event.deliverableId) : undefined;
   if (event.deliverableId && !deliverable) return { skip: "The deliverable was archived or removed." };
   const multi = live.length > 1;
   const [actor] = event.actorId ? await db.select({ name: users.displayName }).from(users).where(eq(users.id, event.actorId)) : [];
   const key = `${project.key}-${card.number}`;
   const url = `${projectLink(project.studioSlug, project.slug)}/b/${card.boardNumber}?card=${encodeURIComponent(key)}${multi && deliverable ? `&d=${deliverable.number}` : ""}`;
+
+  // Who's involved and by when: names only (they never ping), the deadline in each reader's time zone.
+  const fields: Array<{ name: string; value: string; inline: boolean }> = [];
+  const [assigned, reviewing] = await Promise.all([
+    db.select({ name: users.displayName }).from(cardAssignees).innerJoin(users, eq(users.id, cardAssignees.userId)).where(eq(cardAssignees.cardId, card.id)).orderBy(asc(cardAssignees.createdAt)),
+    event.type === "REVIEW_SUBMITTED"
+      ? db.select({ name: users.displayName }).from(cardReviewers).innerJoin(users, eq(users.id, cardReviewers.userId)).where(eq(cardReviewers.cardId, card.id)).orderBy(asc(cardReviewers.createdAt))
+      : Promise.resolve([]),
+  ]);
+  if (assigned.length) fields.push({ name: "Assigned", value: nameList(assigned.map((a) => a.name)), inline: true });
+  if (reviewing.length) fields.push({ name: reviewing.length === 1 ? "Reviewer" : "Reviewers", value: nameList(reviewing.map((r) => r.name)), inline: true });
+  const due = event.type === "COMPLETED" || event.type === "PUBLISHED" ? null : discordTime((deliverable?.dueAt ?? card.dueAt)?.toISOString(), "R");
+  if (due) fields.push({ name: "Due", value: due, inline: true });
+
   return {
     message: buildDiscordMessage({
       type: event.type,
+      author: feedLabel(event.type, event.resubmission),
       title: `${key} ${card.title}${multi && deliverable ? ` · ${deliverable.name}` : ""}`,
       url,
       description: eventSummary({
@@ -525,8 +547,10 @@ async function messageFor(route: RouteRow, event: DiscordEventPayload): Promise<
         deliverable: multi && deliverable ? deliverable.name : null,
         resubmission: event.resubmission,
       }),
+      fields,
       footer: `${project.name} · ${card.boardName}`,
       timestamp: event.at,
+      buttonLabel: feedButton(event.type),
     }),
   };
 }
@@ -539,13 +563,13 @@ async function digestMessage(route: RouteRow, event: DiscordEventPayload, projec
   const liveCard = and(eq(cards.projectId, project.id), isNull(cards.archivedAt), isNull(boards.archivedAt), isNull(boardColumns.archivedAt), route.boardId ? eq(cards.boardId, route.boardId) : sql`true`);
   const [cardRows, deliverableRows] = await Promise.all([
     db
-      .select({ number: cards.number, title: cards.title, dueAt: cards.dueAt, boardNumber: boards.number })
+      .select({ id: cards.id, number: cards.number, title: cards.title, dueAt: cards.dueAt, boardNumber: boards.number })
       .from(cards)
       .innerJoin(boards, eq(boards.id, cards.boardId))
       .innerJoin(boardColumns, eq(boardColumns.id, cards.columnId))
       .where(and(liveCard, isNotNull(cards.dueAt), lte(cards.dueAt, horizon), ne(cards.state, "APPROVED"))),
     db
-      .select({ number: cards.number, title: cards.title, name: deliverables.name, dNumber: deliverables.number, dueAt: deliverables.dueAt, boardNumber: boards.number })
+      .select({ id: cards.id, number: cards.number, title: cards.title, name: deliverables.name, dNumber: deliverables.number, dueAt: deliverables.dueAt, boardNumber: boards.number })
       .from(deliverables)
       .innerJoin(cards, eq(cards.id, deliverables.cardId))
       .innerJoin(boards, eq(boards.id, cards.boardId))
@@ -554,27 +578,39 @@ async function digestMessage(route: RouteRow, event: DiscordEventPayload, projec
   ]);
   const base = projectLink(project.studioSlug, project.slug);
   const items = [
-    ...cardRows.map((c) => ({ due: c.dueAt!, text: `${project.key}-${c.number} ${c.title}`, url: `${base}/b/${c.boardNumber}?card=${project.key}-${c.number}` })),
-    ...deliverableRows.map((d) => ({ due: d.dueAt!, text: `${project.key}-${d.number} ${d.title} · ${d.name}`, url: `${base}/b/${d.boardNumber}?card=${project.key}-${d.number}&d=${d.dNumber}` })),
+    ...cardRows.map((c) => ({ cardId: c.id, due: c.dueAt!, text: `${project.key}-${c.number} ${c.title}`, url: `${base}/b/${c.boardNumber}?card=${project.key}-${c.number}` })),
+    ...deliverableRows.map((d) => ({ cardId: d.id, due: d.dueAt!, text: `${project.key}-${d.number} ${d.title} · ${d.name}`, url: `${base}/b/${d.boardNumber}?card=${project.key}-${d.number}&d=${d.dNumber}` })),
   ].sort((a, b) => a.due.getTime() - b.due.getTime());
   if (!items.length) return { skip: "Nothing overdue or due soon." };
-  const line = (i: (typeof items)[number]) => {
-    const days = Math.round((i.due.getTime() - at.getTime()) / DAY_MS);
-    const when = i.due < at ? `overdue${days <= -1 ? ` by ${-days} day${days === -1 ? "" : "s"}` : ""}` : days <= 0 ? "due today" : days === 1 ? "due tomorrow" : `due in ${days} days`;
-    return `• [${escapeMarkdown(i.text)}](${i.url}) — ${when}`;
-  };
-  const overdue = items.filter((i) => i.due < at).length;
   const shown = items.slice(0, 10);
   const more = items.length - shown.length;
+  // Who's on each card (names only; they never ping).
+  const people = shown.length
+    ? await db
+        .select({ cardId: cardAssignees.cardId, name: users.displayName })
+        .from(cardAssignees)
+        .innerJoin(users, eq(users.id, cardAssignees.userId))
+        .where(inArray(cardAssignees.cardId, [...new Set(shown.map((i) => i.cardId))]))
+        .orderBy(asc(cardAssignees.createdAt))
+    : [];
+  const line = (i: (typeof items)[number]) => {
+    const late = i.due < at;
+    const when = discordTime(i.due.toISOString(), "R");
+    const who = people.filter((p) => p.cardId === i.cardId).map((p) => p.name);
+    return `${late ? "🚨" : "⏰"} [${escapeMarkdown(i.text)}](${i.url}) · ${late ? "was due" : "due"} ${when}${who.length ? ` · ${nameList(who, 2)}` : ""}`;
+  };
+  const overdue = items.filter((i) => i.due < at).length;
   return {
     message: buildDiscordMessage({
       type: "DUE_DIGEST",
+      color: overdue ? DISCORD_COLORS.CHANGES_REQUESTED : DISCORD_COLORS.REVIEW_SUBMITTED,
+      author: feedLabel("DUE_DIGEST"),
       title: `${project.name}: ${overdue ? `${overdue} overdue, ` : ""}${items.length - overdue} due soon`,
       url: base,
       description: [...shown.map(line), ...(more ? [`…and ${more} more in Forge.`] : [])].join("\n"),
-      footer: `${project.name} · daily deadline summary`,
+      footer: `${project.name}${route.boardId ? "" : " · all boards"}`,
       timestamp: event.at,
-      buttonLabel: "Open the project",
+      buttonLabel: feedButton("DUE_DIGEST"),
     }),
   };
 }

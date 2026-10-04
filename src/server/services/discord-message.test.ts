@@ -11,7 +11,7 @@ describe("Discord messages", () => {
   it("describe each event in one line", () => {
     expect(eventSummary({ type: "REVIEW_SUBMITTED", actor: "James", versionNumber: 2, resubmission: true })).toBe("**James** resubmitted **V2** for review.");
     expect(eventSummary({ type: "CHANGES_REQUESTED", actor: "Lena", versionNumber: null, deliverable: "Model" })).toBe("**Lena** requested changes on Model.");
-    expect(eventSummary({ type: "PUBLISHED", actor: null })).toMatch(/^Someone marked it \*\*Published\*\*.*doesn't deploy/);
+    expect(eventSummary({ type: "PUBLISHED", actor: null })).toBe("Someone marked the card **Published**.");
   });
 
   it("disable mentions, link back to Forge and respect Discord's limits", () => {

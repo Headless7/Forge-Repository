@@ -13,7 +13,7 @@ vi.hoisted(() => {
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/server/db";
-import { cards, discordConnections, discordRoutes } from "@/server/db/schema";
+import { cards, discordConnections, discordRoutes, users } from "@/server/db/schema";
 import { expectAppError, pngBuffer, primaryDeliverable, setupStudio, upload, type Fixture } from "@/test/helpers";
 import * as board from "./board";
 import * as cardService from "./cards";
@@ -159,13 +159,20 @@ describe("Discord feeds", () => {
     const [post] = posts();
     expect(post!.path).toBe(`/channels/${REVIEWS}/messages`);
     expect(post!.auth).toBe("Bot test-bot-token");
-    const message = post!.body as { embeds: Array<{ title: string; description: string; url: string }>; allowed_mentions: { parse: unknown[] }; components: unknown[] };
+    const message = post!.body as {
+      embeds: Array<{ author: { name: string }; title: string; description: string; url: string; fields: Array<{ name: string; value: string }> }>;
+      allowed_mentions: { parse: unknown[] };
+      components: unknown[];
+    };
     expect(message.allowed_mentions).toEqual({ parse: [] }); // never pings anyone
+    expect(message.embeds[0]!.author.name).toBe("📥 Submitted for review");
     expect(message.embeds[0]!.title).toContain("Boss **arena**");
     expect(message.embeds[0]!.description).toMatch(/submitted \*\*V1\*\* for review/);
+    const [member] = await db.select({ name: users.displayName }).from(users).where(eq(users.id, f.member.id));
+    expect(message.embeds[0]!.fields).toEqual([{ name: "Assigned", value: member!.name, inline: true }]); // who's on it (no deadline set)
     expect(JSON.stringify(message)).not.toContain("secret note text"); // no comment or note text
     expect(message.embeds[0]!.url).toMatch(new RegExp(`/b/1\\?card=[A-Z0-9]+-${(await db.select().from(cards).where(eq(cards.id, card.id)))[0]!.number}$`));
-    expect(message.components).toEqual([{ type: 1, components: [{ type: 2, style: 5, label: "Open in Forge", url: message.embeds[0]!.url }] }]);
+    expect(message.components).toEqual([{ type: 1, components: [{ type: 2, style: 5, label: "Review in Forge", url: message.embeds[0]!.url }] }]);
 
     await reviews.approve(f.manager.actor, { deliverableId });
     await production.moveProduction(f.manager.actor, { cardId: card.id, status: "COMPLETED" });
@@ -247,15 +254,18 @@ describe("Discord feeds", () => {
     expect(await discord.runDiscordDueDigests(new Date(morning.getTime() + 60 * 60_000))).toBe(0); // once a day
 
     const next = new Date(morning.getTime() + 24 * 60 * 60_000);
-    await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: "Late thing", dueAt: new Date(next.getTime() - 2 * 24 * 60 * 60_000).toISOString() });
+    await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: "Late thing", assigneeIds: [f.member.id], dueAt: new Date(next.getTime() - 2 * 24 * 60 * 60_000).toISOString() });
     await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: "Tomorrow thing", dueAt: new Date(next.getTime() + 24 * 60 * 60_000).toISOString() });
     await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: "Next month", dueAt: new Date(next.getTime() + 30 * 24 * 60 * 60_000).toISOString() });
     expect(await discord.runDiscordDueDigests(next)).toBe(1);
     expect(await discord.processDiscordDeliveries()).toMatchObject({ sent: 1 });
-    const embed = (posts()[0]!.body as { embeds: Array<{ title: string; description: string }> }).embeds[0]!;
+    const embed = (posts()[0]!.body as { embeds: Array<{ author: { name: string }; title: string; description: string }> }).embeds[0]!;
+    const [member] = await db.select({ name: users.displayName }).from(users).where(eq(users.id, f.member.id));
+    expect(embed.author.name).toBe("📅 Daily deadlines");
     expect(embed.title).toMatch(/1 overdue, 1 due soon/);
-    expect(embed.description).toMatch(/Late thing.*overdue by 2 days/);
-    expect(embed.description).toMatch(/Tomorrow thing.*due tomorrow/);
+    // Overdue first; Discord shows the times in each reader's time zone; who's on each card.
+    expect(embed.description.split("\n")[0]).toMatch(new RegExp(`^🚨 \\[.*Late thing\\]\\(.+\\) · was due <t:\\d+:R> · ${member!.name}$`));
+    expect(embed.description.split("\n")[1]).toMatch(/^⏰ \[.*Tomorrow thing\]\(.+\) · due <t:\d+:R>$/);
     expect(embed.description).not.toContain("Next month");
     expect(await discord.discordDeliveriesFor(feed.id)).toHaveLength(2);
   });
