@@ -436,7 +436,7 @@ messages and the slash commands. In the [Developer Portal](https://discord.com/d
 3. **General Information → Interactions Endpoint URL:** `{APP_URL}/api/discord/interactions`
    (deploy first: Discord checks the URL answers correctly when you save it).
 
-On start, a production server registers the commands (`/mywork`, `/reviews`, `/card`, `/due`)
+On start, a production server registers the commands (`/mywork`, `/reviews`, `/card`, `/due`, `/newcard`)
 when they changed and reads the public key that signs Discord's requests (override with
 `DISCORD_PUBLIC_KEY`). Commands work for people who connected Discord in Account → Security,
 act with their own Forge permissions, and only they see the replies.

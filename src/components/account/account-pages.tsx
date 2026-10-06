@@ -647,10 +647,10 @@ function ConnectedAccounts({ profile }: { profile: Profile }) {
                 </div>
               ) : provider === "discord" && dms.available && linked ? (
                 <p className="mt-1 text-[12px] text-fg-muted">
-                  Forge sends you direct messages on Discord when your work is due soon or overdue, about reviews and assignments, and when someone mentions or replies to you. In Discord, <code className="font-mono">/mywork</code>, <code className="font-mono">/reviews</code>, <code className="font-mono">/card</code> and <code className="font-mono">/due</code> show your work and let you act on it — only you see the replies.
+                  Forge sends you direct messages on Discord when your work is due soon or overdue, about reviews and assignments, and when someone mentions or replies to you. In Discord, <code className="font-mono">/mywork</code>, <code className="font-mono">/reviews</code>, <code className="font-mono">/card</code> and <code className="font-mono">/due</code> show your work and let you act on it, and <code className="font-mono">/newcard</code> creates a card — only you see the replies.
                 </p>
               ) : provider === "discord" && dms.available && available ? (
-                <p className="mt-1 text-[12px] text-fg-muted">Connect it to also get direct messages from Forge about your deadlines, reviews and mentions, and to use Forge&apos;s commands in Discord (/mywork, /reviews, /card, /due).</p>
+                <p className="mt-1 text-[12px] text-fg-muted">Connect it to also get direct messages from Forge about your deadlines, reviews and mentions, and to use Forge&apos;s commands in Discord (/mywork, /reviews, /card, /due, /newcard).</p>
               ) : null}
               {linked && onlyWayIn ? <p className="mt-1 text-[11.5px] text-fg-subtle">To disconnect, set a password above first, so you can still sign in.</p> : null}
             </li>

@@ -1,14 +1,18 @@
 /**
- * Discord slash commands: /mywork, /reviews, /card and /due. Each runs as the Forge account the
- * person linked with "Connect Discord", with exactly the access and permissions they have in Forge,
- * and every reply is visible only to them. Actions (approve, request changes, submit for review,
- * mark completed or published) go through the same services as the app, after a confirmation step,
- * and are checked again on every click.
+ * Discord slash commands: /mywork, /reviews, /card, /due and /newcard. Each runs as the Forge account
+ * the person linked with "Connect Discord", with exactly the access and permissions they have in
+ * Forge, and every reply is visible only to them. Actions (approve, request changes, submit for
+ * review, mark completed or published, create a card) go through the same services as the app; the
+ * one-click ones ask to confirm first, and every click is checked again.
+ *
+ * Replies use Discord's layout components: a coloured panel with a heading, rows grouped by what
+ * needs doing and a View button on each. Like feeds and direct messages they carry names, states
+ * and links, never files.
  */
 import "server-only";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { roleHas } from "@/lib/permissions";
-import type { CardDetailDTO, CardState, ProductionStatus } from "@/lib/types";
+import type { CardDetailDTO, CardState, Priority, ProductionStatus } from "@/lib/types";
 import { accessibleProjectIds, getProjectAccess, requireCard, requireDeliverable, type ProjectAccess } from "../access";
 import { db } from "../db";
 import { assetVersions, boardColumns, boards, cardReviewers, cards, deliverables, discordConnections, oauthAccounts, studioMembers, studios, users } from "../db/schema";
@@ -16,10 +20,12 @@ import { appOrigin, env } from "../env";
 import { AppError } from "../errors";
 import { enforceRateLimit } from "../rate-limit";
 import { loadCardDetail } from "./card-dto";
+import { createCard } from "./cards";
 import type { Actor } from "./context";
 import { discordApi, discordConfigured } from "./discord";
-import { discordTime, escapeMarkdown, truncate, type DiscordEmbed } from "./discord-message";
+import { discordTime, escapeMarkdown, truncate } from "./discord-message";
 import { myDeliverables, type BoardRef, type MyDeliverableItem } from "./home";
+import { listProjectMembers } from "./members-query";
 import { moveProduction } from "./production";
 import { approve, requestChanges, submitForReview } from "./reviews";
 import { loadSchedule } from "./schedule";
@@ -29,25 +35,46 @@ import { searchCards } from "./search";
 
 /** Usable in servers the bot is in and in the bot's direct messages (guild-installed app). */
 const EVERYWHERE = { contexts: [0, 1], integration_types: [0] };
+const PRIORITY_CHOICES = [
+  { name: "Low", value: "LOW" },
+  { name: "Normal", value: "NORMAL" },
+  { name: "High", value: "HIGH" },
+  { name: "Urgent", value: "URGENT" },
+];
 
 export const DISCORD_COMMANDS = [
-  { name: "mywork", type: 1, description: "Your open work in Forge: what you're responsible for or contribute to.", ...EVERYWHERE },
-  { name: "reviews", type: 1, description: "Work waiting for your review in Forge.", ...EVERYWHERE },
+  { name: "mywork", type: 1, description: "See your open work in Forge, overdue first.", ...EVERYWHERE },
+  { name: "reviews", type: 1, description: "See work waiting for your review, and approve it or request changes.", ...EVERYWHERE },
   {
     name: "card",
     type: 1,
-    description: "Look up a Forge card and act on it.",
+    description: "Look up a card by key or title, and act on it.",
     ...EVERYWHERE,
-    options: [{ type: 3, name: "card", description: "Card key or title, e.g. UTD-4", required: true, autocomplete: true, max_length: 100 }],
+    options: [{ type: 3, name: "find", description: "A card key like UTD-4, or words from its title", required: true, autocomplete: true, max_length: 100 }],
   },
   {
     name: "due",
     type: 1,
-    description: "Your deadlines coming up, and anything overdue.",
+    description: "See your deadlines coming up, and anything overdue.",
     ...EVERYWHERE,
     options: [
-      { type: 4, name: "days", description: "How many days ahead (default 3)", required: false, min_value: 1, max_value: 30 },
-      { type: 5, name: "everyone", description: "The whole team's deadlines (Managers and above)", required: false },
+      { type: 4, name: "days", description: "How many days ahead to look (default 3)", required: false, min_value: 1, max_value: 30 },
+      { type: 5, name: "team", description: "Show the whole team's deadlines (Managers and above)", required: false },
+    ],
+  },
+  {
+    name: "newcard",
+    type: 1,
+    description: "Create a card in one of your projects.",
+    ...EVERYWHERE,
+    options: [
+      { type: 3, name: "title", description: "What the card is for, e.g. Sword VFX", required: true, max_length: 200 },
+      { type: 3, name: "project", description: "Which project it goes in", required: true, autocomplete: true, max_length: 100 },
+      { type: 3, name: "column", description: "Which column (default: the first one)", required: false, autocomplete: true, max_length: 100 },
+      { type: 3, name: "assign", description: "Who works on it", required: false, autocomplete: true, max_length: 100 },
+      { type: 3, name: "due", description: "Deadline, e.g. friday, tomorrow, in 3 days or 2026-10-20", required: false, autocomplete: true, max_length: 40 },
+      { type: 3, name: "priority", description: "How urgent it is (default Normal)", required: false, choices: PRIORITY_CHOICES },
+      { type: 3, name: "description", description: "Details for whoever picks it up", required: false, max_length: 2000 },
     ],
   },
 ];
@@ -78,6 +105,7 @@ function comparable(command: CommandShape) {
       min_value: o.min_value ?? null,
       max_value: o.max_value ?? null,
       max_length: o.max_length ?? null,
+      choices: Array.isArray(o.choices) ? (o.choices as Array<{ name: string; value: unknown }>).map((c) => ({ name: c.name, value: c.value })) : null,
     })),
   });
 }
@@ -96,7 +124,7 @@ export async function syncDiscordCommands(): Promise<"skipped" | "unchanged" | "
   return "updated";
 }
 
-// ── Discord's interaction shapes (the parts Forge reads and writes) ───────────────────────────
+// ── Discord's interaction and layout shapes (the parts Forge reads and writes) ───────────────
 
 export interface Interaction {
   id: string;
@@ -114,36 +142,65 @@ export interface Interaction {
   };
 }
 
-type Button = { type: 2; style: 1 | 2 | 3 | 4; label: string; custom_id: string; emoji?: { name: string } } | { type: 2; style: 5; label: string; url: string };
-type Select = { type: 3; custom_id: string; placeholder: string; options: Array<{ label: string; value: string; description?: string }> };
-type Row = { type: 1; components: Array<Button | Select> };
+type Button = { type: 2; style: 1 | 2 | 3 | 4; label: string; custom_id: string; emoji?: { name: string } } | { type: 2; style: 5; label: string; url: string; emoji?: { name: string } };
+type Row = { type: 1; components: Button[] };
+type TextDisplay = { type: 10; content: string };
+type Separator = { type: 14; divider: boolean; spacing: 1 | 2 };
+type Section = { type: 9; components: TextDisplay[]; accessory: Button };
+type Container = { type: 17; accent_color: number; components: Array<TextDisplay | Separator | Section | Row> };
+export type Block = Container | TextDisplay | Row;
 
 interface Reply {
-  /** A short line above the embed: the outcome of an action, or a problem. */
-  content?: string;
-  embeds: DiscordEmbed[];
-  components: Row[];
+  components: Block[];
 }
 
 export type InteractionResponse =
   | { type: 1 }
-  | { type: 4 | 7; data: { content?: string; embeds: DiscordEmbed[]; components: Row[]; flags?: number; allowed_mentions: { parse: [] } } }
+  | { type: 4 | 7; data: { components: Block[]; flags: number; allowed_mentions: { parse: [] } } }
   | { type: 8; data: { choices: Array<{ name: string; value: string }> } }
   | { type: 9; data: { custom_id: string; title: string; components: unknown[] } };
 
-const EPHEMERAL = 64;
+const EPHEMERAL = 1 << 6;
+/** IS_COMPONENTS_V2: the message is laid out with containers, text and sections. */
+const LAYOUT = 1 << 15;
 
 /** A new private message (4) or an update of the message a button was on (7). Mentions never ping. */
 function respond(type: 4 | 7, reply: Reply): InteractionResponse {
-  return {
-    type,
-    data: {
-      ...(type === 7 ? { content: reply.content ?? "" } : reply.content ? { content: reply.content } : {}),
-      embeds: reply.embeds,
-      components: reply.components,
-      ...(type === 4 ? { flags: EPHEMERAL } : {}),
-      allowed_mentions: { parse: [] },
-    },
+  return { type, data: { components: reply.components, flags: type === 4 ? EPHEMERAL | LAYOUT : LAYOUT, allowed_mentions: { parse: [] } } };
+}
+
+/** Discord's limits for one message laid out this way: 40 components and 4000 characters of text. */
+export const LAYOUT_LIMITS = { components: 40, text: 4000 };
+
+export function layoutSize(blocks: unknown[]): { components: number; text: number } {
+  let components = 0;
+  let text = 0;
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    const n = node as { type?: number; content?: string; components?: unknown[]; accessory?: unknown };
+    if (typeof n.type === "number") components += 1;
+    if (n.type === 10 && typeof n.content === "string") text += n.content.length;
+    for (const child of n.components ?? []) walk(child);
+    if (n.accessory) walk(n.accessory);
+  };
+  for (const block of blocks) walk(block);
+  return { components, text };
+}
+
+const text = (content: string): TextDisplay => ({ type: 10, content });
+const divider = (): Separator => ({ type: 14, divider: true, spacing: 1 });
+const row = (...buttons: Button[]): Row => ({ type: 1, components: buttons });
+const panel = (accent: number, components: Container["components"]): Container => ({ type: 17, accent_color: accent, components });
+const link = (label: string, url: string): Button => ({ type: 2, style: 5, label, url });
+
+/** Custom ids must be unique within a message: a second button for the same card gets a suffix. */
+function idMaker() {
+  const used = new Set<string>();
+  return (base: string) => {
+    let id = base;
+    for (let n = 2; used.has(id); n++) id = `${base}:${n}`;
+    used.add(id);
+    return id;
   };
 }
 
@@ -151,20 +208,26 @@ function respond(type: 4 | 7, reply: Reply): InteractionResponse {
 
 const COLORS = { work: 0x7c6cf2, review: 0xf5a524, late: 0xf0524f, done: 0x2ec27e, quiet: 0x94a3b8 };
 
-function problem(text: string): Reply {
-  return { embeds: [{ description: `⚠️ ${escapeMarkdown(text)}`, color: COLORS.late }], components: [] };
+function problem(message: string): Reply {
+  return { components: [panel(COLORS.late, [text(`⚠️ ${escapeMarkdown(message)}`)])] };
 }
 
 function notLinked(): Reply {
   return {
-    embeds: [
-      {
-        author: { name: "🔗 Connect Discord to Forge" },
-        description: "These commands work with your Forge account. In Forge, open **Account → Security** and choose **Connect** next to Discord, then try again.",
-        color: COLORS.work,
-      },
+    components: [
+      panel(COLORS.work, [
+        text(
+          [
+            "## 🔗 Connect Discord to Forge",
+            "These commands use your Forge account, so Forge needs to know this Discord account is yours.",
+            "1. In Forge, open **Account → Security**",
+            "2. Choose **Connect** next to Discord",
+            "3. Come back and run the command again",
+          ].join("\n"),
+        ),
+        row(link("Open account settings", `${appOrigin()}/account/security`)),
+      ]),
     ],
-    components: [{ type: 1, components: [{ type: 2, style: 5, label: "Open Forge", url: `${appOrigin()}/account/security` }] }],
   };
 }
 
@@ -218,8 +281,8 @@ function cardUrl(studioSlug: string, projectSlug: string, boardNumber: number | 
   return `${appOrigin()}/${studioSlug}/${projectSlug}${boardNumber ? `/b/${boardNumber}` : ""}?card=${encodeURIComponent(key)}${deliverableNumber ? `&d=${deliverableNumber}` : ""}`;
 }
 
-function studioFooter(scope: Scope) {
-  return { text: truncate(scope.studios.map((s) => s.name).join(" · ") || "Forge", 2048) };
+function studioLine(scope: Scope) {
+  return escapeMarkdown(truncate(scope.studios.map((s) => s.name).join(" · ") || "Forge", 120));
 }
 
 async function boardRefs(projectIds: string[]) {
@@ -235,40 +298,27 @@ async function boardRefs(projectIds: string[]) {
   };
 }
 
-/** "Open a card…" for a list's cards (Discord shows at most 25). */
-function openCardMenu(placeholder: string, items: Array<{ cardId: string; label: string; description: string }>): Row | null {
-  const seen = new Set<string>();
-  const options: Array<{ label: string; value: string; description?: string }> = [];
-  for (const item of items) {
-    if (seen.has(item.cardId) || options.length >= 25) continue;
-    seen.add(item.cardId);
-    options.push({ label: truncate(item.label, 100), value: item.cardId, ...(item.description ? { description: truncate(item.description, 100) } : {}) });
-  }
-  return options.length ? { type: 1, components: [{ type: 3, custom_id: "fg:pick", placeholder, options }] } : null;
-}
-
-function linkRow(label: string, url: string): Row {
-  return { type: 1, components: [{ type: 2, style: 5, label, url }] };
-}
-
 const STATE_TEXT: Record<CardState, string> = {
   NOT_SUBMITTED: "not started",
   IN_PROGRESS: "in progress",
-  NEEDS_REVIEW: "waiting for review",
+  NEEDS_REVIEW: "in review",
   CHANGES_REQUESTED: "changes requested",
   APPROVED: "approved",
 };
+const STATE_LABEL: Record<CardState, string> = { NOT_SUBMITTED: "Not started", IN_PROGRESS: "In progress", NEEDS_REVIEW: "In review", CHANGES_REQUESTED: "Changes requested", APPROVED: "Approved" };
 const STATE_ICON: Record<CardState, string> = { NOT_SUBMITTED: "⚪", IN_PROGRESS: "🛠️", NEEDS_REVIEW: "📥", CHANGES_REQUESTED: "🔁", APPROVED: "✅" };
-const PRODUCTION_TEXT: Record<ProductionStatus, string> = { TODO: "To do", COMPLETED: "Completed", PUBLISHED: "Published" };
+const PRODUCTION_LABEL: Record<ProductionStatus, string> = { TODO: "To do", COMPLETED: "Completed", PUBLISHED: "Published" };
+const PRODUCTION_ICON: Record<ProductionStatus, string> = { TODO: "🗂️", COMPLETED: "🏁", PUBLISHED: "🚀" };
+const STATE_COLOR: Record<CardState, number> = { NOT_SUBMITTED: COLORS.quiet, IN_PROGRESS: COLORS.work, NEEDS_REVIEW: COLORS.review, CHANGES_REQUESTED: COLORS.late, APPROVED: COLORS.done };
+
+/** "[UTD-4 · Sword](url)" with whatever people typed escaped (and kept short). */
+function cardLink(key: string, title: string, url: string, max = 70) {
+  return `[${escapeMarkdown(`${key} · ${truncate(title, max)}`)}](${url})`;
+}
 
 /** A deliverable's name, unless it just repeats the card's title (single-deliverable cards). */
 function deliverableName(name: string, cardTitle: string) {
-  return name.trim().toLowerCase() === cardTitle.trim().toLowerCase() ? null : `**${escapeMarkdown(truncate(name, 60))}**`;
-}
-
-/** "[UTD-4 Sword](url)" with whatever people typed escaped (and kept short). */
-function cardLink(key: string, title: string, url: string) {
-  return `[${escapeMarkdown(`${key} ${truncate(title, 60)}`)}](${url})`;
+  return name.trim().toLowerCase() === cardTitle.trim().toLowerCase() ? null : escapeMarkdown(truncate(name, 60));
 }
 
 function dueText(iso: string | null, nowMs: number) {
@@ -276,52 +326,84 @@ function dueText(iso: string | null, nowMs: number) {
   return `${Date.parse(iso) < nowMs ? "was due" : "due"} ${discordTime(iso, "R")}`;
 }
 
-/** Lines that fit an embed (4096 characters), with "…and N more" when they don't all. */
-function listLines(lines: string[], max = 12) {
-  const shown: string[] = [];
-  let length = 0;
-  for (const line of lines.slice(0, max)) {
-    if (length + line.length + 1 > 3800) break;
-    shown.push(line);
-    length += line.length + 1;
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** One row of a list: the card (linking to Forge), a grey detail line, and a View button. */
+function listRow(nextId: (base: string) => string, cardId: string, title: string, detail: string, button: { label: string; style: 1 | 2 } = { label: "View", style: 2 }): Section {
+  return {
+    type: 9,
+    components: [text(`**${title}**${detail ? `\n-# ${detail}` : ""}`)],
+    accessory: { type: 2, style: button.style, label: button.label, custom_id: nextId(`fg:open:${cardId}`) },
+  };
+}
+
+/** Grouped rows under small headings, at most `max` rows; "…and N more" when they don't all fit. */
+function groupedRows<T>(items: T[], groups: Array<{ title: string; test: (item: T) => boolean }>, toRow: (item: T) => Section, max: number) {
+  const out: Container["components"] = [];
+  let shown = 0;
+  const placed = new Set<T>();
+  for (const group of groups) {
+    const members = items.filter((i) => !placed.has(i) && group.test(i));
+    members.forEach((m) => placed.add(m));
+    const room = Math.max(0, max - shown);
+    if (!members.length || !room) continue;
+    out.push(text(`### ${group.title}`));
+    for (const item of members.slice(0, room)) out.push(toRow(item));
+    shown += Math.min(room, members.length);
   }
-  if (shown.length < lines.length) shown.push(`…and ${lines.length - shown.length} more in Forge.`);
-  return shown.join("\n");
+  if (items.length > shown) out.push(text(`-# …and ${items.length - shown} more. Open Forge to see everything.`));
+  return out;
 }
 
 // ── /mywork ─────────────────────────────────────────────────────────────────────────────────
 
+const SOON_MS = 48 * 60 * 60 * 1000;
+
 export function myWorkView(items: MyDeliverableItem[], scope: Scope, studioSlugOf: (projectId: string) => string, nowMs = Date.now()): Reply {
-  const home = `${appOrigin()}/${scope.studios[0]?.slug ?? ""}`;
+  const home = link("Open Forge", `${appOrigin()}/${scope.studios[0]?.slug ?? ""}`);
   if (!items.length) {
     return {
-      embeds: [{ author: { name: "🧰 Your work" }, title: "Nothing on your plate", description: "You have no unfinished deliverables. 🎉", color: COLORS.done, footer: studioFooter(scope) }],
-      components: scope.studios.length ? [linkRow("Open Forge", home)] : [],
+      components: [
+        panel(COLORS.done, [
+          text(`## 🧰 Your work\nNothing on your plate right now. 🎉\n-# Work you're responsible for or contribute to shows up here · ${studioLine(scope)}`),
+          row(home),
+        ]),
+      ],
     };
   }
-  const overdue = items.filter((i) => i.dueAt && Date.parse(i.dueAt) < nowMs).length;
-  const lines = items.map((i) => {
+  const due = (i: MyDeliverableItem) => (i.dueAt ? Date.parse(i.dueAt) : null);
+  const late = (i: MyDeliverableItem) => due(i) !== null && due(i)! < nowMs;
+  const overdue = items.filter(late).length;
+  const nextId = idMaker();
+  const toRow = (i: MyDeliverableItem) => {
     const url = cardUrl(studioSlugOf(i.project.id), i.project.slug, i.board?.number, i.card.key, i.deliverable.number);
-    const late = Boolean(i.dueAt && Date.parse(i.dueAt) < nowMs);
-    const icon = late ? "🚨" : i.waitingOn.length ? "⛔" : STATE_ICON[i.deliverable.state];
-    const status = i.waitingOn.length ? `waiting on ${escapeMarkdown(truncate(i.waitingOn.join(", "), 60))}` : STATE_TEXT[i.deliverable.state];
-    return [`${icon} ${cardLink(i.card.key, i.card.title, url)}`, deliverableName(i.deliverable.name, i.card.title), status, dueText(i.dueAt, nowMs)].filter(Boolean).join(" · ");
-  });
-  const menu = openCardMenu(
-    "Open a card to act on it…",
-    items.map((i) => ({ cardId: i.card.id, label: `${i.card.key} ${i.card.title}`, description: `${i.deliverable.name} · ${STATE_TEXT[i.deliverable.state]}` })),
+    const status = i.waitingOn.length ? `waiting on ${escapeMarkdown(truncate(i.waitingOn.join(", "), 50))}` : STATE_TEXT[i.deliverable.state];
+    const detail = [deliverableName(i.deliverable.name, i.card.title), status, dueText(i.dueAt, nowMs)].filter(Boolean).join(" · ");
+    return listRow(nextId, i.card.id, cardLink(i.card.key, i.card.title, url), detail);
+  };
+  const rows = groupedRows(
+    items,
+    [
+      { title: "🚨 Overdue", test: late },
+      { title: "🔁 Changes requested", test: (i) => i.deliverable.state === "CHANGES_REQUESTED" },
+      { title: "⏰ Due in the next 2 days", test: (i) => due(i) !== null && due(i)! - nowMs < SOON_MS && !i.waitingOn.length && i.deliverable.state !== "NEEDS_REVIEW" },
+      { title: "🛠️ To do", test: (i) => !i.waitingOn.length && i.deliverable.state !== "NEEDS_REVIEW" },
+      { title: "⛔ Waiting on others", test: (i) => i.waitingOn.length > 0 },
+      { title: "📥 In review", test: () => true },
+    ],
+    toRow,
+    8,
   );
   return {
-    embeds: [
-      {
-        author: { name: "🧰 Your work" },
-        title: `${items.length} open deliverable${items.length === 1 ? "" : "s"}${overdue ? ` · ${overdue} overdue` : ""}`,
-        description: listLines(lines),
-        color: overdue ? COLORS.late : COLORS.work,
-        footer: studioFooter(scope),
-      },
+    components: [
+      panel(overdue ? COLORS.late : COLORS.work, [
+        text(`## 🧰 Your work\n-# ${plural(items.length, "open deliverable")}${overdue ? ` · ${overdue} overdue` : ""} · ${studioLine(scope)}`),
+        divider(),
+        ...rows,
+        divider(),
+        row(home),
+      ]),
     ],
-    components: [...(menu ? [menu] : []), linkRow("Open Forge", home)],
   };
 }
 
@@ -347,33 +429,34 @@ interface ReviewItem {
 }
 
 export function reviewsView(items: ReviewItem[], scope: Scope): Reply {
-  const home = `${appOrigin()}/${scope.studios[0]?.slug ?? ""}`;
+  const home = link("Open Forge", `${appOrigin()}/${scope.studios[0]?.slug ?? ""}`);
   if (!items.length) {
     return {
-      embeds: [{ author: { name: "📥 Your reviews" }, title: "Nothing waiting for your review", description: "When someone submits work for you to review, it shows up here.", color: COLORS.done, footer: studioFooter(scope) }],
-      components: scope.studios.length ? [linkRow("Open Forge", home)] : [],
+      components: [
+        panel(COLORS.done, [
+          text(`## 📥 Your reviews\nNothing waiting for your review. 🎉\n-# When someone submits work for you to review, it shows up here · ${studioLine(scope)}`),
+          row(home),
+        ]),
+      ],
     };
   }
-  const lines = items.map((i) => {
-    const what = [deliverableName(i.deliverable.name, i.card.title), i.versionNumber ? `**V${i.versionNumber}**` : null].filter(Boolean).join(" ");
-    const who = i.submittedBy ? `submitted by ${escapeMarkdown(truncate(i.submittedBy, 40))}` : "submitted";
-    return [`📥 ${cardLink(i.card.key, i.card.title, i.url)}`, what || null, `${who}${i.submittedAt ? ` ${discordTime(i.submittedAt, "R")}` : ""}`].filter(Boolean).join(" · ");
+  const nextId = idMaker();
+  const rows = items.slice(0, 10).map((i) => {
+    const what = [deliverableName(i.deliverable.name, i.card.title), i.versionNumber ? `V${i.versionNumber}` : null].filter(Boolean).join(" ");
+    const who = `submitted${i.submittedBy ? ` by ${escapeMarkdown(truncate(i.submittedBy, 40))}` : ""}${i.submittedAt ? ` ${discordTime(i.submittedAt, "R")}` : ""}`;
+    return listRow(nextId, i.card.id, cardLink(i.card.key, i.card.title, i.url), [what, who].filter(Boolean).join(" · "), { label: "Review", style: 1 });
   });
-  const menu = openCardMenu(
-    "Review one…",
-    items.map((i) => ({ cardId: i.card.id, label: `${i.card.key} ${i.card.title}`, description: `${i.deliverable.name}${i.versionNumber ? ` V${i.versionNumber}` : ""}` })),
-  );
   return {
-    embeds: [
-      {
-        author: { name: "📥 Your reviews" },
-        title: `${items.length} waiting for your review`,
-        description: listLines(lines),
-        color: COLORS.review,
-        footer: studioFooter(scope),
-      },
+    components: [
+      panel(COLORS.review, [
+        text(`## 📥 Waiting for your review\n-# ${plural(items.length, "submission")} · oldest first · ${studioLine(scope)}`),
+        divider(),
+        ...rows,
+        ...(items.length > 10 ? [text(`-# …and ${items.length - 10} more. Open Forge to see everything.`)] : []),
+        divider(),
+        row(home),
+      ]),
     ],
-    components: [...(menu ? [menu] : []), linkRow("Open Forge", home)],
   };
 }
 
@@ -409,18 +492,18 @@ async function reviewQueue(scope: Scope): Promise<Reply> {
     .orderBy(sql`${assetVersions.submittedAt} asc nulls last`, asc(cards.lastActivityAt))
     .limit(60);
   const items: ReviewItem[] = [];
-  for (const row of rows) {
-    const ctx = await requireDeliverable(scope.userId, row.d.id).catch(() => null);
+  for (const r of rows) {
+    const ctx = await requireDeliverable(scope.userId, r.d.id).catch(() => null);
     if (!ctx?.dperms.canReview) continue;
-    const access = scope.accesses.get(row.d.projectId)!;
-    const key = `${access.project.key}-${row.card.number}`;
+    const access = scope.accesses.get(r.d.projectId)!;
+    const key = `${access.project.key}-${r.card.number}`;
     items.push({
-      deliverable: { id: row.d.id, number: row.d.number, name: row.d.name },
-      card: { id: row.card.id, key, title: row.card.title },
-      url: cardUrl(access.studioSlug, access.project.slug, row.card.boardNumber, key, row.d.number),
-      versionNumber: row.versionNumber ?? null,
-      submittedAt: row.submittedAt?.toISOString() ?? null,
-      submittedBy: row.submittedBy ?? null,
+      deliverable: { id: r.d.id, number: r.d.number, name: r.d.name },
+      card: { id: r.card.id, key, title: r.card.title },
+      url: cardUrl(access.studioSlug, access.project.slug, r.card.boardNumber, key, r.d.number),
+      versionNumber: r.versionNumber ?? null,
+      submittedAt: r.submittedAt?.toISOString() ?? null,
+      submittedBy: r.submittedBy ?? null,
     });
     if (items.length >= 25) break;
   }
@@ -431,67 +514,89 @@ async function reviewQueue(scope: Scope): Promise<Reply> {
 
 const DAY = 86_400_000;
 
-async function deadlines(scope: Scope, days: number, everyoneRequested: boolean): Promise<Reply> {
+interface DueItem {
+  due: number;
+  dueAt: string;
+  cardId: string;
+  title: string;
+  detail: string | null;
+  people: string[];
+}
+
+async function deadlines(scope: Scope, days: number, teamRequested: boolean): Promise<Reply> {
   let accesses = scope.accesses;
-  let everyone = everyoneRequested;
-  let note: string | undefined;
-  if (everyone) {
+  let team = teamRequested;
+  let note: string | null = null;
+  if (team) {
     const managed = new Map([...accesses].filter(([, a]) => roleHas(a.role, "reports.view")));
     if (managed.size) accesses = managed;
     else {
-      everyone = false;
-      note = "The whole team's deadlines are for Managers and above — here are yours.";
+      team = false;
+      note = "ℹ️ The whole team's deadlines are for Managers and above, so these are yours.";
     }
   }
   const at = Date.now();
   const end = at + days * DAY;
-  const schedule = await loadSchedule({ userId: scope.userId }, { accesses, mineOnly: !everyone }, new Date(at - 120 * DAY).toISOString(), new Date(end).toISOString());
-  const items: Array<{ due: number; dueAt: string; line: string; cardId: string; label: string; description: string; people: string[] }> = [];
+  const schedule = await loadSchedule({ userId: scope.userId }, { accesses, mineOnly: !team }, new Date(at - 120 * DAY).toISOString(), new Date(end).toISOString());
+  const items: DueItem[] = [];
   for (const card of schedule.cards) {
-    const link = cardUrl(card.project.studioSlug, card.project.slug, card.board.number, card.key);
-    const cardCounts = Boolean(card.dueAt && card.state !== "APPROVED" && (everyone || card.assigneeIds.includes(scope.userId)) && Date.parse(card.dueAt) <= end);
-    if (cardCounts) {
-      items.push({ due: Date.parse(card.dueAt!), dueAt: card.dueAt!, line: cardLink(card.key, card.title, link), cardId: card.id, label: `${card.key} ${card.title}`, description: "", people: card.assigneeIds });
-    }
+    const url = cardUrl(card.project.studioSlug, card.project.slug, card.board.number, card.key);
+    const cardCounts = Boolean(card.dueAt && card.state !== "APPROVED" && (team || card.assigneeIds.includes(scope.userId)) && Date.parse(card.dueAt) <= end);
+    if (cardCounts) items.push({ due: Date.parse(card.dueAt!), dueAt: card.dueAt!, cardId: card.id, title: cardLink(card.key, card.title, url), detail: null, people: card.assigneeIds });
     for (const d of card.deliverables) {
-      if (!d.dueAt || d.state === "APPROVED" || !(everyone || d.mine) || Date.parse(d.dueAt) > end) continue;
-      // Following the card's deadline, it's already on the card's line.
+      if (!d.dueAt || d.state === "APPROVED" || !(team || d.mine) || Date.parse(d.dueAt) > end) continue;
+      // Following the card's deadline, it's already on the card's row.
       if (cardCounts && !d.ownDueAt) continue;
-      items.push({
-        due: Date.parse(d.dueAt),
-        dueAt: d.dueAt,
-        line: [cardLink(card.key, card.title, `${link}&d=${d.number}`), deliverableName(d.name, card.title)].filter(Boolean).join(" · "),
-        cardId: card.id,
-        label: `${card.key} ${card.title}`,
-        description: d.name,
-        people: [],
-      });
+      items.push({ due: Date.parse(d.dueAt), dueAt: d.dueAt, cardId: card.id, title: cardLink(card.key, card.title, `${url}&d=${d.number}`), detail: deliverableName(d.name, card.title), people: [] });
     }
   }
   items.sort((a, b) => a.due - b.due);
   const names = new Map<string, string>();
-  const ids = [...new Set(items.flatMap((i) => i.people))];
-  if (everyone && ids.length) for (const u of await db.select({ id: users.id, name: users.displayName }).from(users).where(inArray(users.id, ids))) names.set(u.id, u.name);
+  const peopleIds = [...new Set(items.flatMap((i) => i.people))];
+  if (team && peopleIds.length) for (const u of await db.select({ id: users.id, name: users.displayName }).from(users).where(inArray(users.id, peopleIds))) names.set(u.id, u.name);
   const overdue = items.filter((i) => i.due < at).length;
-  const lines = items.map((i) => {
-    const who = everyone && i.people.length ? ` · ${escapeMarkdown(truncate(i.people.map((p) => names.get(p) ?? "?").join(", "), 60))}` : "";
-    return `${i.due < at ? "🚨" : "⏰"} ${i.line} · ${dueText(i.dueAt, at)}${who}`;
-  });
-  const calendar = `${appOrigin()}/${scope.studios[0]?.slug ?? ""}/calendar`;
-  const title = items.length ? [overdue ? `${overdue} overdue` : null, items.length - overdue ? `${items.length - overdue} coming up` : null].filter(Boolean).join(" · ") : "Nothing due";
-  const menu = openCardMenu("Open a card to act on it…", items.map((i) => ({ cardId: i.cardId, label: i.label, description: i.description })));
-  return {
-    content: note,
-    embeds: [
-      {
-        author: { name: `📅 ${everyone ? "Team deadlines" : "Your deadlines"} · next ${days} day${days === 1 ? "" : "s"}` },
-        title,
-        description: items.length ? listLines(lines, 15) : `Nothing ${everyone ? "" : "of yours "}is due in the next ${days} day${days === 1 ? "" : "s"}, and nothing is overdue.`,
-        color: overdue ? COLORS.late : items.length ? COLORS.review : COLORS.done,
-        footer: studioFooter(scope),
-      },
+  const heading = team ? "📅 Team deadlines" : "📅 Your deadlines";
+  const range = `next ${plural(days, "day")}`;
+  const calendar = link("Open calendar", `${appOrigin()}/${scope.studios[0]?.slug ?? ""}/calendar`);
+  const intro = note ? [text(`-# ${note}`)] : [];
+  if (!items.length) {
+    return {
+      components: [
+        panel(COLORS.done, [
+          text(`## ${heading}\nNothing ${team ? "" : "of yours "}is due in the ${range}, and nothing is overdue. 🎉\n-# ${studioLine(scope)}`),
+          ...intro,
+          row(calendar),
+        ]),
+      ],
+    };
+  }
+  const nextId = idMaker();
+  const toRow = (i: DueItem) => {
+    const who = team && i.people.length ? escapeMarkdown(truncate(i.people.map((p) => names.get(p) ?? "?").join(", "), 50)) : null;
+    const detail = [i.detail, `${dueText(i.dueAt, at)} (${discordTime(i.dueAt, "f")})`, who ? `👤 ${who}` : null].filter(Boolean).join(" · ");
+    return listRow(nextId, i.cardId, i.title, detail);
+  };
+  const rows = groupedRows(
+    items,
+    [
+      { title: "🚨 Overdue", test: (i) => i.due < at },
+      { title: "⏰ In the next 24 hours", test: (i) => i.due - at < DAY },
+      { title: `🗓️ Later in the ${range}`, test: () => true },
     ],
-    components: [...(menu ? [menu] : []), ...(scope.studios.length ? [linkRow("Open calendar", calendar)] : [])],
+    toRow,
+    8,
+  );
+  return {
+    components: [
+      panel(overdue ? COLORS.late : COLORS.review, [
+        text(`## ${heading}\n-# ${[overdue ? `${overdue} overdue` : null, items.length - overdue ? `${items.length - overdue} coming up` : null, range, studioLine(scope)].filter(Boolean).join(" · ")}`),
+        ...intro,
+        divider(),
+        ...rows,
+        divider(),
+        row(calendar),
+      ]),
+    ],
   };
 }
 
@@ -503,17 +608,19 @@ interface Pending {
   verb: Verb;
   /** A deliverable (approve, submit) or the card (complete, publish). */
   id: string;
+  cardId: string;
   question: string;
+  explanation: string;
   confirm: string;
 }
 
 /** What this person can do to the card from Discord, from the same permissions the app uses. */
 export function cardActions(detail: CardDetailDTO) {
-  const deliverableActions: Array<{ kind: "review" | "submit"; id: string; name: string }> = [];
+  const deliverableActions = new Map<string, "review" | "submit">();
   for (const d of detail.deliverables) {
     if (d.archivedAt) continue;
-    if (d.state === "NEEDS_REVIEW" && d.permissions.canReview) deliverableActions.push({ kind: "review", id: d.id, name: d.name });
-    else if (d.permissions.canSubmit && d.hasFiles && (d.state === "NOT_SUBMITTED" || d.state === "IN_PROGRESS" || d.state === "CHANGES_REQUESTED")) deliverableActions.push({ kind: "submit", id: d.id, name: d.name });
+    if (d.state === "NEEDS_REVIEW" && d.permissions.canReview) deliverableActions.set(d.id, "review");
+    else if (d.permissions.canSubmit && d.hasFiles && (d.state === "NOT_SUBMITTED" || d.state === "IN_PROGRESS" || d.state === "CHANGES_REQUESTED")) deliverableActions.set(d.id, "submit");
   }
   const ready = detail.readiness.ready && !detail.archivedAt;
   return {
@@ -521,6 +628,28 @@ export function cardActions(detail: CardDetailDTO) {
     complete: ready && detail.productionStatus === "TODO" && detail.permissions.canEdit,
     publish: ready && detail.productionStatus === "COMPLETED" && detail.permissions.canPublish,
   };
+}
+
+/** 🟩🟩🟨⬜ — approved, in review, changes requested, the rest (scaled to 10 squares). */
+function progressBar(counts: { approved: number; review: number; changes: number; rest: number }) {
+  const total = counts.approved + counts.review + counts.changes + counts.rest;
+  if (!total) return "";
+  const scale = Math.min(1, 10 / total);
+  const parts = [
+    ["🟩", counts.approved],
+    ["🟨", counts.review],
+    ["🟥", counts.changes],
+    ["⬜", counts.rest],
+  ] as const;
+  let squares = parts.map(([, n]) => Math.round(n * scale));
+  const target = Math.min(10, total);
+  // Rounding can over- or undershoot: adjust the largest part so the bar is always `target` long.
+  const diff = target - squares.reduce((a, b) => a + b, 0);
+  if (diff) {
+    const largest = squares.indexOf(Math.max(...squares));
+    squares = squares.map((s, i) => (i === largest ? Math.max(0, s + diff) : s));
+  }
+  return parts.map(([emoji], i) => emoji.repeat(squares[i]!)).join("");
 }
 
 interface CardInfo {
@@ -532,68 +661,112 @@ interface CardInfo {
 }
 
 export function cardView(detail: CardDetailDTO, info: CardInfo, options: { banner?: string; pending?: Pending } = {}): Reply {
+  if (options.pending) return confirmView(detail, info, options.pending);
   const nowMs = Date.now();
-  const name = (id: string | null) => (id ? escapeMarkdown(info.names.get(id) ?? "Someone") : null);
+  const name = (id: string | null) => (id ? escapeMarkdown(truncate(info.names.get(id) ?? "Someone", 40)) : null);
   const live = detail.deliverables.filter((d) => !d.archivedAt);
   const versionOf = new Map(detail.versions.map((v) => [v.id, v.number]));
-  const lines = [
-    `**Review:** ${STATE_TEXT[detail.state]} · **Production:** ${PRODUCTION_TEXT[detail.productionStatus]}`,
-    ...(detail.dueAt ? [`**Due** ${discordTime(detail.dueAt, "R")} (${discordTime(detail.dueAt, "f")})`] : []),
-    ...(detail.assigneeIds.length ? [`**Assigned:** ${detail.assigneeIds.map(name).join(", ")}`] : []),
-    "",
-    ...live.slice(0, 12).map((d) => {
-      const version = d.currentVersionId && versionOf.get(d.currentVersionId) ? ` · V${versionOf.get(d.currentVersionId)}` : "";
-      const responsible = d.ownerId ? ` · ${name(d.ownerId)}` : "";
-      const reviewer = d.reviewerId ? ` · reviewer ${name(d.reviewerId)}` : "";
-      const waiting = d.blockedBy.length ? " · ⛔ waiting on a prerequisite" : "";
-      const late = d.dueAt && d.state !== "APPROVED" && Date.parse(d.dueAt) < nowMs ? ` · 🚨 ${dueText(d.dueAt, nowMs)}` : "";
-      return `${STATE_ICON[d.state]} **${escapeMarkdown(truncate(d.name, 60))}** — ${STATE_TEXT[d.state]}${version}${responsible}${reviewer}${waiting}${late}`;
-    }),
-    ...(live.length > 12 ? [`…and ${live.length - 12} more deliverables in Forge.`] : []),
-  ];
-  const embed: DiscordEmbed = {
-    author: { name: truncate(`📇 ${info.projectName}${info.boardName ? ` · ${info.boardName}` : ""}`, 256) },
-    title: truncate(`${detail.key} ${detail.title}`, 256),
-    url: info.url,
-    description: truncate(lines.join("\n"), 4000),
-    color: detail.state === "APPROVED" ? COLORS.done : detail.state === "CHANGES_REQUESTED" ? COLORS.late : detail.state === "NEEDS_REVIEW" ? COLORS.review : COLORS.work,
-    footer: { text: truncate(info.studioName, 2048) },
-  };
-  const open: Button = { type: 2, style: 5, label: "Open in Forge", url: info.url };
-  const rows: Row[] = [];
-  let content = options.banner;
-  if (options.pending) {
-    content = options.pending.question;
-    rows.push({
-      type: 1,
-      components: [
-        { type: 2, style: 3, label: truncate(options.pending.confirm, 80), custom_id: `fg:${options.pending.verb}!:${options.pending.id}` },
-        { type: 2, style: 2, label: "Cancel", custom_id: `fg:open:${detail.id}` },
-      ],
-    });
-  } else {
-    const actions = cardActions(detail);
-    for (const a of actions.deliverables.slice(0, 4)) {
-      const label = truncate(a.name, 50);
-      rows.push({
-        type: 1,
-        components:
-          a.kind === "review"
-            ? [
-                { type: 2, style: 3, label: `Approve ${label}`, custom_id: `fg:approve:${a.id}`, emoji: { name: "✅" } },
-                { type: 2, style: 4, label: "Request changes", custom_id: `fg:changes:${a.id}`, emoji: { name: "🔁" } },
-              ]
-            : [{ type: 2, style: 1, label: `Submit ${label} for review`, custom_id: `fg:submit:${a.id}`, emoji: { name: "📥" } }],
-      });
-    }
-    const last: Button[] = [];
-    if (actions.complete) last.push({ type: 2, style: 1, label: "Mark completed", custom_id: `fg:complete:${detail.id}`, emoji: { name: "🏁" } });
-    if (actions.publish) last.push({ type: 2, style: 1, label: "Mark published", custom_id: `fg:publish:${detail.id}`, emoji: { name: "🚀" } });
-    last.push(open);
-    rows.push({ type: 1, components: last });
-    if (actions.deliverables.length > 4) content = [content, `${actions.deliverables.length - 4} more deliverables need you — open the card in Forge for those.`].filter(Boolean).join("\n");
+  const actions = cardActions(detail);
+  const nextId = idMaker();
+
+  const late = Boolean(detail.dueAt && detail.state !== "APPROVED" && Date.parse(detail.dueAt) < nowMs);
+  const status = [
+    `${STATE_ICON[detail.state]} **${STATE_LABEL[detail.state]}**`,
+    `${PRODUCTION_ICON[detail.productionStatus]} **${PRODUCTION_LABEL[detail.productionStatus]}**`,
+    detail.dueAt ? `${late ? "🚨" : "⏰"} ${dueText(detail.dueAt, nowMs)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const people = detail.assigneeIds.length ? `👤 ${detail.assigneeIds.map(name).join(", ")}` : "👤 Nobody assigned yet";
+
+  const counts = { approved: 0, review: 0, changes: 0, rest: 0 };
+  for (const d of live) {
+    if (d.state === "APPROVED") counts.approved++;
+    else if (d.state === "NEEDS_REVIEW") counts.review++;
+    else if (d.state === "CHANGES_REQUESTED") counts.changes++;
+    else counts.rest++;
   }
-  return { content, embeds: [embed], components: rows };
+  const legend = [
+    counts.approved ? `🟩 ${counts.approved} approved` : null,
+    counts.review ? `🟨 ${counts.review} in review` : null,
+    counts.changes ? `🟥 ${counts.changes} changes requested` : null,
+    counts.rest ? `⬜ ${counts.rest} to do` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const body: Container["components"] = [
+    text(`-# 📇 ${escapeMarkdown(truncate(info.projectName, 60))}${info.boardName ? ` · ${escapeMarkdown(truncate(info.boardName, 40))}` : ""}\n## ${cardLink(detail.key, detail.title, info.url, 120)}`),
+    text(`${status}\n-# ${people}`),
+    divider(),
+  ];
+  if (live.length) body.push(text(`### Deliverables · ${counts.approved} of ${live.length} approved\n${progressBar(counts)}\n-# ${legend}`));
+
+  // Deliverables with something for this person to do get their buttons; the rest share one block.
+  let plain: string[] = [];
+  const flush = () => {
+    if (plain.length) body.push(text(plain.join("\n")));
+    plain = [];
+  };
+  let actionable = 0;
+  let hidden = 0;
+  for (const d of live.slice(0, 15)) {
+    const version = d.currentVersionId && versionOf.get(d.currentVersionId) ? ` · V${versionOf.get(d.currentVersionId)}` : "";
+    const action = actions.deliverables.get(d.id);
+    const stateText = action === "review" ? "waiting for your review" : STATE_TEXT[d.state];
+    const dLate = Boolean(d.dueAt && d.state !== "APPROVED" && Date.parse(d.dueAt) < nowMs);
+    const facts = [
+      d.ownerId ? `👤 ${name(d.ownerId)}` : null,
+      d.reviewerId ? `🔍 ${name(d.reviewerId)}` : null,
+      d.blockedBy.length ? "⛔ waiting on a prerequisite" : null,
+      d.dueAt && d.state !== "APPROVED" ? `${dLate ? "🚨" : "⏰"} ${dueText(d.dueAt, nowMs)}` : null,
+    ].filter(Boolean);
+    const line = `${STATE_ICON[d.state]} **${escapeMarkdown(truncate(d.name, 60))}** — ${stateText}${version}${facts.length ? `\n-# ${facts.join(" · ")}` : ""}`;
+    if (action && actionable < 5) {
+      actionable++;
+      flush();
+      if (action === "review") {
+        body.push(text(line));
+        body.push(
+          row(
+            { type: 2, style: 3, label: "Approve", custom_id: nextId(`fg:approve:${d.id}`), emoji: { name: "✅" } },
+            { type: 2, style: 4, label: "Request changes", custom_id: nextId(`fg:changes:${d.id}`), emoji: { name: "🔁" } },
+          ),
+        );
+      } else {
+        body.push({ type: 9, components: [text(line)], accessory: { type: 2, style: 1, label: "Submit for review", custom_id: nextId(`fg:submit:${d.id}`), emoji: { name: "📥" } } });
+      }
+    } else {
+      if (action) hidden++;
+      plain.push(line);
+    }
+  }
+  flush();
+  if (live.length > 15) body.push(text(`-# …and ${live.length - 15} more deliverables in Forge.`));
+  if (hidden) body.push(text(`-# ${plural(hidden, "more deliverable")} need${hidden === 1 ? "s" : ""} you — open the card in Forge for those.`));
+
+  const bottom: Button[] = [];
+  if (actions.complete) bottom.push({ type: 2, style: 1, label: "Mark completed", custom_id: nextId(`fg:complete:${detail.id}`), emoji: { name: "🏁" } });
+  if (actions.publish) bottom.push({ type: 2, style: 1, label: "Mark published", custom_id: nextId(`fg:publish:${detail.id}`), emoji: { name: "🚀" } });
+  bottom.push(link("Open in Forge", info.url));
+  body.push(divider(), row(...bottom));
+
+  return { components: [...(options.banner ? [text(options.banner)] : []), panel(STATE_COLOR[detail.state], body)] };
+}
+
+/** "Approve V3 of Rig?" with what happens next, and Yes / Cancel. */
+function confirmView(detail: CardDetailDTO, info: CardInfo, pending: Pending): Reply {
+  return {
+    components: [
+      panel(COLORS.review, [
+        text(`### ${pending.question}\n${pending.explanation}\n-# ${cardLink(detail.key, detail.title, info.url)} · ${escapeMarkdown(truncate(info.projectName, 60))}`),
+        row(
+          { type: 2, style: 3, label: truncate(pending.confirm, 80), custom_id: `fg:${pending.verb}!:${pending.id}` },
+          { type: 2, style: 2, label: "Cancel", custom_id: `fg:open:${pending.cardId}` },
+        ),
+      ]),
+    ],
+  };
 }
 
 async function cardReply(userId: string, cardId: string, options: { banner?: string; pending?: Pending } = {}): Promise<Reply> {
@@ -602,13 +775,17 @@ async function cardReply(userId: string, cardId: string, options: { banner?: str
   const [board] = await db.select({ number: boards.number, name: boards.name }).from(boards).where(eq(boards.id, ctx.card.boardId));
   const ids = [...new Set([...detail.assigneeIds, ...detail.deliverables.flatMap((d) => [d.ownerId, d.reviewerId]).filter((v): v is string => Boolean(v))])];
   const names = new Map((ids.length ? await db.select({ id: users.id, name: users.displayName }).from(users).where(inArray(users.id, ids)) : []).map((u) => [u.id, u.name]));
-  return cardView(detail, {
-    url: cardUrl(ctx.access.studioSlug, ctx.access.project.slug, board?.number, detail.key),
-    projectName: `${ctx.access.project.icon} ${ctx.access.project.name}`.trim(),
-    boardName: board?.name ?? null,
-    studioName: ctx.access.studioName,
-    names,
-  }, options);
+  return cardView(
+    detail,
+    {
+      url: cardUrl(ctx.access.studioSlug, ctx.access.project.slug, board?.number, detail.key),
+      projectName: `${ctx.access.project.icon} ${ctx.access.project.name}`.trim(),
+      boardName: board?.name ?? null,
+      studioName: ctx.access.studioName,
+      names,
+    },
+    options,
+  );
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -621,8 +798,8 @@ async function findCard(scope: Scope, actor: Actor, query: string): Promise<stri
   if (key) {
     const projectIds = [...scope.accesses.values()].filter((a) => a.project.key.toUpperCase() === key[1]!.toUpperCase()).map((a) => a.project.id);
     if (projectIds.length) {
-      const [row] = await db.select({ id: cards.id }).from(cards).where(and(inArray(cards.projectId, projectIds), eq(cards.number, Number(key[2])), isNull(cards.archivedAt))).limit(1);
-      if (row) return row.id;
+      const [hit] = await db.select({ id: cards.id }).from(cards).where(and(inArray(cards.projectId, projectIds), eq(cards.number, Number(key[2])), isNull(cards.archivedAt))).limit(1);
+      if (hit) return hit.id;
     }
   }
   for (const studio of scope.studios.slice(0, 5)) {
@@ -632,13 +809,20 @@ async function findCard(scope: Scope, actor: Actor, query: string): Promise<stri
   return null;
 }
 
-/** Card suggestions while typing /card: matches among the cards this person can see; their own work when empty. */
-async function suggestCards(scope: Scope, actor: Actor, query: string) {
-  const q = query.trim();
-  const choices: Array<{ name: string; value: string }> = [];
-  const add = (id: string, label: string) => {
-    if (choices.length < 25 && !choices.some((c) => c.value === id)) choices.push({ name: truncate(label, 100), value: id });
+type Choice = { name: string; value: string };
+
+function choiceList() {
+  const choices: Choice[] = [];
+  const add = (value: string, label: string) => {
+    if (value && choices.length < 25 && !choices.some((c) => c.value === value)) choices.push({ name: truncate(label, 100), value });
   };
+  return { choices, add };
+}
+
+/** Card suggestions while typing /card: matches among the cards this person can see; their own work when empty. */
+async function suggestCards(scope: Scope, actor: Actor, query: string): Promise<Choice[]> {
+  const q = query.trim();
+  const { choices, add } = choiceList();
   if (!q) {
     const ids = [...scope.accesses.keys()];
     if (!ids.length) return choices;
@@ -646,53 +830,58 @@ async function suggestCards(scope: Scope, actor: Actor, query: string) {
       const a = scope.accesses.get(id)!;
       return { id, slug: a.project.slug, name: a.project.name, icon: a.project.icon, key: a.project.key };
     };
-    for (const item of await myDeliverables(scope.userId, ids, projectRef, () => null)) add(item.card.id, `${item.card.key} ${item.card.title}`);
+    for (const item of await myDeliverables(scope.userId, ids, projectRef, () => null)) add(item.card.id, `${item.card.key} · ${item.card.title}`);
     return choices;
   }
   for (const studio of scope.studios.slice(0, 5)) {
     for (const hit of await searchCards(actor, { studioId: studio.id, q: q.slice(0, 100), limit: 25 })) {
-      if (scope.accesses.has(hit.project.id)) add(hit.card.id, `${hit.card.key} ${hit.card.title}`);
+      if (scope.accesses.has(hit.project.id)) add(hit.card.id, `${hit.card.key} · ${hit.card.title}`);
     }
   }
   return choices;
 }
 
-/** Confirmation wording for an action, from the current state (null when it no longer applies). */
-async function pendingFor(userId: string, verb: Verb, id: string): Promise<{ cardId: string; pending: Pending }> {
+const VERSION_ROW = (id: string) => db.select({ n: assetVersions.versionNumber }).from(assetVersions).where(eq(assetVersions.id, id));
+
+/** The confirmation for an action, worded from the current state. */
+async function pendingFor(userId: string, verb: Verb, id: string): Promise<Pending> {
   if (verb === "approve" || verb === "submit") {
     const ctx = await requireDeliverable(userId, id);
-    const [version] = ctx.deliverable.currentVersionId
-      ? await db.select({ n: assetVersions.versionNumber }).from(assetVersions).where(eq(assetVersions.id, ctx.deliverable.currentVersionId))
-      : [];
-    const what = `${version ? `**V${version.n}** of ` : ""}**${escapeMarkdown(ctx.deliverable.name)}**`;
+    const [version] = ctx.deliverable.currentVersionId ? await VERSION_ROW(ctx.deliverable.currentVersionId) : [];
+    const what = `${version ? `**V${version.n}** of ` : ""}**${escapeMarkdown(truncate(ctx.deliverable.name, 60))}**`;
     return verb === "approve"
-      ? { cardId: ctx.card.id, pending: { verb, id, question: `Approve ${what}?`, confirm: "Yes, approve" } }
-      : { cardId: ctx.card.id, pending: { verb, id, question: `Submit ${what} for review?`, confirm: "Yes, submit" } };
+      ? { verb, id, cardId: ctx.card.id, question: `Approve ${what}?`, explanation: "Everyone working on it is told it's approved, and work waiting on it can start.", confirm: "Yes, approve" }
+      : { verb, id, cardId: ctx.card.id, question: `Submit ${what} for review?`, explanation: "Its reviewer is asked to approve it or request changes.", confirm: "Yes, submit" };
   }
   const ctx = await requireCard(userId, id);
+  const title = `**${escapeMarkdown(truncate(ctx.card.title, 80))}**`;
   return verb === "complete"
-    ? { cardId: ctx.card.id, pending: { verb, id, question: `Mark **${escapeMarkdown(ctx.card.title)}** as **Completed**?`, confirm: "Yes, mark completed" } }
-    : { cardId: ctx.card.id, pending: { verb, id, question: `Mark **${escapeMarkdown(ctx.card.title)}** as **Published**?`, confirm: "Yes, mark published" } };
+    ? { verb, id, cardId: id, question: `Mark ${title} as completed?`, explanation: "Every required deliverable is approved; this records the work as done.", confirm: "Yes, mark completed" }
+    : { verb, id, cardId: id, question: `Mark ${title} as published?`, explanation: "This records the work as released.", confirm: "Yes, mark published" };
 }
+
+/** Shows the card with a message about what went wrong (the services' own wording). */
+const failed = (userId: string, cardId: string, error: AppError) => cardReply(userId, cardId, { banner: `⚠️ ${escapeMarkdown(error.message)}` });
 
 /** Carries out a confirmed action as the person (the services check their permissions), then shows the card again. */
 async function perform(actor: Actor, verb: Verb, id: string): Promise<Reply> {
   if (verb === "approve" || verb === "submit") {
     const ctx = await requireDeliverable(actor.userId, id);
-    const label = `**${escapeMarkdown(ctx.deliverable.name)}**`;
+    const [version] = ctx.deliverable.currentVersionId ? await VERSION_ROW(ctx.deliverable.currentVersionId) : [];
+    const what = `${version ? `**V${version.n}** of ` : ""}**${escapeMarkdown(truncate(ctx.deliverable.name, 60))}**`;
     try {
       if (verb === "approve") await approve(actor, { deliverableId: id });
       else await submitForReview(actor, { deliverableId: id });
     } catch (error) {
-      if (error instanceof AppError) return cardReply(actor.userId, ctx.card.id, { banner: `⚠️ ${escapeMarkdown(error.message)}` });
+      if (error instanceof AppError) return failed(actor.userId, ctx.card.id, error);
       throw error;
     }
-    return cardReply(actor.userId, ctx.card.id, { banner: verb === "approve" ? `✅ You approved ${label}.` : `📥 You submitted ${label} for review.` });
+    return cardReply(actor.userId, ctx.card.id, { banner: verb === "approve" ? `✅ You approved ${what}.` : `📥 You submitted ${what} for review.` });
   }
   try {
     await moveProduction(actor, { cardId: id, status: verb === "complete" ? "COMPLETED" : "PUBLISHED" });
   } catch (error) {
-    if (error instanceof AppError) return cardReply(actor.userId, id, { banner: `⚠️ ${escapeMarkdown(error.message)}` });
+    if (error instanceof AppError) return failed(actor.userId, id, error);
     throw error;
   }
   return cardReply(actor.userId, id, { banner: verb === "complete" ? "🏁 Marked **Completed**." : "🚀 Marked **Published**." });
@@ -702,7 +891,7 @@ async function perform(actor: Actor, verb: Verb, id: string): Promise<Reply> {
 async function changesModal(userId: string, deliverableId: string): Promise<InteractionResponse> {
   const ctx = await requireDeliverable(userId, deliverableId);
   if (ctx.deliverable.state !== "NEEDS_REVIEW" || !ctx.dperms.canReview) {
-    return respond(7, await cardReply(userId, ctx.card.id, { banner: `⚠️ ${escapeMarkdown(ctx.deliverable.name)} isn't waiting for your review any more.` }));
+    return respond(7, await cardReply(userId, ctx.card.id, { banner: `⚠️ **${escapeMarkdown(ctx.deliverable.name)}** isn't waiting for your review any more.` }));
   }
   const required = Boolean(ctx.access.project.settings.requireFeedbackForChanges);
   return {
@@ -730,9 +919,9 @@ async function changesModal(userId: string, deliverableId: string): Promise<Inte
   };
 }
 
-async function submitChanges(actor: Actor, deliverableId: string, text: string): Promise<Reply> {
+async function submitChanges(actor: Actor, deliverableId: string, input: string): Promise<Reply> {
   const ctx = await requireDeliverable(actor.userId, deliverableId);
-  const items = text
+  const items = input
     .split(/\r?\n/)
     .map((line) => line.replace(/^\s*[-*•]\s*/, "").trim())
     .filter(Boolean)
@@ -741,20 +930,194 @@ async function submitChanges(actor: Actor, deliverableId: string, text: string):
   try {
     await requestChanges(actor, { deliverableId, items });
   } catch (error) {
-    if (error instanceof AppError) return cardReply(actor.userId, ctx.card.id, { banner: `⚠️ ${escapeMarkdown(error.message)}` });
+    if (error instanceof AppError) return failed(actor.userId, ctx.card.id, error);
     throw error;
   }
-  const notes = items.length ? ` (${items.length} feedback item${items.length === 1 ? "" : "s"})` : "";
+  const notes = items.length ? ` with ${plural(items.length, "feedback item")}` : "";
   return cardReply(actor.userId, ctx.card.id, { banner: `🔁 You requested changes on **${escapeMarkdown(ctx.deliverable.name)}**${notes}.` });
+}
+
+// ── /newcard ────────────────────────────────────────────────────────────────────────────────
+
+/** Projects the person can create cards in. */
+function creatable(scope: Scope) {
+  return [...scope.accesses.values()].filter((a) => roleHas(a.role, "card.create")).sort((a, b) => a.project.name.localeCompare(b.project.name));
+}
+
+/** A project from an autocomplete pick (its id) or typed text (its name or key). */
+function matchProject(list: ProjectAccess[], value: string): ProjectAccess | null {
+  if (UUID.test(value)) return list.find((a) => a.project.id === value) ?? null;
+  const v = value.trim().toLowerCase();
+  if (!v) return null;
+  const exact = list.filter((a) => a.project.name.toLowerCase() === v || a.project.key.toLowerCase() === v);
+  if (exact.length === 1) return exact[0]!;
+  const partial = list.filter((a) => a.project.name.toLowerCase().includes(v));
+  return partial.length === 1 ? partial[0]! : null;
+}
+
+async function columnsOf(projectId: string) {
+  const rows = await db
+    .select({ id: boardColumns.id, name: boardColumns.name, board: boards.name })
+    .from(boardColumns)
+    .innerJoin(boards, eq(boards.id, boardColumns.boardId))
+    .where(and(eq(boardColumns.projectId, projectId), isNull(boardColumns.archivedAt), isNull(boards.archivedAt)))
+    .orderBy(asc(boards.position), asc(boardColumns.position));
+  const severalBoards = new Set(rows.map((r) => r.board)).size > 1;
+  return rows.map((r) => ({ id: r.id, name: r.name, label: severalBoards ? `${r.board} › ${r.name}` : r.name }));
+}
+
+function matchColumn(list: Awaited<ReturnType<typeof columnsOf>>, value: string) {
+  if (UUID.test(value)) return list.find((c) => c.id === value) ?? null;
+  const v = value.trim().toLowerCase();
+  const exact = list.filter((c) => c.name.toLowerCase() === v || c.label.toLowerCase() === v);
+  if (exact.length === 1) return exact[0]!;
+  const partial = list.filter((c) => c.label.toLowerCase().includes(v));
+  return partial.length === 1 ? partial[0]! : null;
+}
+
+/** Who may be assigned: anyone on the project for people who can assign others, otherwise only themselves. */
+async function assignable(access: ProjectAccess) {
+  const members = await listProjectMembers(access.project);
+  return roleHas(access.role, "card.assign") ? members : members.filter((m) => m.id === access.userId);
+}
+
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const SHORT_DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const SHORT_MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const isoDay = (d: Date) => d.toISOString().slice(0, 10);
+const addDays = (d: Date, n: number) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + n));
+const dayLabel = (iso: string) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return `${SHORT_DAY[d.getUTCDay()]} ${d.getUTCDate()} ${SHORT_MONTH[d.getUTCMonth()]}`;
+};
+
+/** A calendar day ("YYYY-MM-DD") from what someone typed: a date, today/tomorrow, a weekday, "in 3 days", "2w"… */
+export function parseDueDay(input: string, now = new Date()): string | null {
+  const v = input.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!v) return null;
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    const d = new Date(`${v}T00:00:00Z`);
+    return Number.isNaN(d.getTime()) || isoDay(d) !== v ? null : v;
+  }
+  if (v === "today") return isoDay(today);
+  if (v === "tomorrow" || v === "tmrw") return isoDay(addDays(today, 1));
+  if (v === "next week") return isoDay(addDays(today, 7));
+  const relative = /^(?:in )?(\d{1,3}) ?(d|day|days|w|wk|week|weeks)$/.exec(v);
+  if (relative) return isoDay(addDays(today, Number(relative[1]) * (relative[2]!.startsWith("w") ? 7 : 1)));
+  const weekday = WEEKDAYS.findIndex((day) => v === day || (v.length >= 3 && day.startsWith(v)) || v === `next ${day}`);
+  if (weekday >= 0) return isoDay(addDays(today, (weekday - today.getUTCDay() + 7) % 7 || 7));
+  return null;
+}
+
+/** Date-only deadlines are at 18:00 (UTC here: Discord doesn't say where people are; the reply shows their local time). */
+const dueAtFor = (day: string) => new Date(`${day}T18:00:00Z`).toISOString();
+
+function suggestDays(typed: string, now = new Date()): Choice[] {
+  const { choices, add } = choiceList();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const parsed = parseDueDay(typed, now);
+  if (parsed) add(parsed, `${typed.trim()} · ${dayLabel(parsed)}`);
+  const presets: Array<[string, Date]> = [
+    ["Today", today],
+    ["Tomorrow", addDays(today, 1)],
+    ["Friday", addDays(today, (5 - today.getUTCDay() + 7) % 7 || 7)],
+    ["In 1 week", addDays(today, 7)],
+    ["In 2 weeks", addDays(today, 14)],
+  ];
+  for (const [label, date] of presets) {
+    if (!typed.trim() || label.toLowerCase().includes(typed.trim().toLowerCase())) add(isoDay(date), `${label} · ${dayLabel(isoDay(date))}`);
+  }
+  return choices;
+}
+
+function optionText(interaction: Interaction, name: string) {
+  const value = interaction.data?.options?.find((o) => o.name === name)?.value;
+  return typeof value === "string" ? value : value === undefined ? "" : String(value);
+}
+
+async function suggestForNewCard(scope: Scope, interaction: Interaction): Promise<Choice[]> {
+  const focused = interaction.data?.options?.find((o) => o.focused);
+  const typed = typeof focused?.value === "string" ? focused.value.trim().toLowerCase() : "";
+  const { choices, add } = choiceList();
+  const projects = creatable(scope);
+  if (focused?.name === "project") {
+    for (const a of projects) {
+      if (!typed || a.project.name.toLowerCase().includes(typed) || a.project.key.toLowerCase().startsWith(typed)) add(a.project.id, `${a.project.icon} ${a.project.name} (${a.project.key})`.trim());
+    }
+    return choices;
+  }
+  if (focused?.name === "due") return suggestDays(typeof focused.value === "string" ? focused.value : "");
+  const access = matchProject(projects, optionText(interaction, "project"));
+  if (!access) return choices;
+  if (focused?.name === "column") {
+    for (const c of await columnsOf(access.project.id)) if (!typed || c.label.toLowerCase().includes(typed)) add(c.id, c.label);
+  } else if (focused?.name === "assign") {
+    if (!typed || "me".startsWith(typed)) add("me", "Me");
+    for (const m of await assignable(access)) {
+      if (m.id === scope.userId) continue;
+      if (!typed || m.displayName.toLowerCase().includes(typed) || m.username.toLowerCase().includes(typed)) add(m.id, `${m.displayName} (@${m.username})`);
+    }
+  }
+  return choices;
+}
+
+async function newCard(scope: Scope, actor: Actor, interaction: Interaction): Promise<Reply> {
+  const title = optionText(interaction, "title").trim().slice(0, 200);
+  if (!title) return problem("Give the card a title.");
+  const projects = creatable(scope);
+  if (!projects.length) return problem("You can't create cards in any project here. Ask a Manager for a role that can.");
+  const access = matchProject(projects, optionText(interaction, "project"));
+  if (!access) return problem("Choose a project from the list while typing.");
+  const columns = await columnsOf(access.project.id);
+  const columnText = optionText(interaction, "column");
+  const column = columnText ? matchColumn(columns, columnText) : (columns[0] ?? null);
+  if (!column) return problem(columns.length ? "Choose a column from the list while typing." : `${access.project.name} has no columns yet. Add one in Forge first.`);
+
+  const assignText = optionText(interaction, "assign").trim();
+  let assigneeIds: string[] = [];
+  if (assignText) {
+    if (assignText === "me" || assignText.toLowerCase() === "me") assigneeIds = [actor.userId];
+    else {
+      const members = await assignable(access);
+      const v = assignText.toLowerCase().replace(/^@/, "");
+      const match = UUID.test(assignText)
+        ? members.find((m) => m.id === assignText)
+        : (members.find((m) => m.username.toLowerCase() === v) ?? (members.filter((m) => m.displayName.toLowerCase().includes(v)).length === 1 ? members.find((m) => m.displayName.toLowerCase().includes(v)) : undefined));
+      if (!match) return problem(roleHas(access.role, "card.assign") ? "Choose who works on it from the list while typing." : "You can assign cards only to yourself in this project.");
+      assigneeIds = [match.id];
+    }
+  }
+  const dueText = optionText(interaction, "due");
+  const day = dueText ? parseDueDay(dueText) : null;
+  if (dueText && !day) return problem("Forge didn't understand that deadline. Try friday, tomorrow, in 3 days or 2026-10-20.");
+  const priorityValue = optionText(interaction, "priority");
+  const priority = (["LOW", "NORMAL", "HIGH", "URGENT"] as const).includes(priorityValue as Priority) ? (priorityValue as Priority) : "NORMAL";
+
+  let created;
+  try {
+    created = await createCard(actor, {
+      projectId: access.project.id,
+      columnId: column.id,
+      title,
+      description: optionText(interaction, "description").trim().slice(0, 2000) || undefined,
+      priority,
+      dueAt: day ? dueAtFor(day) : null,
+      assigneeIds,
+    });
+  } catch (error) {
+    if (error instanceof AppError) return problem(error.message);
+    throw error;
+  }
+  return cardReply(actor.userId, created.id, {
+    banner: `🆕 Created **${escapeMarkdown(created.key)}** in **${escapeMarkdown(truncate(access.project.name, 60))}** › ${escapeMarkdown(truncate(column.label, 60))}.`,
+  });
 }
 
 // ── Dispatch ────────────────────────────────────────────────────────────────────────────────
 
-const COMPONENT = /^fg:(open|approve|approve!|submit|submit!|changes|complete|complete!|publish|publish!):([0-9a-f-]{36})$/;
-
-function option(interaction: Interaction, name: string) {
-  return interaction.data?.options?.find((o) => o.name === name);
-}
+const COMPONENT = /^fg:(open|approve|approve!|submit|submit!|changes|complete|complete!|publish|publish!):([0-9a-f-]{36})(?::\d{1,2})?$/;
 
 /**
  * Answers one interaction (already verified as coming from Discord). The person is identified by
@@ -766,20 +1129,23 @@ export async function handleInteraction(interaction: Interaction): Promise<Inter
   const discordUserId = interaction.member?.user?.id ?? interaction.user?.id;
   const updates = interaction.type === 3 || interaction.type === 5;
   const send = (reply: Reply) => respond(updates ? 7 : 4, reply);
-  if (!discordUserId || !/^\d{5,25}$/.test(discordUserId)) return send(problem("Forge couldn't tell who sent this."));
+  const noChoices: InteractionResponse = { type: 8, data: { choices: [] } };
+  if (!discordUserId || !/^\d{5,25}$/.test(discordUserId)) return interaction.type === 4 ? noChoices : send(problem("Forge couldn't tell who sent this."));
   try {
     enforceRateLimit(`discord-command:${discordUserId}`, 40, 60_000);
   } catch (error) {
-    if (interaction.type === 4) return { type: 8, data: { choices: [] } };
+    if (interaction.type === 4) return noChoices;
     return send(problem(error instanceof AppError ? error.message : "Please wait a moment and try again."));
   }
   const user = await linkedUser(discordUserId);
-  if (!user) return interaction.type === 4 ? { type: 8, data: { choices: [] } } : send(notLinked());
+  if (!user) return interaction.type === 4 ? noChoices : send(notLinked());
   const actor: Actor = { userId: user.id, userAgent: "Discord" };
   try {
     if (interaction.type === 4) {
+      const scope = await scopeFor(user.id, interaction.guild_id);
+      if (interaction.data?.name === "newcard") return { type: 8, data: { choices: await suggestForNewCard(scope, interaction) } };
       const typed = interaction.data?.options?.find((o) => o.focused)?.value;
-      return { type: 8, data: { choices: await suggestCards(await scopeFor(user.id, interaction.guild_id), actor, typeof typed === "string" ? typed : "") } };
+      return { type: 8, data: { choices: await suggestCards(scope, actor, typeof typed === "string" ? typed : "") } };
     }
     if (interaction.type === 2) {
       const scope = await scopeFor(user.id, interaction.guild_id);
@@ -789,15 +1155,19 @@ export async function handleInteraction(interaction: Interaction): Promise<Inter
         case "reviews":
           return send(await reviewQueue(scope));
         case "due": {
-          const days = Number(option(interaction, "days")?.value ?? 3);
-          return send(await deadlines(scope, Number.isInteger(days) ? Math.min(30, Math.max(1, days)) : 3, option(interaction, "everyone")?.value === true));
+          const days = Number(optionText(interaction, "days") || 3);
+          const team = interaction.data.options?.some((o) => (o.name === "team" || o.name === "everyone") && o.value === true) ?? false;
+          return send(await deadlines(scope, Number.isInteger(days) ? Math.min(30, Math.max(1, days)) : 3, team));
         }
         case "card": {
-          const query = String(option(interaction, "card")?.value ?? "");
+          // "card" was the option's first name; Discord may still send it until the client refreshes.
+          const query = optionText(interaction, "find") || optionText(interaction, "card");
           const cardId = await findCard(scope, actor, query);
           if (!cardId) return send(problem(`No card you can see matches “${truncate(query, 60)}”.`));
           return send(await cardReply(user.id, cardId));
         }
+        case "newcard":
+          return send(await newCard(scope, actor, interaction));
         default:
           return send(problem("Forge doesn't know that command."));
       }
@@ -805,6 +1175,7 @@ export async function handleInteraction(interaction: Interaction): Promise<Inter
     if (interaction.type === 3) {
       const customId = interaction.data?.custom_id ?? "";
       if (customId === "fg:pick") {
+        // Menus from replies sent before the layout change.
         const cardId = interaction.data?.values?.[0] ?? "";
         if (!UUID.test(cardId)) return send(problem("Choose a card from the list."));
         return send(await cardReply(user.id, cardId));
@@ -815,19 +1186,19 @@ export async function handleInteraction(interaction: Interaction): Promise<Inter
       if (verb === "open") return send(await cardReply(user.id, id));
       if (verb === "changes") return await changesModal(user.id, id);
       if (verb.endsWith("!")) return send(await perform(actor, verb.slice(0, -1) as Verb, id));
-      const { cardId, pending } = await pendingFor(user.id, verb as Verb, id);
-      return send(await cardReply(user.id, cardId, { pending }));
+      const pending = await pendingFor(user.id, verb as Verb, id);
+      return send(await cardReply(user.id, pending.cardId, { pending }));
     }
     if (interaction.type === 5) {
       const match = /^fg:changes!:([0-9a-f-]{36})$/.exec(interaction.data?.custom_id ?? "");
       if (!match || !UUID.test(match[1]!)) return send(problem("That form no longer works. Run the command again."));
-      const text = interaction.data?.components?.flatMap((row) => row.components ?? []).find((c) => c.custom_id === "items")?.value ?? "";
-      return send(await submitChanges(actor, match[1]!, text.slice(0, 4000)));
+      const input = interaction.data?.components?.flatMap((r) => r.components ?? []).find((c) => c.custom_id === "items")?.value ?? "";
+      return send(await submitChanges(actor, match[1]!, input.slice(0, 4000)));
     }
     return send(problem("Forge doesn't handle that kind of interaction."));
   } catch (error) {
-    if (error instanceof AppError) return interaction.type === 4 ? { type: 8, data: { choices: [] } } : send(problem(error.message));
+    if (error instanceof AppError) return interaction.type === 4 ? noChoices : send(problem(error.message));
     console.error("[discord] interaction failed", error);
-    return interaction.type === 4 ? { type: 8, data: { choices: [] } } : send(problem("Something went wrong on Forge's side. Please try again."));
+    return interaction.type === 4 ? noChoices : send(problem("Something went wrong on Forge's side. Please try again."));
   }
 }
