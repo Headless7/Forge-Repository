@@ -4,21 +4,15 @@ const isDev = process.env.NODE_ENV !== "production";
 // Browsers remember HSTS: only send it when the app is really served over HTTPS (and not in development).
 const httpsOnly = !isDev && (process.env.APP_URL ?? "").startsWith("https://");
 
-// Extra origins that may serve private media (S3/R2 presigned URLs). Local storage is same-origin.
-const storageOrigin = process.env.STORAGE_PUBLIC_ORIGIN ?? "";
-
-// API responses (JSON, files) never run scripts; pages get a per-request policy with a nonce (src/proxy.ts).
+// API responses (JSON, files, feeds) never run scripts or load anything: opened directly, they can
+// only show an image or play media. Pages get a per-request policy with a nonce (src/proxy.ts).
 const apiContentSecurityPolicy = [
-  "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
-  "style-src 'self' 'unsafe-inline'",
-  `img-src 'self' data: blob: ${storageOrigin}`.trim(),
-  `media-src 'self' blob: ${storageOrigin}`.trim(),
-  `connect-src 'self' ${storageOrigin}${isDev ? " ws: wss:" : ""}`.trim(),
-  "font-src 'self' data:",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
+  "default-src 'none'",
+  "img-src 'self'",
+  "media-src 'self'",
+  "style-src 'unsafe-inline'",
+  "base-uri 'none'",
+  "form-action 'none'",
   "frame-ancestors 'none'",
 ].join("; ");
 
@@ -47,6 +41,8 @@ const nextConfig: NextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          // No other site's window keeps a handle on a Forge tab (sign-in flows are full-page redirects).
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
         ],
       },
     ];

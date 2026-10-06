@@ -4,6 +4,7 @@ import { extractMentions } from "./mentions";
 import { canGrantRole, canManageMember, cardPermissions, roleHas } from "./permissions";
 import { positionBetween, resolveInsertIndex, spacedPositions } from "./positions";
 import type { CardSummaryDTO } from "./types";
+import { safeRedirectPath } from "./safe-redirect";
 import { formatTimecode } from "./utils";
 
 describe("positions", () => {
@@ -156,5 +157,20 @@ describe("board filters", () => {
     expect(matchesFilters(card({}), { ...EMPTY_FILTERS, q: "hollow vfx" }, ctx)).toBe(true);
     expect(matchesFilters(card({}), { ...EMPTY_FILTERS, q: "utd-1" }, ctx)).toBe(true);
     expect(matchesFilters(card({}), { ...EMPTY_FILTERS, q: "sukuna" }, ctx)).toBe(false);
+  });
+});
+
+describe("redirect targets", () => {
+  it("keep paths on this site", () => {
+    expect(safeRedirectPath("/acme/game/b/1?card=GAM-4#x")).toBe("/acme/game/b/1?card=GAM-4#x");
+    expect(safeRedirectPath("/invite/abc_DEF-123")).toBe("/invite/abc_DEF-123");
+    expect(safeRedirectPath(undefined)).toBe("/");
+    expect(safeRedirectPath(null, "/onboarding")).toBe("/onboarding");
+  });
+
+  it("refuse anything a browser could read as another site", () => {
+    for (const value of ["//evil.com", "/\\evil.com", "/\\/evil.com", "\\\\evil.com", "https://evil.com", "evil.com", "/.//evil.com", "/%2e//evil.com", "/\t/evil.com", "/\n/evil.com", " /evil", "javascript:alert(1)", ["/a"]]) {
+      expect(safeRedirectPath(value)).toBe("/");
+    }
   });
 });

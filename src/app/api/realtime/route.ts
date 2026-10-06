@@ -4,14 +4,19 @@ import { requireRouteSession, sessionTokenFrom } from "@/server/auth/route-sessi
 import { validateSessionToken } from "@/server/auth/session";
 import { db } from "@/server/db";
 import { users } from "@/server/db/schema";
-import { invalid, notFound } from "@/server/errors";
+import { invalid, notFound, rateLimited } from "@/server/errors";
 import { errorResponse } from "@/server/http";
+import { enforceRateLimit } from "@/server/rate-limit";
 import { realtime, type RealtimeEvent } from "@/server/realtime/bus";
 
 export const dynamic = "force-dynamic";
 
 const HEARTBEAT_MS = 25_000;
 const REVALIDATE_MS = 60_000;
+/** Open streams per person on this server: plenty for many tabs and devices, but not unbounded. */
+const MAX_STREAMS_PER_USER = 30;
+const g = globalThis as unknown as { __forgeRealtimeStreams?: Map<string, number> };
+const openStreams = (g.__forgeRealtimeStreams ??= new Map<string, number>());
 
 /**
  * Server-Sent Events stream for one project board (plus the user's own
@@ -22,6 +27,8 @@ const REVALIDATE_MS = 60_000;
 export async function GET(req: Request) {
   try {
     const { actor } = await requireRouteSession(req);
+    enforceRateLimit(`realtime:${actor.userId}`, 120, 60_000);
+    if ((openStreams.get(actor.userId) ?? 0) >= MAX_STREAMS_PER_USER) throw rateLimited(10_000);
     const url = new URL(req.url);
     const projectId = url.searchParams.get("projectId");
     if (projectId && !/^[0-9a-f-]{36}$/i.test(projectId)) throw invalid("Invalid project.");
@@ -33,6 +40,7 @@ export async function GET(req: Request) {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         let closed = false;
+        openStreams.set(actor.userId, (openStreams.get(actor.userId) ?? 0) + 1);
         const send = (chunk: string) => {
           if (closed) return;
           try {
@@ -72,6 +80,9 @@ export async function GET(req: Request) {
         function close() {
           if (closed) return;
           closed = true;
+          const open = (openStreams.get(actor.userId) ?? 1) - 1;
+          if (open > 0) openStreams.set(actor.userId, open);
+          else openStreams.delete(actor.userId);
           clearInterval(heartbeat);
           clearInterval(revalidate);
           unsubscribe();

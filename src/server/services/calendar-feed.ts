@@ -38,7 +38,8 @@ export async function revokeCalendarFeed(actor: Actor) {
 // ── ICS (RFC 5545) ──────────────────────────────────────────────────────────
 
 function escapeText(value: string) {
-  return value.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+  // Any line break (a lone CR too) becomes "\n": raw ones would start a new property in the feed.
+  return value.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r\n|\r|\n/g, "\\n");
 }
 
 /** Folds a content line at 75 octets (continuation lines start with a space). */

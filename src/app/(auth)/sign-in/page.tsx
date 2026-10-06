@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { SignInForm } from "@/components/auth/auth-forms";
 import { DEMO_ACCOUNTS, DEMO_PASSWORD } from "@/lib/demo-accounts";
+import { safeRedirectPath } from "@/lib/safe-redirect";
 import { getSession } from "@/server/auth/current";
 import { env } from "@/server/env";
 
@@ -10,7 +11,7 @@ const DEMO_COLORS = ["#7c6cf2", "#3b82f6", "#06b6d4", "#10b981", "#f59e0b", "#ef
 
 export default async function SignInPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const params = await searchParams;
-  if (await getSession()) redirect(params.next && params.next.startsWith("/") && !params.next.startsWith("//") ? params.next : "/");
+  if (await getSession()) redirect(safeRedirectPath(params.next));
   const demo =
     env.DEMO_MODE && env.NODE_ENV !== "production"
       ? { password: DEMO_PASSWORD, accounts: DEMO_ACCOUNTS.map((a, i) => ({ email: a.email, name: a.name, hint: a.hint, color: DEMO_COLORS[i % DEMO_COLORS.length]! })) }

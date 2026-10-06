@@ -143,8 +143,10 @@ describe("calendar feeds", () => {
   });
 
   it("escape text safely", () => {
-    const ics = renderCalendar([{ uid: "x@forge", summary: "A, B; C\\D\nE", description: "", url: "https://x", at: new Date("2026-01-02T03:04:05Z") }], new Date("2026-01-01T00:00:00Z"));
-    expect(ics).toContain("SUMMARY:A\\, B\\; C\\\\D\\nE");
+    const ics = renderCalendar([{ uid: "x@forge", summary: "A, B; C\\D\nE\rLOCATION:x", description: "", url: "https://x", at: new Date("2026-01-02T03:04:05Z") }], new Date("2026-01-01T00:00:00Z"));
+    expect(ics).toContain("SUMMARY:A\\, B\\; C\\\\D\\nE\\nLOCATION:x");
+    // A lone carriage return can't start a property of its own.
+    expect(ics.split("\r\n").some((line) => line.startsWith("LOCATION"))).toBe(false);
     expect(ics).toContain("DTSTART:20260102T030405Z");
   });
 });

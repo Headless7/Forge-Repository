@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { NOTICE_PARAMS, NOTICE_SIGNATURE_PARAM, noticeIsAuthentic } from "./notice-signature";
 import { pageContentSecurityPolicy } from "./security-headers";
 import { SESSION_COOKIE } from "./server/auth/constants";
 
@@ -9,8 +10,14 @@ const PUBLIC_PREFIXES = ["/sign-in", "/sign-up", "/forgot-password", "/reset-pas
  * sign-in. Real session validation and authorization happen server-side in
  * every layout, page and API route.
  */
-export function proxy(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  // A message in the URL that this server didn't sign is dropped (see notice-signature.ts).
+  if (!(await noticeIsAuthentic(request.nextUrl.searchParams, process.env.AUTH_SECRET ?? ""))) {
+    const url = request.nextUrl.clone();
+    for (const name of [...NOTICE_PARAMS, NOTICE_SIGNATURE_PARAM]) url.searchParams.delete(name);
+    return NextResponse.redirect(url);
+  }
   const isPublic = PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   if (!isPublic && !request.cookies.has(SESSION_COOKIE)) {
     const url = request.nextUrl.clone();

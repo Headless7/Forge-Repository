@@ -18,8 +18,11 @@ export function runFfmpeg(args: string[], timeoutMs = 10 * 60 * 1000): Promise<{
   const bin = ffmpegPath();
   if (!bin) return Promise.reject(new Error("ffmpeg is not available"));
   return new Promise((resolve, reject) => {
+    // Inputs are uploaded files: ffmpeg may only read local files for them, so a crafted file (a
+    // playlist or reference inside a container) can't make it fetch URLs or other protocols.
+    const guarded = args.flatMap((arg) => (arg === "-i" ? ["-protocol_whitelist", "file", "-i"] : [arg]));
     // The binary comes from ffmpeg-static (an external package), so build tracing can skip this call.
-    const child = spawn(/*turbopackIgnore: true*/ bin, ["-hide_banner", "-nostdin", ...args], { windowsHide: true });
+    const child = spawn(/*turbopackIgnore: true*/ bin, ["-hide_banner", "-nostdin", ...guarded], { windowsHide: true });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();

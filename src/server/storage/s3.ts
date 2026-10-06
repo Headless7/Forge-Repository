@@ -14,6 +14,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { bucketedExpiry, type SignedUrlOptions, type StorageDriver, type UploadTarget } from "./types";
+import { isInlineSafe } from "../media/formats";
 import { runtimePath, tempPrefix } from "../runtime-path";
 
 export interface S3Config {
@@ -28,6 +29,16 @@ export interface S3Config {
 function contentDisposition(filename: string) {
   const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+/**
+ * The Content-Type an object is stored (and so served) with. The bucket answers with it as is, so
+ * only media the app shows inline and its own JSON keep theirs; anything else (an HTML or SVG file
+ * someone uploaded, whatever they declared) is stored as a download and never renders in a browser.
+ */
+export function storedContentType(contentType: string): string {
+  const type = contentType.toLowerCase().split(";")[0]!.trim();
+  return isInlineSafe(type) || type === "audio/mp4" || type === "application/json" ? type : "application/octet-stream";
 }
 
 /** S3-compatible storage (AWS S3, Cloudflare R2, MinIO). Bucket must be private. */
@@ -48,16 +59,17 @@ export class S3StorageDriver implements StorageDriver {
   }
 
   async createUploadTarget(key: string, options: { contentType: string; size: number }): Promise<UploadTarget> {
+    const contentType = storedContentType(options.contentType);
     // Content-Length is signed, so the bucket refuses a body of any other size (the size was
     // checked against the upload limits when the intent was created). The link only has to be
     // valid when the upload starts, so it's short: it is also how long the uploader could
     // overwrite the object after finishing (or after losing access).
     const url = await getSignedUrl(
       this.client,
-      new PutObjectCommand({ Bucket: this.config.bucket, Key: key, ContentType: options.contentType, ContentLength: options.size }),
+      new PutObjectCommand({ Bucket: this.config.bucket, Key: key, ContentType: contentType, ContentLength: options.size }),
       { expiresIn: 60 * 60, signableHeaders: new Set(["content-length", "content-type"]) },
     );
-    return { url, method: "PUT", headers: { "content-type": options.contentType } };
+    return { url, method: "PUT", headers: { "content-type": contentType } };
   }
 
   async signedUrl(key: string, options: SignedUrlOptions = {}): Promise<string> {
@@ -76,7 +88,7 @@ export class S3StorageDriver implements StorageDriver {
 
   async put(key: string, body: Buffer, contentType: string) {
     await this.client.send(
-      new PutObjectCommand({ Bucket: this.config.bucket, Key: key, Body: body, ContentType: contentType }),
+      new PutObjectCommand({ Bucket: this.config.bucket, Key: key, Body: body, ContentType: storedContentType(contentType) }),
     );
   }
 
@@ -88,7 +100,7 @@ export class S3StorageDriver implements StorageDriver {
         Key: key,
         Body: fs.createReadStream(filePath),
         ContentLength: size,
-        ContentType: contentType,
+        ContentType: storedContentType(contentType),
       }),
     );
   }

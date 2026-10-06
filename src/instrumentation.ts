@@ -13,7 +13,7 @@ export async function register() {
   g.__forgeJobsStarted = true;
 
   const { runDueDateReminders } = await import("./server/services/due-dates");
-  const { deliverOutbox } = await import("./server/services/email");
+  const { deliverOutbox, scrubExpiredOutboxLinks } = await import("./server/services/email");
   const { evictStaleRobloxAssets } = await import("./server/services/roblox");
   const { recoverMediaJobs } = await import("./server/services/media");
   const { sharedRateLimiter } = await import("./server/rate-limit");
@@ -31,6 +31,9 @@ export async function register() {
   setTimeout(safely("due-dates", runDueDateReminders), 15_000);
   setInterval(safely("due-dates", runDueDateReminders), 5 * 60_000);
   setInterval(safely("email-outbox", deliverOutbox), 60_000);
+  // Expired one-time links (resets, confirmations, invitations) don't stay in the outbox.
+  setTimeout(safely("email-scrub", scrubExpiredOutboxLinks), 45_000);
+  setInterval(safely("email-scrub", scrubExpiredOutboxLinks), 60 * 60_000);
   // Device notifications go out right after each event; this catches retries and anything missed.
   setTimeout(safely("push-delivery", () => processPushDeliveries()), 20_000);
   setInterval(safely("push-delivery", () => processPushDeliveries()), 60_000);

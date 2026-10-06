@@ -395,7 +395,15 @@ export async function importFromUrl(
   await assertUploadAllowed(actor, input, db);
   const maxBytes = maxBytesFor("IMAGE");
   const fetched = await safeFetch(input.url, { maxBytes });
-  const urlName = decodeURIComponent(new URL(fetched.finalUrl).pathname.split("/").pop() || "image");
+  const lastSegment = new URL(fetched.finalUrl).pathname.split("/").pop() || "image";
+  // A malformed escape ("%E0%A4%A") in someone else's URL just keeps the raw name.
+  const urlName = (() => {
+    try {
+      return decodeURIComponent(lastSegment);
+    } catch {
+      return lastSegment;
+    }
+  })();
   const contentType = fetched.contentType.split(";")[0]!.trim();
   if (!contentType.startsWith("image/")) throw invalid("That link doesn't point to an image.");
   const extension = contentType.split("/")[1]?.replace("jpeg", "jpg") ?? "png";

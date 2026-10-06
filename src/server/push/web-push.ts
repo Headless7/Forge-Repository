@@ -114,7 +114,22 @@ export type PushResult =
   /** gone: the subscription no longer exists (expired, unsubscribed) — forget it. */
   | { ok: false; status: number; gone: boolean; retryable: boolean; error: string };
 
-/** Push services only take https endpoints on public hosts; anything else is refused before sending. */
+/**
+ * The push services browsers subscribe with: Google's FCM (Chrome, Opera, Samsung Internet, Brave),
+ * Windows Notification Services (Edge on Windows), Mozilla's autopush (Firefox) and Apple (Safari).
+ * Only these are sent to, so a subscription can't point the server at any other host — say, a
+ * name that resolves to a private address.
+ */
+const PUSH_SERVICE_HOSTS = [
+  /^fcm\.googleapis\.com$/,
+  /^android\.googleapis\.com$/,
+  /^[a-z0-9-]+\.notify\.windows\.com$/,
+  /^updates\.push\.services\.mozilla\.com$/,
+  /^web\.push\.apple\.com$/,
+  /^[a-z0-9-]+\.push\.apple\.com$/,
+];
+
+/** An https endpoint on a known push service (default port, no credentials); anything else is refused before sending. */
 export function isAcceptableEndpoint(endpoint: string): boolean {
   let url: URL;
   try {
@@ -122,12 +137,9 @@ export function isAcceptableEndpoint(endpoint: string): boolean {
   } catch {
     return false;
   }
-  if (url.protocol !== "https:" || url.username || url.password) return false;
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
   const host = url.hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return false;
-  // Literal IP addresses aren't push services (and could reach private networks).
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":") || host.startsWith("[")) return false;
-  return host.includes(".");
+  return PUSH_SERVICE_HOSTS.some((pattern) => pattern.test(host));
 }
 
 /**
@@ -140,6 +152,8 @@ export async function sendPush(
   keys: VapidKeys,
   options: { ttlSeconds?: number; urgency?: "very-low" | "low" | "normal" | "high"; topic?: string; fetchImpl?: typeof fetch } = {},
 ): Promise<PushResult> {
+  // Also checked here for subscriptions saved before the allow-list: they're forgotten, not sent to.
+  if (!isAcceptableEndpoint(target.endpoint)) return { ok: false, status: 0, gone: true, retryable: false, error: "Not a known push service." };
   const body = encryptPayload(Buffer.from(JSON.stringify(payload), "utf8"), target);
   const headers: Record<string, string> = {
     TTL: String(options.ttlSeconds ?? 24 * 60 * 60),

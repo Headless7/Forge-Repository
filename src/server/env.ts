@@ -118,6 +118,7 @@ export function productionWarnings(): string[] {
   if (env.PLATFORM_ADMIN_EMAILS.length === 0) warnings.push("PLATFORM_ADMIN_EMAILS is unset: nobody can create studios or issue activation keys. Set it to the operator's email.");
   if (env.REALTIME_DRIVER === "memory") warnings.push("REALTIME_DRIVER=memory only reaches users on this one process; use postgres when running more than one instance.");
   if (env.STORAGE_DRIVER === "local") warnings.push("STORAGE_DRIVER=local keeps files on this machine's disk: back up STORAGE_LOCAL_DIR and don't run several instances against it.");
+  if (!env.RESEND_API_KEY && !env.SMTP_URL) warnings.push("No email service (RESEND_API_KEY or SMTP_URL): password resets, confirmations and invitations can't be sent.");
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) warnings.push("Device notifications are off: set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT (generate keys with `npm run push:keys`).");
   return warnings;
 }

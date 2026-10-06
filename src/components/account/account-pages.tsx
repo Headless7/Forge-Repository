@@ -574,6 +574,7 @@ function ConnectedAccounts({ profile }: { profile: Profile }) {
     if (!connected && !url.searchParams.has("oauthError")) return;
     url.searchParams.delete("connected");
     url.searchParams.delete("oauthError");
+    url.searchParams.delete("ns");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
     if (connected !== "discord") return;
     // The welcome message goes out right away; if Discord refuses it, show that here.

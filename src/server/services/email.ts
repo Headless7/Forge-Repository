@@ -1,4 +1,4 @@
-import { and, asc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, lte, ne, sql } from "drizzle-orm";
 import nodemailer, { type Transporter } from "nodemailer";
 import { now } from "../clock";
 import { accessibleProjectIds } from "../access";
@@ -15,6 +15,16 @@ export interface EmailMessage {
   lines: string[];
   action?: { label: string; url: string };
 }
+
+/**
+ * Emails whose link is a credential (password reset, address confirmation, invitation). Tokens are
+ * stored hashed so a database leak can't use them, so once sent (or too old to matter) the outbox
+ * keeps no copy of these emails' text either.
+ */
+const ONE_TIME_LINK_TEMPLATES = ["password-reset", "verify-email", "invitation"];
+const REMOVED_BODY = "(Removed after sending: this email contained a one-time link.)";
+/** Longer than any of those links stays valid (invitations: 7 days). */
+const ONE_TIME_LINK_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
 
 const escapeHtml = (value: string) =>
   value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!);
@@ -108,6 +118,9 @@ export async function sendEmail(ex: Executor, message: EmailMessage, about: { us
     // Shortly after the caller commits (the per-minute job picks up anything this misses). Tests
     // deliver explicitly so they control the timing.
     if (env.NODE_ENV !== "test") setTimeout(() => void deliverOutbox().catch((error) => console.error("[forge] email delivery failed", error)), 200);
+  } else if (env.NODE_ENV === "production") {
+    // No email service: links can be credentials, so they aren't written to the server's logs.
+    console.warn(`[email] not sent (no email service configured): ${message.template} to ${message.to}`);
   } else if (env.NODE_ENV !== "test") {
     console.log(`\n\x1b[36m[email]\x1b[0m to ${message.to} — ${message.subject}${message.action ? `\n        ${message.action.url}` : ""}\n`);
   }
@@ -154,7 +167,8 @@ export async function deliverOutbox() {
     }
     try {
       await send({ id: email.id, to: email.to, subject: email.subject, text: email.textBody, html: email.htmlBody });
-      await db.update(emailOutbox).set({ status: "SENT", sentAt: now(), attempts: email.attempts + 1 }).where(eq(emailOutbox.id, email.id));
+      const removed = ONE_TIME_LINK_TEMPLATES.includes(email.template) ? { textBody: REMOVED_BODY, htmlBody: REMOVED_BODY } : {};
+      await db.update(emailOutbox).set({ status: "SENT", sentAt: now(), attempts: email.attempts + 1, ...removed }).where(eq(emailOutbox.id, email.id));
     } catch (error) {
       const attempts = email.attempts + 1;
       const delay = RETRY_DELAYS_MS[attempts - 1];
@@ -169,6 +183,22 @@ export async function deliverOutbox() {
         .where(eq(emailOutbox.id, email.id));
     }
   }
+}
+
+/** Removes the text of one-time-link emails that were never sent (or failed) once their links have expired. Hourly. */
+export async function scrubExpiredOutboxLinks() {
+  const rows = await db
+    .update(emailOutbox)
+    .set({ textBody: REMOVED_BODY, htmlBody: REMOVED_BODY })
+    .where(
+      and(
+        inArray(emailOutbox.template, ONE_TIME_LINK_TEMPLATES),
+        lt(emailOutbox.createdAt, new Date(now().getTime() - ONE_TIME_LINK_RETENTION_MS)),
+        ne(emailOutbox.textBody, REMOVED_BODY),
+      ),
+    )
+    .returning({ id: emailOutbox.id });
+  return rows.length;
 }
 
 export async function listOutbox(limit = 50) {

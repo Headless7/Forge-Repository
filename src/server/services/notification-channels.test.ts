@@ -66,7 +66,7 @@ async function device(user: TestUser) {
   const { hashToken } = await import("@/server/auth/crypto");
   const sessionId = hashToken(token);
   const b = browser();
-  const endpoint = `https://push.example.net/send/${user.id}-${Math.random().toString(36).slice(2)}`;
+  const endpoint = `https://fcm.googleapis.com/fcm/send/${user.id}-${Math.random().toString(36).slice(2)}`;
   const actor = { ...user.actor, sessionId, userAgent: "Mozilla/5.0 (Windows NT 10.0) Chrome/120 Safari/537 Edg/120" };
   await push.subscribePush(actor, { endpoint, ...b.keys });
   return { endpoint, sessionId, actor, browser: b };
@@ -329,7 +329,7 @@ describe("device notifications", () => {
     expect((await push.listPushDevices(mine.actor)).find((d) => d.id === row!.id)).toMatchObject({ label: "Edge on Windows", thisSession: true });
     await expect(push.subscribePush(mine.actor, { endpoint: "http://insecure.example.net/x", ...browser().keys })).rejects.toMatchObject({ code: "VALIDATION" });
     await expect(push.subscribePush(mine.actor, { endpoint: "https://127.0.0.1/x", ...browser().keys })).rejects.toMatchObject({ code: "VALIDATION" });
-    await expect(push.subscribePush(mine.actor, { endpoint: "https://push.example.net/y", p256dh: "AAAA", auth: "BBBB" })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(push.subscribePush(mine.actor, { endpoint: "https://fcm.googleapis.com/fcm/send/y", p256dh: "AAAA", auth: "BBBB" })).rejects.toMatchObject({ code: "VALIDATION" });
     await push.removePushDevice(f.member.actor, { id: row!.id });
     expect(await push.listPushDevices(f.member.actor)).toHaveLength(0);
   });

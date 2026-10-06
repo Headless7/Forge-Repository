@@ -57,12 +57,12 @@ export function isTrustedOrigin(req: Request): boolean {
 }
 
 /**
- * Reads a JSON request body without buffering more than `maxBytes` (a huge body is refused
- * as it streams in, before it can exhaust memory).
+ * Reads a request body without buffering more than `maxBytes`: a huge body is refused as it
+ * streams in (whatever Content-Length claimed, or without one), before it can exhaust memory.
  */
-export async function readJsonBody(req: Request, maxBytes: number): Promise<unknown> {
+export async function readBodyLimited(req: Request, maxBytes: number, tooLarge = "The request is too large."): Promise<Buffer> {
   const declared = Number(req.headers.get("content-length") ?? 0);
-  if (declared > maxBytes) throw new AppError("PAYLOAD_TOO_LARGE", "The request is too large.");
+  if (declared > maxBytes) throw new AppError("PAYLOAD_TOO_LARGE", tooLarge);
   if (!req.body) throw new AppError("VALIDATION", "Malformed request body.");
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -73,12 +73,18 @@ export async function readJsonBody(req: Request, maxBytes: number): Promise<unkn
     size += value.byteLength;
     if (size > maxBytes) {
       await reader.cancel().catch(() => {});
-      throw new AppError("PAYLOAD_TOO_LARGE", "The request is too large.");
+      throw new AppError("PAYLOAD_TOO_LARGE", tooLarge);
     }
     chunks.push(value);
   }
+  return Buffer.concat(chunks);
+}
+
+/** Reads a JSON request body (see `readBodyLimited`). */
+export async function readJsonBody(req: Request, maxBytes: number): Promise<unknown> {
+  const body = await readBodyLimited(req, maxBytes);
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return JSON.parse(body.toString("utf8"));
   } catch {
     throw new AppError("VALIDATION", "Malformed request body.");
   }

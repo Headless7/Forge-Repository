@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { forgotPasswordSchema, resetPasswordSchema, signInSchema, signUpSchema } from "@/lib/validation";
 import { rpc, errorMessage } from "@/lib/rpc-client";
+import { safeRedirectPath } from "@/lib/safe-redirect";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { Button } from "../ui/button";
@@ -34,9 +35,7 @@ async function postAuth(action: string, body: unknown) {
   return json;
 }
 
-function safeNext(next: string | null | undefined) {
-  return next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
-}
+const safeNext = (next: string | null | undefined) => safeRedirectPath(next);
 
 function issuesToErrors(issues: Array<{ path: PropertyKey[]; message: string }>) {
   const errors: Record<string, string> = {};

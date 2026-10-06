@@ -76,6 +76,7 @@ export function StudioDiscord({ studioId, studioSlug }: { studioId: string; stud
     if (!url.searchParams.has("discord") && !url.searchParams.has("discordError")) return;
     url.searchParams.delete("discord");
     url.searchParams.delete("discordError");
+    url.searchParams.delete("ns");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   }, []);
   const status = useDiscordStatus(studioId);

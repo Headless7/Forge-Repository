@@ -4,6 +4,7 @@ import { validateSessionToken } from "@/server/auth/session";
 import { appOrigin, env } from "@/server/env";
 import { AppError } from "@/server/errors";
 import { beginDiscordConnect, DISCORD_STATE_COOKIE } from "@/server/services/discord";
+import { withNotice } from "@/notice-signature";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,6 @@ export async function GET(req: Request) {
     return res;
   } catch (error) {
     const message = error instanceof AppError ? error.message : "Couldn't start connecting Discord. Please try again.";
-    return NextResponse.redirect(`${appOrigin()}${back}?discordError=${encodeURIComponent(message)}#discord`);
+    return NextResponse.redirect(`${appOrigin()}${await withNotice(`${back}#discord`, "discordError", message, env.AUTH_SECRET)}`);
   }
 }

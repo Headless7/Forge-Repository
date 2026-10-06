@@ -5,7 +5,9 @@ import { completeOAuth } from "@/server/auth/oauth";
 import { createSession, validateSessionToken } from "@/server/auth/session";
 import { db } from "@/server/db";
 import { attachments, users } from "@/server/db/schema";
-import { clientIpFrom, readJsonBody } from "@/server/http";
+import { clientIpFrom, readBodyLimited, readJsonBody } from "@/server/http";
+import { noticeIsAuthentic, withNotice } from "@/notice-signature";
+import { storedContentType } from "@/server/storage/s3";
 import { sharedRateLimiter } from "@/server/rate-limit";
 import * as accounts from "@/server/services/accounts";
 import { recoverMediaJobs } from "@/server/services/media";
@@ -37,6 +39,68 @@ describe("request bodies", () => {
     await expectAppError(readJsonBody(big, 64 * 1024), "PAYLOAD_TOO_LARGE");
     const ok = new Request("http://localhost/api", { method: "POST", body: JSON.stringify({ a: 1 }) });
     expect(await readJsonBody(ok, 64 * 1024)).toEqual({ a: 1 });
+  });
+
+  it("caps a streamed body that announces no size", async () => {
+    const chunk = new Uint8Array(32 * 1024);
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        // Endless unless the reader stops: the cap has to.
+        sent += chunk.length;
+        controller.enqueue(chunk);
+      },
+    });
+    const chunked = new Request("http://localhost/api", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+    expect(chunked.headers.get("content-length")).toBeNull();
+    await expectAppError(readBodyLimited(chunked, 256 * 1024), "PAYLOAD_TOO_LARGE");
+    expect(sent).toBeLessThan(1024 * 1024);
+  });
+});
+
+describe("messages carried in URLs", () => {
+  const secret = "test-secret-for-notices-0123456789";
+
+  it("trust only what this server signed", async () => {
+    const signed = new URL(await withNotice("/sign-in", "error", "Sign-in expired. Please try again.", secret), "https://forge.test");
+    expect(await noticeIsAuthentic(signed.searchParams, secret)).toBe(true);
+    expect(await noticeIsAuthentic(new URLSearchParams(""), secret)).toBe(true);
+
+    const altered = new URLSearchParams(signed.searchParams);
+    altered.set("error", "Forge has moved: sign in at evil.example");
+    expect(await noticeIsAuthentic(altered, secret)).toBe(false);
+    expect(await noticeIsAuthentic(new URLSearchParams("error=Forge+has+moved"), secret)).toBe(false);
+    expect(await noticeIsAuthentic(signed.searchParams, "another-secret-0123456789abcdef")).toBe(false);
+
+    // A valid signature for one parameter can't vouch for another, or for a second copy.
+    const moved = new URLSearchParams({ oauthError: signed.searchParams.get("error")!, ns: signed.searchParams.get("ns")! });
+    expect(await noticeIsAuthentic(moved, secret)).toBe(false);
+    const doubled = new URLSearchParams(signed.searchParams);
+    doubled.append("error", "second");
+    expect(await noticeIsAuthentic(doubled, secret)).toBe(false);
+  });
+
+  it("keep the path and fragment they were added to", async () => {
+    expect(await withNotice("/acme/settings#discord", "discordError", "Cancelled.", secret)).toMatch(/^\/acme\/settings\?discordError=Cancelled\.&ns=[\w-]+#discord$/);
+  });
+});
+
+describe("object storage types", () => {
+  it("stores anything a browser could run as a download", () => {
+    for (const type of ["text/html", "image/svg+xml", "application/xhtml+xml", "text/xml", "application/javascript", "TEXT/HTML; charset=utf-8", "model/obj", ""]) {
+      expect(storedContentType(type)).toBe("application/octet-stream");
+    }
+    for (const type of ["image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm", "audio/mpeg", "audio/mp4", "application/json"]) {
+      expect(storedContentType(type)).toBe(type);
+    }
+  });
+});
+
+describe("sign-up", () => {
+  it("doesn't tell someone without an invitation or key whether an address has an account", async () => {
+    const email = `taken-${stamp()}@test.dev`;
+    await accounts.signUp({ email, password: "a good password", displayName: "Taken", inviteToken: await pendingInvite(email) }, { ip: "192.0.2.50", userAgent: "vitest" });
+    await expectAppError(accounts.signUp({ email, password: "another password", displayName: "Prober" }, { ip: "192.0.2.51", userAgent: "vitest" }), "FORBIDDEN");
   });
 });
 

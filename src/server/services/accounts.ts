@@ -97,11 +97,9 @@ export async function signUp(
   const username = input.username?.trim().toLowerCase() || (await suggestUsername(input.displayName || email.split("@")[0]!));
   assertUsername(username);
 
-  const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, email));
-  if (existing[0]) throw conflict("An account with this email already exists. Sign in instead.");
-
   // Forge is private: an account needs an invitation to this address, an activation key, or an
   // operator email. Either way the address still has to be confirmed before it unlocks anything.
+  // Checked before whether the address is taken, so only someone allowed in learns that.
   let key: Awaited<ReturnType<typeof findUsableKey>> | null = null;
   if (input.inviteToken) {
     const [invite] = await db
@@ -115,6 +113,8 @@ export async function signUp(
   } else if (!isPlatformAdminEmail(email)) {
     throw new AppError("FORBIDDEN", "You need an invitation or an activation key to create an account here.", { code: "INVITE_REQUIRED" });
   }
+  const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, email));
+  if (existing[0]) throw conflict("An account with this email already exists. Sign in instead.");
 
   const passwordHash = await hashPassword(input.password);
   try {

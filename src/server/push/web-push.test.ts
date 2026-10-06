@@ -70,7 +70,22 @@ describe("web push", () => {
   it("only accepts https push-service endpoints", () => {
     expect(isAcceptableEndpoint("https://fcm.googleapis.com/fcm/send/abc")).toBe(true);
     expect(isAcceptableEndpoint("https://wns2-par02p.notify.windows.com/w/?token=abc")).toBe(true);
-    for (const bad of ["http://fcm.googleapis.com/x", "https://localhost/x", "https://127.0.0.1/x", "https://[::1]/x", "https://user:pw@push.example.com/x", "javascript:alert(1)", "https://intranet/x"]) {
+    expect(isAcceptableEndpoint("https://updates.push.services.mozilla.com/wpush/v2/abc")).toBe(true);
+    expect(isAcceptableEndpoint("https://web.push.apple.com/abc")).toBe(true);
+    for (const bad of [
+      "http://fcm.googleapis.com/x",
+      "https://localhost/x",
+      "https://127.0.0.1/x",
+      "https://[::1]/x",
+      "https://user:pw@fcm.googleapis.com/x",
+      "https://fcm.googleapis.com:8443/x",
+      "javascript:alert(1)",
+      "https://intranet/x",
+      // Public-looking names can resolve to private addresses: only real push services are allowed.
+      "https://push.example.com/x",
+      "https://fcm.googleapis.com.evil.example/x",
+      "https://evil-notify.windows.com.example/x",
+    ]) {
       expect(isAcceptableEndpoint(bad)).toBe(false);
     }
   });

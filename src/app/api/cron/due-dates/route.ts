@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { safeEqual } from "@/server/auth/crypto";
 import { env } from "@/server/env";
 import { runDueDateReminders } from "@/server/services/due-dates";
-import { deliverOutbox } from "@/server/services/email";
+import { deliverOutbox, scrubExpiredOutboxLinks } from "@/server/services/email";
 import { sharedRateLimiter } from "@/server/rate-limit";
 import { processStorageDeletions } from "@/server/services/purge";
 import { processDiscordDeliveries, runDiscordDueDigests } from "@/server/services/discord";
@@ -26,6 +26,7 @@ export async function GET(req: Request) {
   const discordDms = await processDiscordDmDeliveries(200);
   const robloxAssetsFreed = await evictStaleRobloxAssets();
   await sharedRateLimiter.sweep();
+  const emailLinksRemoved = await scrubExpiredOutboxLinks();
   const storageCleanup = await processStorageDeletions();
-  return NextResponse.json({ ok: true, reminders, push, discord: { ...discord, digests: discordDigests, dms: discordDms }, robloxAssetsFreed, storageCleanup });
+  return NextResponse.json({ ok: true, reminders, push, discord: { ...discord, digests: discordDigests, dms: discordDms }, robloxAssetsFreed, emailLinksRemoved, storageCleanup });
 }

@@ -1,17 +1,19 @@
 import { NextResponse } from "next/server";
+import { safeRedirectPath } from "@/lib/safe-redirect";
 import { OAUTH_COOKIE } from "@/server/auth/constants";
 import { completeOAuth, decodeState, exchangeCode, oauthProvider } from "@/server/auth/oauth";
 import { sessionTokenFrom } from "@/server/auth/route-session";
 import { sessionCookie, validateSessionToken } from "@/server/auth/session";
 import { safeEqual } from "@/server/auth/crypto";
-import { appOrigin } from "@/server/env";
+import { appOrigin, env } from "@/server/env";
 import { AppError } from "@/server/errors";
 import { clientIp, userAgent } from "@/server/http";
+import { withNotice } from "@/notice-signature";
 
 export const dynamic = "force-dynamic";
 
-function fail(message: string) {
-  const res = NextResponse.redirect(`${appOrigin()}/sign-in?error=${encodeURIComponent(message)}`);
+async function fail(message: string) {
+  const res = NextResponse.redirect(`${appOrigin()}${await withNotice("/sign-in", "error", message, env.AUTH_SECRET)}`);
   res.cookies.delete({ name: OAUTH_COOKIE, path: "/api/auth/oauth" });
   return res;
 }
@@ -49,7 +51,7 @@ export async function GET(req: Request, context: { params: Promise<{ provider: s
       ip: clientIp(req),
       userAgent: userAgent(req),
     });
-    const res = NextResponse.redirect(`${appOrigin()}${isNew ? "/onboarding" : connecting ? withParam(state.next, "connected", provider.id) : state.next}`);
+    const res = NextResponse.redirect(`${appOrigin()}${isNew ? "/onboarding" : connecting ? withParam(state.next, "connected", provider.id) : safeRedirectPath(state.next)}`);
     const cookie = sessionCookie(session.token, session.expiresAt);
     res.cookies.set(cookie.name, cookie.value, cookie.options);
     res.cookies.delete({ name: OAUTH_COOKIE, path: "/api/auth/oauth" });
@@ -57,7 +59,7 @@ export async function GET(req: Request, context: { params: Promise<{ provider: s
   } catch (error) {
     const message = error instanceof AppError ? error.message : "Sign-in failed. Please try again.";
     if (!connecting) return fail(message);
-    const res = NextResponse.redirect(`${appOrigin()}${withParam(state.next, "oauthError", message)}`);
+    const res = NextResponse.redirect(`${appOrigin()}${await withNotice(safeRedirectPath(state.next), "oauthError", message, env.AUTH_SECRET)}`);
     res.cookies.delete({ name: OAUTH_COOKIE, path: "/api/auth/oauth" });
     return res;
   }
@@ -65,7 +67,7 @@ export async function GET(req: Request, context: { params: Promise<{ provider: s
 
 /** `next` is an app path (checked when the flow started); adds one query parameter to it. */
 function withParam(next: string, key: string, value: string) {
-  const url = new URL(next, appOrigin());
-  url.searchParams.set(key, value.slice(0, 300));
+  const url = new URL(safeRedirectPath(next), appOrigin());
+  url.searchParams.set(key, value);
   return `${url.pathname}${url.search}${url.hash}`;
 }

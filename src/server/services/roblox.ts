@@ -113,16 +113,26 @@ async function servedKeyOfUpload(file: typeof attachments.$inferSelect): Promise
   return upgraded ?? converted;
 }
 
+/**
+ * Stand-ins are fetched by the viewer, never opened as pages, so their links name a harmless type
+ * whatever the upload declared (an "HTML" file that passed the mesh check stays inert).
+ */
+const TEXTURE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+function resourceContentType(kind: string, format: string) {
+  return (kind === "texture" && TEXTURE_TYPES[format]) || "application/octet-stream";
+}
+
 async function toDTO(row: typeof robloxResources.$inferSelect, file: typeof attachments.$inferSelect): Promise<ResolvedResourceDTO> {
+  const format = String(file.meta?.resourceFormat ?? extensionOf(file.filename));
   return {
     id: row.id,
     contentId: row.contentId,
     kind: row.kind,
     attachmentId: file.id,
     filename: file.filename,
-    format: String(file.meta?.resourceFormat ?? extensionOf(file.filename)),
+    format,
     // Draco-compressed meshes are served as the decoded copy made when they were added.
-    url: await storage().signedUrl(await servedKeyOfUpload(file)),
+    url: await storage().signedUrl(await servedKeyOfUpload(file), { contentType: resourceContentType(row.kind, format) }),
     createdById: row.createdById,
     createdAt: row.createdAt.toISOString(),
     source: "upload",
