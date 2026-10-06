@@ -95,7 +95,7 @@ describe("connecting a Discord server", () => {
 
     const start = await discord.beginDiscordConnect(f.admin.id, f.studioId);
     const params = new URL(start.url).searchParams;
-    expect(params.get("scope")).toBe("bot"); // no other scopes
+    expect(params.get("scope")).toBe("bot applications.commands"); // the bot and its commands, nothing else
     expect(params.get("permissions")).toBe(String(1024 + 2048 + 16384)); // view, send, embed links only
     expect(params.get("redirect_uri")).toMatch(/\/api\/integrations\/discord\/callback$/);
     const state = params.get("state");

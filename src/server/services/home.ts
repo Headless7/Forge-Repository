@@ -10,7 +10,7 @@ import type { Actor } from "./context";
 import { listProjects } from "./projects";
 import { loadCardWork } from "./workflow";
 
-type ProjectRef = { id: string; slug: string; name: string; icon: string; key: string };
+export type ProjectRef = { id: string; slug: string; name: string; icon: string; key: string };
 /** The card's board, so links open there; `shown` when the project has several boards (then its name is displayed). */
 export type BoardRef = { number: number; name: string; shown: boolean };
 
@@ -45,8 +45,8 @@ export interface StudioHomeDTO {
   activity: ActivityDTO[];
 }
 
-/** The viewer's unfinished deliverables in these projects, with their effective deadline and blockers. */
-async function myDeliverables(userId: string, projectIds: string[], projectRef: (id: string) => ProjectRef, boardRef: (boardId: string) => BoardRef | null): Promise<MyDeliverableItem[]> {
+/** The viewer's unfinished deliverables in these projects, with their effective deadline and blockers (also /mywork in Discord). */
+export async function myDeliverables(userId: string, projectIds: string[], projectRef: (id: string) => ProjectRef, boardRef: (boardId: string) => BoardRef | null): Promise<MyDeliverableItem[]> {
   const mineExplicit = sql`(${deliverables.ownerId} = ${userId} or exists (select 1 from ${deliverableContributors} dc where dc.deliverable_id = ${deliverables.id} and dc.user_id = ${userId}))`;
   const inheritsFromMe = sql`(${deliverables.ownerId} is null and not exists (select 1 from ${deliverableContributors} dc where dc.deliverable_id = ${deliverables.id}) and exists (select 1 from ${cardAssignees} ca where ca.card_id = ${deliverables.cardId} and ca.user_id = ${userId}))`;
   const rows = await db

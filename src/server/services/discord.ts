@@ -104,7 +104,8 @@ export async function beginDiscordConnect(userId: string, studioId: string) {
   const nonce = crypto.randomBytes(18).toString("base64url");
   const params = new URLSearchParams({
     client_id: env.DISCORD_CLIENT_ID!,
-    scope: "bot",
+    // The bot (feeds and direct messages) and its slash commands; nothing else.
+    scope: "bot applications.commands",
     permissions: DISCORD_BOT_PERMISSIONS,
     response_type: "code",
     redirect_uri: discordRedirectUri(),

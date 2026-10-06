@@ -71,6 +71,11 @@ const schema = z.object({
   DISCORD_CLIENT_SECRET: optional,
   DISCORD_APPLICATION_ID: optional,
   DISCORD_BOT_TOKEN: optional,
+  /**
+   * The application's public key (hex), which signs slash-command requests. Optional: Forge reads
+   * it from Discord with the bot token. Set it only to override that (tests).
+   */
+  DISCORD_PUBLIC_KEY: optional,
   /** Override for tests; defaults to Discord's v10 API. */
   DISCORD_API_BASE: z.string().url().default("https://discord.com/api/v10"),
   GOOGLE_CLIENT_ID: optional,

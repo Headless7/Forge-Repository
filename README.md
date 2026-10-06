@@ -386,6 +386,7 @@ All settings live in `.env` (see `.env.example` for descriptions).
 | `STUDIO_STORAGE_LIMIT_GB` | Total uploaded originals per studio (default 200). Uploads past it are refused; owners/admins see usage in Studio settings |
 | `RESEND_API_KEY` or `SMTP_URL`, `EMAIL_FROM` | Real email delivery (otherwise the dev outbox). `RESEND_API_KEY` sends over HTTPS — use it where outbound SMTP is blocked (Railway below Pro) |
 | `DISCORD_CLIENT_ID/SECRET`, `GOOGLE_CLIENT_ID/SECRET` | Enable OAuth sign-in (redirect: `{APP_URL}/api/auth/oauth/{provider}/callback`) |
+| `DISCORD_APPLICATION_ID`, `DISCORD_BOT_TOKEN` | With the Discord client id/secret: the Forge bot (team feeds, direct messages, slash commands). See [Discord bot](#discord-bot) |
 | `REALTIME_DRIVER` | `postgres` (multi-instance) or `memory` |
 | `ENABLE_INPROCESS_JOBS`, `CRON_SECRET` | Due-date reminders / email delivery in-process, or via `GET /api/cron/due-dates` with `Authorization: Bearer $CRON_SECRET` |
 | `TRUSTED_PROXY_HOPS` | Reverse proxies in front of the app that append `X-Forwarded-For` (usually `1`). `0` (production default) ignores forwarded headers; per-IP limits then use shared budgets |
@@ -423,11 +424,25 @@ settings, and logs warnings for the rest:
   long-lived process, so keep them on a small Node worker or replace them with hosted
   equivalents behind the existing `RealtimeBus` and `mediaQueue` interfaces.
 
+### Discord bot
+
+One Discord application does everything: "Sign in with Discord", studio team feeds, direct
+messages and the slash commands. In the [Developer Portal](https://discord.com/developers/applications):
+
+1. **OAuth2 → Redirects:** add `{APP_URL}/api/auth/oauth/discord/callback` and
+   `{APP_URL}/api/integrations/discord/callback`.
+2. **Bot:** copy the token into `DISCORD_BOT_TOKEN` (with `DISCORD_APPLICATION_ID`,
+   `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`).
+3. **General Information → Interactions Endpoint URL:** `{APP_URL}/api/discord/interactions`
+   (deploy first: Discord checks the URL answers correctly when you save it).
+
+On start, a production server registers the commands (`/mywork`, `/reviews`, `/card`, `/due`)
+when they changed and reads the public key that signs Discord's requests (override with
+`DISCORD_PUBLIC_KEY`). Commands work for people who connected Discord in Account → Security,
+act with their own Forge permissions, and only they see the replies.
+
 ## Extending
 
-- **Discord notifications:** implement `NotificationChannel` in
-  `src/server/services/notifications.ts` and register it; preferences already have a
-  per-channel dimension.
 - **More sign-in providers:** add a provider to `src/server/auth/oauth.ts`; accounts
   link through `oauth_accounts`.
 - **More Roblox classes in the viewer:** add the class to the manifest builder

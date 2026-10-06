@@ -98,7 +98,7 @@ export function StudioDiscord({ studioId, studioSlug }: { studioId: string; stud
         <MessagesSquare className="size-4 text-fg-muted" /> Discord
       </h2>
       <p className="mt-0.5 text-[12.5px] text-fg-muted">
-        Post review and delivery updates to channels in your team&apos;s Discord server. Messages say who did what and link back to Forge — comment and feedback text and files are never posted, and nothing can be changed from Discord.
+        Post review and delivery updates to channels in your team&apos;s Discord server. Messages say who did what and link back to Forge — comment and feedback text and files are never posted. Members who connect their own Discord account can also use Forge&apos;s commands there (/mywork, /reviews, /card, /due): the replies are private, and anything they do uses their own Forge permissions.
       </p>
       {notice ? (
         <p role={notice.tone === "error" ? "alert" : "status"} className={cn("mt-3 rounded-lg border px-3 py-2 text-[12.5px]", notice.tone === "error" ? "border-danger/40 bg-danger/10 text-danger" : "border-state-approved/40 bg-state-approved/10")}>

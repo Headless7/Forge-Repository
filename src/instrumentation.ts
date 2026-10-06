@@ -7,6 +7,18 @@ export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   const { productionWarnings } = await import("./server/env");
   for (const warning of productionWarnings()) console.warn(`[forge] production config: ${warning}`);
+  if (process.env.NODE_ENV === "production") {
+    // Slash commands: registered with Discord when they changed, and the key that signs Discord's
+    // requests read once up front. Development servers never touch the live application's commands.
+    const { syncDiscordCommands } = await import("./server/services/discord-commands");
+    const { discordPublicKey } = await import("./server/services/discord-interactions");
+    setTimeout(() => {
+      syncDiscordCommands()
+        .then((result) => result === "updated" && console.log("[forge] Discord slash commands registered."))
+        .catch((error) => console.error("[forge] Discord slash commands", error));
+      discordPublicKey().catch(() => {});
+    }, 5_000);
+  }
   if (process.env.ENABLE_INPROCESS_JOBS === "false") return;
   const g = globalThis as unknown as { __forgeJobsStarted?: boolean };
   if (g.__forgeJobsStarted) return;
