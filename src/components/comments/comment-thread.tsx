@@ -7,6 +7,7 @@ import type { CommentDTO } from "@/lib/types";
 import { cn, formatBytes, formatDateTime, formatTimecode, timeAgo } from "@/lib/utils";
 import { useWorkspace } from "../card/workspace-context";
 import { UserAvatar } from "../domain/avatar";
+import { MemberPopover } from "../domain/member-popover";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip } from "../ui/menu";
 import { Composer } from "./composer";
@@ -88,7 +89,14 @@ function CommentBody({
       <UserAvatar user={author} size={isReply ? "sm" : "md"} className="mt-0.5" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px]">
-          <span className="font-semibold text-fg">{author?.displayName ?? "Former member"}</span>
+          {author ? (
+            // Tap the name for the profile (title, role, connected Discord account).
+            <MemberPopover user={author} member={author} className="touch-target max-w-full font-semibold text-fg">
+              <span className="truncate">{author.displayName}</span>
+            </MemberPopover>
+          ) : (
+            <span className="font-semibold text-fg">Former member</span>
+          )}
           {anchor ? (
             <button
               type="button"

@@ -22,6 +22,7 @@ const full: { [K in TipId]: TipFacts[K] } = {
   "card.assignment": { canAssign: true, multi: true },
   "roblox.preview": {},
   "access.scope": { place: "studio", canManage: true },
+  "account.discord-profile": { connected: true },
 };
 
 const sentences = (text: string) => text.split(/(?<=[.!?])\s+(?=[A-Z])/).filter(Boolean).length;
@@ -73,6 +74,7 @@ describe("tutorial tip definitions", () => {
     expect(eligible("card.canvas", { deliverableCount: 1 })).toBe(false);
     expect(eligible("card.revisions", { revisionCount: 1 })).toBe(false);
     expect(eligible("board.boards", { boardCount: 1 })).toBe(false);
+    expect(eligible("account.discord-profile", { connected: false })).toBe(false);
     expect(eligible("board.my-work", { worksOnCount: 0 })).toBe(false);
     expect(eligible("card.pending-changes", { pendingCount: 0, status: "PUBLISHED", canPublish: true })).toBe(false);
     expect(eligible("production.stages", { place: "card", relevant: false })).toBe(false);

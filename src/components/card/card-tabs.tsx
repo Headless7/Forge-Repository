@@ -254,7 +254,8 @@ export function CardTabs({ mode }: { mode: "simple" | "overview" | "deliverable"
   const versions = mode === "overview" ? [] : (scope?.versions ?? []);
   return (
     <Tabs defaultValue="discussion" id="discussion">
-      <TabsList>
+      {/* On narrow phones the three tabs scroll sideways instead of the last one being cut off. */}
+      <TabsList className="overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&>*]:shrink-0 [&>*]:whitespace-nowrap">
         <TabsTrigger value="discussion">
           <MessageSquare /> {mode === "deliverable" ? "Deliverable discussion" : "Discussion"} {discussionCount ? <span className="text-fg-subtle">{discussionCount}</span> : null}
         </TabsTrigger>

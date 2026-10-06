@@ -638,7 +638,8 @@ export function CardModal({
             <WorkspaceContext.Provider value={workspace}>
               <div ref={scroller} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
                 <div className="grid gap-6 p-4 md:p-6 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_320px]">
-                  <div key={viewKey} className="grid min-w-0 content-start gap-5 animate-fade-in">
+                  {/* Sections shrink to the column (a grid item otherwise keeps its content's width and is clipped on narrow phones). */}
+                  <div key={viewKey} className="grid min-w-0 content-start gap-5 animate-fade-in [&>*]:min-w-0">
                     {mode === "deliverable" ? (
                       <>
                         <DeliverableBreadcrumb />

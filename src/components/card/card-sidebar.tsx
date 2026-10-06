@@ -12,6 +12,8 @@ import { cn, dueStatus, formatDateTime, timeAgo, toLocalInput } from "@/lib/util
 import { useQueryClient } from "@tanstack/react-query";
 import { useBoard } from "../board/board-context";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
+import { DiscordHandle } from "../domain/discord-icon";
+import { MemberPopover } from "../domain/member-popover";
 import { DueChip, LabelChip, PriorityIcon, StatePill } from "../domain/state";
 import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
@@ -67,7 +69,21 @@ function PeoplePicker({
         ))}
       </span>
     );
-  if (!canEdit) return content;
+  // Read-only: each person opens their profile. Editable: the list opens the picker below, which
+  // shows Discord handles beside the names.
+  if (!canEdit)
+    return people.length === 0 ? (
+      content
+    ) : (
+      <span className="flex flex-col gap-1">
+        {people.map((m) => (
+          <MemberPopover key={m.id} user={m} member={m} className="touch-target max-w-full gap-2">
+            <UserAvatar user={m} size="xs" online={m.online} />
+            <span className="truncate">{m.displayName}</span>
+          </MemberPopover>
+        ))}
+      </span>
+    );
   return (
     <Popover
       onOpenChange={(open) => {
@@ -99,6 +115,7 @@ function PeoplePicker({
                   <span className="min-w-0 flex-1">
                     <span className="block truncate">{m.displayName}</span>
                     {m.title ? <span className="block truncate text-[11px] text-fg-subtle">{m.title}</span> : null}
+                    {m.discord ? <DiscordHandle username={m.discord.username} className="text-[11px]" /> : null}
                   </span>
                   {on ? <Check className="size-4 text-accent" /> : null}
                 </button>

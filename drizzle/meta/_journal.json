@@ -99,6 +99,13 @@
       "when": 1791143266517,
       "tag": "0013_discord_dms",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791311000662,
+      "tag": "0014_discord_profile",
+      "breakpoints": true
     }
   ]
 }

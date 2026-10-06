@@ -725,6 +725,11 @@ export const appRouter = {
     input: z.object({ studioId: idSchema }),
     handler: ({ actor }, i) => studios.listMembers(actor, i.studioId),
   }),
+  "member.profile": proc({
+    input: z.object({ studioId: idSchema, userId: idSchema }),
+    limit: { max: 240, windowMs: 60_000 },
+    handler: ({ actor }, i) => studios.memberProfile(actor, i.studioId, i.userId),
+  }),
   "member.update": proc({
     input: z.object({
       studioId: idSchema,
@@ -898,6 +903,21 @@ export const appRouter = {
     input: z.object({ provider: z.enum(["discord", "google"]) }),
     limit: { max: 10, windowMs: 60_000 },
     handler: ({ actor }, i) => accounts.disconnectOAuth(actor, i),
+  }),
+  "account.setAvatarSource": proc({
+    input: z.object({ source: z.enum(["custom", "discord"]) }),
+    limit: { max: 30, windowMs: 60_000 },
+    handler: ({ actor }, i) => accounts.chooseAvatarSource(actor, i),
+  }),
+  "account.useDiscordName": proc({
+    input: z.object({}),
+    limit: { max: 10, windowMs: 60_000 },
+    handler: ({ actor }) => accounts.copyDiscordDisplayName(actor),
+  }),
+  "account.refreshDiscordProfile": proc({
+    input: z.object({}),
+    limit: { max: 5, windowMs: 10 * 60_000 },
+    handler: ({ actor }) => accounts.refreshDiscordProfile(actor),
   }),
   "account.retryDiscordDms": proc({
     input: z.object({}),

@@ -48,6 +48,8 @@ export interface TipFacts {
   "card.assignment": { canAssign: boolean; multi: boolean };
   "roblox.preview": None;
   "access.scope": { place: "studio" | "project"; canManage: boolean };
+  /** Account settings, once someone uses the Discord profile controls. */
+  "account.discord-profile": { connected: boolean };
 }
 
 export type TipId = keyof TipFacts;
@@ -234,6 +236,14 @@ export const TIPS: { [K in TipId]: TipDefinition<TipFacts[K]> } = {
         ? "Whole-studio members can open every project shared with the studio; private projects also need Developer or above, or an invitation. Projects-only collaborators see just the projects they're added to, whatever their role."
         : "Studio roles apply here by default, and a project role overrides it for this project only. Private projects and projects-only collaborators need to be added here to get access.",
     eligible: (f) => f.canManage,
+    side: "bottom",
+    align: "start",
+  },
+  "account.discord-profile": {
+    version: 1,
+    title: () => "Your Discord picture, your studio name",
+    body: () => "Your Discord picture can stay synced while your studio name stays under your control. Changes you make on Discord show up here after the next refresh.",
+    eligible: (f) => f.connected,
     side: "bottom",
     align: "start",
   },

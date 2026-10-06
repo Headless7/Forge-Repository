@@ -42,15 +42,13 @@ export async function GET(req: Request, context: { params: Promise<{ provider: s
   // where they started, not on the sign-in page.
   let connecting = false;
   try {
-    const accessToken = await exchangeCode(provider, code, state.verifier);
-    const profile = await provider.fetchProfile(accessToken);
+    const tokens = await exchangeCode(provider, code, state.verifier);
+    const profile = await provider.fetchProfile(tokens.accessToken);
     const token = sessionTokenFrom(req);
     const current = token ? await validateSessionToken(token) : null;
     connecting = Boolean(current);
-    const { session, isNew } = await completeOAuth(provider.id, profile, current?.user.id ?? null, {
-      ip: clientIp(req),
-      userAgent: userAgent(req),
-    });
+    // Discord's tokens are kept (encrypted) to refresh the profile later; Google's aren't needed.
+    const { session, isNew } = await completeOAuth(provider.id, profile, current?.user.id ?? null, { ip: clientIp(req), userAgent: userAgent(req) }, provider.storeTokens ? tokens : null);
     const res = NextResponse.redirect(`${appOrigin()}${isNew ? "/onboarding" : connecting ? withParam(state.next, "connected", provider.id) : safeRedirectPath(state.next)}`);
     const cookie = sessionCookie(session.token, session.expiresAt);
     res.cookies.set(cookie.name, cookie.value, cookie.options);

@@ -120,6 +120,16 @@ export async function listMembers(actor: Actor, studioId: string) {
   return listMembersFor(await requireStudio(actor.userId, studioId, "members.view"));
 }
 
+/**
+ * One member's profile for the profile popover (name, title, role, connected Discord account) —
+ * only someone the viewer may already see in this studio's member list.
+ */
+export async function memberProfile(actor: Actor, studioId: string, userId: string) {
+  const member = (await listMembersFor(await requireStudio(actor.userId, studioId, "members.view"))).find((m) => m.id === userId);
+  if (!member) throw notFound("Member");
+  return member;
+}
+
 async function ownerCount(ex: Executor, studioId: string) {
   const [row] = await ex
     .select({ value: count() })

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BellOff, BellRing, Camera, Laptop, LogOut, MailCheck, MailWarning, Monitor, Moon, Send, Smartphone, Sun, Trash2 } from "lucide-react";
+import { AlertTriangle, BellOff, BellRing, Camera, Laptop, LogOut, MailCheck, MailWarning, Monitor, Moon, RefreshCw, Send, Smartphone, Sun, Trash2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -12,8 +12,9 @@ import { errorMessage, rpc, type RpcOutput } from "@/lib/rpc-client";
 import { cn, formatDateTime, timeAgo } from "@/lib/utils";
 import { displayNameSchema, emailSchema, passwordSchema, usernameSchema } from "@/lib/validation";
 import { UserAvatar } from "../domain/avatar";
+import { DiscordHandle, DiscordIcon } from "../domain/discord-icon";
 import { Button } from "../ui/button";
-import { useTutorial } from "../tutorial/tutorial";
+import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Skeleton, Switch } from "../ui/controls";
 import { ConfirmDialog } from "../ui/dialog";
 import { FieldError, Input, Label } from "../ui/input";
@@ -34,6 +35,18 @@ function useProfile(initial: Profile) {
   return useQuery({ queryKey: qk.profile(), queryFn: () => rpc("account.profile", {}), initialData: initial });
 }
 
+/** What the picture choice means right now (and why the Discord picture may not show yet). */
+function pictureNote(profile: Profile): string {
+  const discord = profile.discordProfile;
+  const fallback = profile.customAvatarUrl ? "your uploaded photo" : "your initials";
+  if (discord && profile.avatarSource === "discord") {
+    if (!discord.hasAvatar) return `Your Discord account has no picture of its own, so ${fallback} show${profile.customAvatarUrl ? "s" : ""} instead.`;
+    if (!discord.avatarUrl) return `Your Discord picture appears after the next successful refresh; until then ${fallback} show${profile.customAvatarUrl ? "s" : ""}.`;
+    return "Your Discord picture, refreshed about once a day.";
+  }
+  return profile.customAvatarUrl ? "Your uploaded photo." : "No photo yet: teammates see your initials.";
+}
+
 export function ProfilePage({ initial }: { initial: Profile }) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -51,7 +64,25 @@ export function ProfilePage({ initial }: { initial: Profile }) {
   };
   const update = useRpcMutation("account.update", { onSuccess: (p) => { setProfile(p); toast.success("Profile updated."); } });
   const changeEmail = useRpcMutation("account.changeEmail", { onSuccess: (p) => { setProfile(p); setPassword(""); toast.success("Check your inbox to confirm the new address."); } });
-  const removeAvatar = useRpcMutation("account.removeAvatar", { onSuccess: setProfile });
+  const tutorial = useTutorial();
+  const discord = profile.discordProfile;
+  const discordName = discord ? (discord.displayName ?? discord.username) : null;
+  const removeAvatar = useRpcMutation("account.removeAvatar", { onSuccess: (p) => { setProfile(p); toast.success("Uploaded photo removed."); } });
+  const setSource = useRpcMutation("account.setAvatarSource", {
+    onSuccess: (p, { source }) => {
+      setProfile(p);
+      toast.success(source === "discord" ? "Showing your Discord picture." : p.customAvatarUrl ? "Showing your uploaded photo." : "Showing your initials until you upload a photo.");
+      tutorial.trigger("account.discord-profile");
+    },
+  });
+  const useDiscordName = useRpcMutation("account.useDiscordName", {
+    onSuccess: (p) => {
+      setProfile(p);
+      setName(p.displayName);
+      toast.success(`Your studio name is now “${p.displayName}”. It won't change when your Discord name does.`);
+      tutorial.trigger("account.discord-profile");
+    },
+  });
   const resend = useRpcMutation("account.resendVerification", { onSuccess: (r) => toast.success(r.alreadyVerified ? "Your email is already confirmed." : "Confirmation email sent.") });
 
   const saveProfile = () => {
@@ -66,6 +97,7 @@ export function ProfilePage({ initial }: { initial: Profile }) {
   };
 
   const uploadAvatar = async (file: File) => {
+    const wasDiscord = Boolean(discord) && profile.avatarSource === "discord";
     setUploading(true);
     try {
       const form = new FormData();
@@ -74,7 +106,7 @@ export function ProfilePage({ initial }: { initial: Profile }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Upload failed.");
       setProfile(json.data);
-      toast.success("Avatar updated.");
+      toast.success(wasDiscord ? "Photo uploaded. Forge now shows it instead of your Discord picture — you can switch back any time." : "Photo updated.");
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -87,16 +119,47 @@ export function ProfilePage({ initial }: { initial: Profile }) {
       <Card title="Profile" description="How teammates see you across Forge.">
         <div className="flex flex-wrap items-center gap-4">
           <UserAvatar user={profile} size="xl" />
-          <div className="flex gap-2">
-            <Button variant="secondary" size="sm" loading={uploading} onClick={() => fileInput.current?.click()}>
-              <Camera /> Upload avatar
-            </Button>
-            {profile.avatarUrl ? (
-              <Button variant="ghost" size="sm" onClick={() => removeAvatar.mutate({})}>
-                <Trash2 /> Remove
-              </Button>
+          <div className="grid min-w-0 flex-1 gap-2">
+            {discord ? (
+              <TipAnchor tip="account.discord-profile" facts={{ connected: true }} place="profile">
+                <div role="radiogroup" aria-label="Profile picture" className="inline-flex w-fit max-w-full flex-wrap rounded-lg border border-border-strong p-0.5">
+                  {(
+                    [
+                      ["discord", "Discord picture"],
+                      ["custom", "Uploaded photo"],
+                    ] as const
+                  ).map(([source, label]) => (
+                    <button
+                      key={source}
+                      type="button"
+                      role="radio"
+                      aria-checked={profile.avatarSource === source}
+                      disabled={setSource.isPending}
+                      onClick={() => profile.avatarSource !== source && setSource.mutate({ source })}
+                      className={cn(
+                        "inline-flex min-h-8 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium transition-colors",
+                        profile.avatarSource === source ? "bg-surface-4 text-fg" : "text-fg-muted hover:text-fg",
+                      )}
+                    >
+                      {source === "discord" ? <DiscordIcon className="size-3.5" /> : <Camera className="size-3.5" />}
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </TipAnchor>
             ) : null}
-            <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadAvatar(f); e.target.value = ""; }} />
+            <p className="text-[12px] text-fg-muted">{pictureNote(profile)}</p>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" size="sm" loading={uploading} onClick={() => fileInput.current?.click()}>
+                <Camera /> Upload photo
+              </Button>
+              {profile.customAvatarUrl ? (
+                <Button variant="ghost" size="sm" loading={removeAvatar.isPending} onClick={() => removeAvatar.mutate({})}>
+                  <Trash2 /> Remove uploaded photo
+                </Button>
+              ) : null}
+              <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadAvatar(f); e.target.value = ""; }} />
+            </div>
           </div>
         </div>
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
@@ -104,6 +167,12 @@ export function ProfilePage({ initial }: { initial: Profile }) {
             <Label htmlFor="display-name">Display name</Label>
             <Input id="display-name" value={name} onChange={(e) => setName(e.target.value)} aria-invalid={Boolean(errors.name)} />
             <FieldError>{errors.name}</FieldError>
+            {discordName && discordName !== profile.displayName ? (
+              <Button className="mt-1 h-auto min-h-7 max-w-full justify-start whitespace-normal py-1 text-left" variant="ghost" size="xs" loading={useDiscordName.isPending} onClick={() => useDiscordName.mutate({})}>
+                <DiscordIcon className="size-3.5" />
+                <span className="min-w-0 break-words">Use my Discord display name (“{discordName}”)</span>
+              </Button>
+            ) : null}
           </div>
           <div>
             <Label htmlFor="username">Username</Label>
@@ -602,7 +671,7 @@ function ConnectedAccounts({ profile }: { profile: Profile }) {
   const dms = profile.discordDms;
 
   return (
-    <Card title="Connected accounts" description="Sign in faster with Discord or Google. Accounts are matched by verified email.">
+    <Card title="Connected accounts" description="Sign in faster with Discord or Google. Connect them here while signed in: Forge never links accounts just because an email address matches.">
       {notice ? (
         <p
           role={notice.tone === "error" ? "alert" : "status"}
@@ -652,6 +721,7 @@ function ConnectedAccounts({ profile }: { profile: Profile }) {
               ) : provider === "discord" && dms.available && available ? (
                 <p className="mt-1 text-[12px] text-fg-muted">Connect it to also get direct messages from Forge about your deadlines, reviews and mentions, and to use Forge&apos;s commands in Discord (/mywork, /reviews, /card, /due, /newcard).</p>
               ) : null}
+              {provider === "discord" && linked && profile.discordProfile ? <DiscordProfilePanel profile={profile} /> : null}
               {linked && onlyWayIn ? <p className="mt-1 text-[11.5px] text-fg-subtle">To disconnect, set a password above first, so you can still sign in.</p> : null}
             </li>
           );
@@ -663,7 +733,7 @@ function ConnectedAccounts({ profile }: { profile: Profile }) {
         title={`Disconnect ${disconnecting ? PROVIDER_LABELS[disconnecting] : ""}?`}
         description={
           disconnecting === "discord"
-            ? "You won't be able to sign in with Discord, and Forge stops sending you direct messages there. You can connect it again any time."
+            ? "You won't be able to sign in with Discord, Forge stops sending you direct messages and stops refreshing your Discord profile, and your Discord picture is replaced by your uploaded photo (or initials). Your studio name stays. You can connect it again any time."
             : "You won't be able to sign in with Google. You can connect it again any time."
         }
         confirmLabel="Disconnect"
@@ -671,5 +741,115 @@ function ConnectedAccounts({ profile }: { profile: Profile }) {
         onConfirm={() => disconnecting && disconnect.mutate({ provider: disconnecting })}
       />
     </Card>
+  );
+}
+
+/**
+ * The connected Discord identity and its controls: the picture choice, a one-time name copy, and a
+ * refresh. Discord changes arrive with the next refresh, never instantly.
+ */
+function DiscordProfilePanel({ profile }: { profile: Profile }) {
+  const dp = profile.discordProfile!;
+  const queryClient = useQueryClient();
+  const router = useRouter();
+  const tutorial = useTutorial();
+  const apply = (next: Profile) => {
+    queryClient.setQueryData(qk.profile(), next);
+    router.refresh();
+  };
+  const interacted = () => tutorial.trigger("account.discord-profile");
+  const setSource = useRpcMutation("account.setAvatarSource", {
+    onSuccess: (next, { source }) => {
+      apply(next);
+      toast.success(source === "discord" ? "Showing your Discord picture." : next.customAvatarUrl ? "Showing your uploaded photo." : "Showing your initials until you upload a photo.");
+      interacted();
+    },
+  });
+  const useName = useRpcMutation("account.useDiscordName", {
+    onSuccess: (next) => {
+      apply(next);
+      toast.success(`Your studio name is now “${next.displayName}”. It won't change when your Discord name does.`);
+      interacted();
+    },
+  });
+  const refresh = useRpcMutation("account.refreshDiscordProfile", {
+    onSuccess: ({ outcome, profile: next }) => {
+      apply(next);
+      interacted();
+      if (outcome === "updated") toast.success("Discord profile refreshed.");
+      else if (outcome === "unchanged") toast.success("Your Discord profile is up to date.");
+      else if (outcome === "busy") toast.info("A refresh is already running.");
+      else if (outcome === "reconnect") toast.error("Discord needs you to reconnect before Forge can refresh your profile.");
+      else toast.error("Forge couldn't reach Discord. It will try again later.");
+    },
+  });
+  const name = dp.displayName ?? dp.username ?? "Discord account";
+  const copyName = dp.displayName ?? dp.username;
+  const status =
+    dp.state === "ok" && dp.syncedAt
+      ? `Refreshed ${timeAgo(dp.syncedAt)}`
+      : dp.state === "syncing"
+        ? "Refreshing your Discord profile…"
+        : dp.state === "retrying"
+          ? `${dp.message ?? "Forge couldn't refresh your Discord profile."}${dp.syncedAt ? ` Last refreshed ${timeAgo(dp.syncedAt)}.` : ""}`
+          : null;
+
+  return (
+    <TipAnchor tip="account.discord-profile" facts={{ connected: true }} place="security">
+      <div className="mt-3 grid gap-3 rounded-lg border border-border bg-surface-3/40 p-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <UserAvatar user={{ displayName: name, avatarUrl: dp.avatarUrl, avatarColor: profile.avatarColor }} size="lg" />
+          <div className="min-w-0">
+            <p className="break-words text-[13px] font-medium">{name}</p>
+            {dp.username ? <DiscordHandle username={dp.username} className="text-[12px]" /> : null}
+          </div>
+        </div>
+
+        {dp.state === "reconnect" ? (
+          <div role="alert" className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-[12.5px]">
+            <p className="flex items-start gap-1.5 font-medium">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" /> Reconnect Discord to keep your profile in sync
+            </p>
+            <p className="mt-0.5 text-fg-muted">{dp.message}{dp.syncedAt ? ` Last refreshed ${timeAgo(dp.syncedAt)}.` : ""}</p>
+            <Button className="mt-2" size="xs" variant="secondary" asChild>
+              <a href="/api/auth/oauth/discord?next=/account/security">Reconnect Discord</a>
+            </Button>
+          </div>
+        ) : status ? (
+          <p role="status" className={cn("text-[12px]", dp.state === "retrying" ? "text-warning" : "text-fg-muted")}>
+            {status}
+          </p>
+        ) : null}
+
+        <label className="flex items-start justify-between gap-3 text-[13px]">
+          <span className="min-w-0">
+            <span className="block font-medium">Use Discord profile picture</span>
+            <span className="block text-[12px] text-fg-muted">
+              {profile.avatarSource === "discord" ? pictureNote(profile) : profile.customAvatarUrl ? "Your uploaded photo is shown; it's kept if you switch." : "Turn on to show your Discord picture instead of your initials."}
+            </span>
+          </span>
+          <Switch
+            checked={profile.avatarSource === "discord"}
+            disabled={setSource.isPending}
+            onCheckedChange={(on) => setSource.mutate({ source: on ? "discord" : "custom" })}
+            aria-label="Use Discord profile picture"
+          />
+        </label>
+
+        <div className="flex flex-wrap gap-2">
+          <Button size="xs" variant="secondary" loading={refresh.isPending} disabled={dp.state === "reconnect"} onClick={() => refresh.mutate({})}>
+            <RefreshCw /> Refresh Discord profile
+          </Button>
+          {copyName && copyName !== profile.displayName ? (
+            <Button size="xs" variant="ghost" className="h-auto min-h-7 max-w-full whitespace-normal py-1 text-left" loading={useName.isPending} onClick={() => useName.mutate({})}>
+              <span className="min-w-0 break-words">Use my Discord display name (“{copyName}”)</span>
+            </Button>
+          ) : null}
+        </div>
+        <p className="text-[11.5px] text-fg-subtle">
+          Your studio name stays yours. Forge refreshes your Discord profile about once every {dp.freshHours} hours while you use it, so changes you make on Discord show up after the next refresh.
+        </p>
+      </div>
+    </TipAnchor>
   );
 }

@@ -2,9 +2,9 @@ import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { completeOAuth } from "@/server/auth/oauth";
-import { createSession, validateSessionToken } from "@/server/auth/session";
+import { validateSessionToken } from "@/server/auth/session";
 import { db } from "@/server/db";
-import { attachments, users } from "@/server/db/schema";
+import { attachments, oauthAccounts, users } from "@/server/db/schema";
 import { clientIpFrom, readBodyLimited, readJsonBody } from "@/server/http";
 import { noticeIsAuthentic, withNotice } from "@/notice-signature";
 import { storedContentType } from "@/server/storage/s3";
@@ -144,28 +144,26 @@ describe("one-time tokens", () => {
 });
 
 describe("OAuth sign-in", () => {
-  it("doesn't hand over an account someone pre-registered with an unverified address", async () => {
-    const email = `victim_${stamp()}@test.dev`;
+  it("never links or takes over an existing account because an email address matches", async () => {
     const meta = { ip: "192.0.2.3", userAgent: "vitest" };
-    // The attacker registers the victim's address with their own password (never verified),
-    // using the victim's invitation link (forwarded or leaked).
-    const { user, session } = await accounts.signUp({ email, password: "attacker password", displayName: "Squatter", inviteToken: await pendingInvite(email) }, meta);
-    expect(user.emailVerifiedAt).toBeNull();
-    // The victim signs in with Google, which verified the address.
-    await completeOAuth("google", { id: `g-${stamp()}`, email, emailVerified: true, username: "victim", displayName: "Victim" }, null, meta);
-    const [row] = await db.select().from(users).where(eq(users.id, user.id));
-    expect(row!.emailVerifiedAt).not.toBeNull();
-    expect(row!.passwordHash).toBeNull(); // the attacker's password no longer works…
-    expect(await validateSessionToken(session.token)).toBeNull(); // …and their session is gone
-    await expectAppError(accounts.signIn({ email, password: "attacker password" }, meta), "UNAUTHORIZED");
-    // A normal verified account keeps its password when its owner links Google.
-    const owner = `owner_${stamp()}@test.dev`;
-    const created = await accounts.signUp({ email: owner, password: "owner password", displayName: "Owner", inviteToken: await pendingInvite(owner) }, meta);
-    await db.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, created.user.id));
-    const ownerSession = await createSession(created.user.id, meta);
-    await completeOAuth("google", { id: `g-${stamp()}`, email: owner, emailVerified: true, username: "owner", displayName: "Owner" }, null, meta);
-    expect((await db.select().from(users).where(eq(users.id, created.user.id)))[0]!.passwordHash).not.toBeNull();
-    expect(await validateSessionToken(ownerSession.token)).not.toBeNull();
+    for (const verified of [false, true]) {
+      const email = `owner_${verified ? "v" : "u"}_${stamp()}@test.dev`;
+      const { user, session } = await accounts.signUp({ email, password: "owner password", displayName: "Owner", inviteToken: await pendingInvite(email) }, meta);
+      if (verified) await db.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, user.id));
+      // Someone signs in with a provider account reporting the same (verified) address: refused.
+      for (const provider of ["google", "discord"] as const) {
+        await expectAppError(completeOAuth(provider, { id: `${provider}-${stamp()}`, email, emailVerified: true, username: "someone", displayName: "Someone" }, null, meta), "CONFLICT");
+      }
+      // Nothing about the existing account changed, and nothing was linked to it.
+      const [row] = await db.select().from(users).where(eq(users.id, user.id));
+      expect(row!.passwordHash).not.toBeNull();
+      expect(Boolean(row!.emailVerifiedAt)).toBe(verified);
+      expect(await validateSessionToken(session.token)).not.toBeNull();
+      expect(await db.select().from(oauthAccounts).where(eq(oauthAccounts.userId, user.id))).toEqual([]);
+      // Its owner connects the provider while signed in instead.
+      await completeOAuth("google", { id: `google-own-${stamp()}`, email: "other@example.com", emailVerified: true, username: "owner", displayName: "Owner" }, user.id, meta);
+      expect(await db.select().from(oauthAccounts).where(eq(oauthAccounts.userId, user.id))).toHaveLength(1);
+    }
   });
 });
 

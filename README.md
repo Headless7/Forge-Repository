@@ -441,6 +441,16 @@ when they changed and reads the public key that signs Discord's requests (overri
 `DISCORD_PUBLIC_KEY`). Commands work for people who connected Discord in Account → Security,
 act with their own Forge permissions, and only they see the replies.
 
+**Connected Discord profiles.** Members who connect Discord (Account → Security) show their Discord
+handle beside their studio name, and can use their Discord picture (the default when they have no
+uploaded photo). Forge refreshes the profile right after connecting or signing in with Discord, in the
+background about once every 24 hours while they use Forge, and on "Refresh Discord profile" — never
+instantly. Studio display names are never changed by a refresh ("Use my Discord display name" copies
+it once). Accounts are linked only by the Discord account id, never by email or name. Pictures are
+downloaded from `cdn.discordapp.com` and served from Forge's own storage as small stills. The OAuth
+tokens that make refreshing possible are stored encrypted with a key derived from `AUTH_SECRET`:
+changing `AUTH_SECRET` makes them unreadable, and people are asked to reconnect Discord.
+
 ## Extending
 
 - **More sign-in providers:** add a provider to `src/server/auth/oauth.ts`; accounts

@@ -12,6 +12,7 @@ import { enforceSharedRateLimit, sharedRateLimiter } from "../rate-limit";
 import { avatarKey, storage } from "../storage";
 import type { Actor } from "./context";
 import { discordDmStatus, onDiscordAccountUnlinked } from "./discord-dm";
+import { announceProfileChange, applyAvatarSource, discordProfileStatus, forgetDiscordPicture, revokeDiscordAuthorization, setAvatarSource, syncDiscordProfile, useDiscordDisplayName } from "./discord-profile";
 import { sendEmail } from "./email";
 import { claimKey, findUsableKey, isPlatformAdminEmail } from "./platform";
 import { avatarUrl } from "./users-lookup";
@@ -291,10 +292,14 @@ export async function getProfile(actor: Actor) {
     displayName: user.displayName,
     avatarUrl: await avatarUrl(user.avatarKey),
     avatarColor: user.avatarColor,
+    /** Which picture is shown, and the uploaded photo (kept while the Discord picture is shown). */
+    avatarSource: user.avatarSource,
+    customAvatarUrl: await avatarUrl(user.customAvatarKey),
     theme: user.themePreference,
     hasPassword: Boolean(user.passwordHash),
     oauth: linked.map((a) => ({ provider: a.provider, username: a.providerUsername })),
     discordDms: await discordDmStatus(user.id),
+    discordProfile: await discordProfileStatus(user.id),
     oauthProviders: {
       discord: Boolean(env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET),
       google: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
@@ -315,8 +320,13 @@ export async function disconnectOAuth(actor: Actor, input: { provider: "discord"
     if (!user.passwordHash && linked.length === 1) {
       throw invalid(`Set a password first, so you can still sign in without ${input.provider === "discord" ? "Discord" : "Google"}.`);
     }
+    if (input.provider === "discord") await revokeDiscordAuthorization(account);
+    // The row holds the tokens and the Discord profile: deleting it removes both.
     await db.delete(oauthAccounts).where(eq(oauthAccounts.id, account.id));
-    if (input.provider === "discord") await onDiscordAccountUnlinked(actor.userId);
+    if (input.provider === "discord") {
+      await forgetDiscordPicture(actor.userId, account.avatarKey);
+      await onDiscordAccountUnlinked(actor.userId);
+    }
   }
   return getProfile(actor);
 }
@@ -384,6 +394,10 @@ export async function changePassword(actor: Actor, input: { currentPassword?: st
   return { ok: true };
 }
 
+/**
+ * Uploads (or removes) the studio photo. Uploading one also makes it the picture shown, instead of
+ * a connected Discord picture; the Discord picture can be chosen again later.
+ */
 export async function setAvatar(actor: Actor, buffer: Buffer | null) {
   const [user] = await db.select().from(users).where(eq(users.id, actor.userId));
   if (!user) throw notFound("User");
@@ -393,9 +407,30 @@ export async function setAvatar(actor: Actor, buffer: Buffer | null) {
     key = avatarKey(user.id, Date.now().toString(36));
     await storage().put(key, image, "image/webp");
   }
-  await db.update(users).set({ avatarKey: key }).where(eq(users.id, user.id));
-  if (user.avatarKey) await storage().delete(user.avatarKey).catch(() => {});
+  await db.update(users).set({ customAvatarKey: key, ...(buffer ? { avatarSource: "custom" as const } : {}) }).where(eq(users.id, user.id));
+  await applyAvatarSource(db, user.id);
+  if (user.customAvatarKey && user.customAvatarKey !== key) await storage().delete(user.customAvatarKey).catch(() => {});
+  await announceProfileChange(user.id);
   return getProfile(actor);
+}
+
+/** "Use Discord profile picture" on or off. */
+export async function chooseAvatarSource(actor: Actor, input: { source: "custom" | "discord" }) {
+  await setAvatarSource(actor, input.source);
+  return getProfile(actor);
+}
+
+/** Copies the Discord display name (or username) into the studio display name, once. */
+export async function copyDiscordDisplayName(actor: Actor) {
+  await useDiscordDisplayName(actor);
+  return getProfile(actor);
+}
+
+/** "Refresh Discord profile": now, unless a refresh is already running. */
+export async function refreshDiscordProfile(actor: Actor) {
+  const outcome = await syncDiscordProfile(actor.userId, { force: true });
+  if (outcome === "not-connected") throw invalid("Connect Discord first.");
+  return { outcome, profile: await getProfile(actor) };
 }
 
 export async function listSessions(actor: Actor) {

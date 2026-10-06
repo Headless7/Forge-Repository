@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import type { UserDTO } from "@/lib/types";
 import { cn, initials } from "@/lib/utils";
 
@@ -23,12 +26,18 @@ export function UserAvatar({
   ring?: boolean;
 }) {
   const name = user?.displayName ?? "Unknown";
+  // A picture that fails to load (expired link, removed file) falls back to the initials.
+  const [failed, setFailed] = useState<string | null>(null);
+  const src = user?.avatarUrl && user.avatarUrl !== failed ? user.avatarUrl : null;
   return (
     <span className={cn("relative inline-flex shrink-0", className)}>
-      {user?.avatarUrl ? (
+      {src ? (
         <img
-          src={user.avatarUrl}
+          src={src}
           alt={name}
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(src)}
           className={cn("rounded-full object-cover", sizes[size], ring && "ring-2 ring-surface-2")}
         />
       ) : (

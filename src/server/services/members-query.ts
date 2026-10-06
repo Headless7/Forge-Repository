@@ -1,9 +1,9 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { memberCanOpenProject, type MemberAccess, type Role } from "@/lib/permissions";
 import type { MemberDTO } from "@/lib/types";
 import { accessibleProjectIds, asRole, effectiveProjectRole, type ProjectRow, type StudioAccess } from "../access";
 import { db, type Executor } from "../db";
-import { projectMembers, projects, studioMembers, users } from "../db/schema";
+import { oauthAccounts, projectMembers, projects, studioMembers, users } from "../db/schema";
 import { avatarUrl } from "./users-lookup";
 
 const ONLINE_WINDOW_MS = 3 * 60 * 1000;
@@ -22,6 +22,8 @@ type MemberRow = {
   avatarKey: string | null;
   avatarColor: string;
   lastSeenAt: Date | null;
+  discordUsername: string | null;
+  discordDisplayName: string | null;
 };
 
 async function toMemberDTO(row: MemberRow, role: Role): Promise<MemberDTO> {
@@ -35,6 +37,7 @@ async function toMemberDTO(row: MemberRow, role: Role): Promise<MemberDTO> {
     title: row.title,
     online: isOnline(row.lastSeenAt),
     access: (row.access === "PROJECTS" && role !== "OWNER" && role !== "ADMIN" ? "PROJECTS" : "STUDIO") as MemberAccess,
+    discord: row.discordUsername ? { username: row.discordUsername, displayName: row.discordDisplayName } : null,
   };
 }
 
@@ -50,6 +53,9 @@ async function studioMemberRows(studioId: string, ex: Executor = db): Promise<Me
       avatarKey: users.avatarKey,
       avatarColor: users.avatarColor,
       lastSeenAt: users.lastSeenAt,
+      // The connected Discord account (one per person; the newest if older data has two).
+      discordUsername: sql<string | null>`(select o.provider_username from ${oauthAccounts} o where o.user_id = ${users.id} and o.provider = 'discord' order by o.created_at desc limit 1)`,
+      discordDisplayName: sql<string | null>`(select o.display_name from ${oauthAccounts} o where o.user_id = ${users.id} and o.provider = 'discord' order by o.created_at desc limit 1)`,
     })
     .from(studioMembers)
     .innerJoin(users, eq(users.id, studioMembers.userId))

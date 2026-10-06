@@ -1,4 +1,4 @@
-import { index, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { index, integer, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { createdAt, pk, tsz, updatedAt } from "./columns";
 
 export const users = pgTable(
@@ -11,7 +11,16 @@ export const users = pgTable(
     /** Lower-case handle used for @mentions. */
     username: text().notNull(),
     displayName: text().notNull(),
+    /**
+     * The picture everyone sees (the one shared avatar path): the cached Discord picture when
+     * `avatarSource` is "discord" and there is one, otherwise the uploaded photo. Written only by
+     * `applyAvatarSource` (services/discord-profile).
+     */
     avatarKey: text(),
+    /** The photo the person uploaded, kept while their Discord picture is shown. */
+    customAvatarKey: text(),
+    /** Which picture to show: the uploaded photo ("custom") or the connected Discord picture. */
+    avatarSource: text({ enum: ["custom", "discord"] }).notNull().default("custom"),
     avatarColor: text().notNull().default("#6366f1"),
     /** Null for accounts that only sign in through OAuth. */
     passwordHash: text(),
@@ -49,8 +58,31 @@ export const oauthAccounts = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     provider: text({ enum: ["discord", "google"] }).notNull(),
+    /** The provider's stable account id (Discord: the user id) — the only thing accounts are linked by. */
     providerAccountId: text().notNull(),
+    /** Discord: the unique username (handle), e.g. "headless7". Refreshed from Discord. */
     providerUsername: text(),
+    /** Discord: the display name (`global_name`), when the person set one. */
+    displayName: text(),
+    /** Discord: the avatar hash (null = Discord's default picture). */
+    avatarHash: text(),
+    /** Our copy of that picture (a static WebP in storage), so browsers never load Discord's CDN. */
+    avatarKey: text(),
+    /** Discord OAuth tokens, encrypted at rest (auth/secret-box); never sent to browsers or logged. */
+    accessToken: text(),
+    refreshToken: text(),
+    tokenExpiresAt: tsz(),
+    /** Last successful profile refresh. */
+    profileSyncedAt: tsz(),
+    /** Last refresh problem (kept with the last good profile until a refresh succeeds). */
+    syncError: text(),
+    syncFailures: integer().notNull().default(0),
+    /** When the next background refresh may run (freshness interval or backoff). */
+    nextSyncAt: tsz(),
+    /** A refresh in progress holds this lease, so two can't race over tokens or the profile. */
+    syncLeaseUntil: tsz(),
+    /** Discord no longer accepts our authorization: the person needs to reconnect. */
+    needsReauthAt: tsz(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

@@ -12,6 +12,7 @@ import type { MemberDTO } from "@/lib/types";
 import { emailSchema } from "@/lib/validation";
 import { formatShortDate, timeAgo } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
+import { DiscordHandle } from "../domain/discord-icon";
 import { useShell } from "../shell/shell-context";
 import { TipAnchor, useTipOnOpen } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
@@ -230,9 +231,10 @@ export function MembersPage({ initialMembers }: { initialMembers: MemberDTO[] })
                     {m.displayName} {m.id === user.id ? <Badge>You</Badge> : null}
                     {m.access === "PROJECTS" ? <Badge tone="warning">Projects only</Badge> : null}
                   </p>
-                  <p className="truncate text-[12px] text-fg-subtle">
-                    @{m.username}
-                    {m.online ? <span className="text-state-approved"> · online</span> : null}
+                  <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-fg-subtle">
+                    <span className="min-w-0 break-all">@{m.username}</span>
+                    {m.discord ? <DiscordHandle username={m.discord.username} className="text-[12px]" /> : null}
+                    {m.online ? <span className="text-state-approved">online</span> : null}
                   </p>
                 </div>
                 <input

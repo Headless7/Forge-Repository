@@ -43,9 +43,19 @@ export interface UserDTO {
   avatarColor: string;
 }
 
+/** A member's connected Discord account, as last refreshed: shown beside the studio name, never instead of it. */
+export interface DiscordIdentityDTO {
+  /** Unique username (handle). */
+  username: string;
+  /** Discord display name, when set. */
+  displayName: string | null;
+}
+
 export interface MemberDTO extends UserDTO {
   role: Role;
   title: string | null;
+  /** Connected Discord account (null when not connected). */
+  discord: DiscordIdentityDTO | null;
   online: boolean;
   /** PROJECTS: an external collaborator limited to the projects they were added to. */
   access: MemberAccess;

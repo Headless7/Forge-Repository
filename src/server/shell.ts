@@ -9,6 +9,7 @@ import { isPlatformAdmin } from "./services/platform";
 import { listProjects } from "./services/projects";
 import { listStudiosForUser, rememberStudio } from "./services/studios";
 import { tutorialState } from "./services/tutorial";
+import { maybeRefreshDiscordProfile } from "./services/discord-profile";
 import { avatarUrl } from "./services/users-lookup";
 
 export interface ShellData {
@@ -32,6 +33,8 @@ export async function loadShell(session: ValidatedSession, studioSlug: string | 
   if (!access) return null;
   if (session.user.lastStudioId !== access.studioId) void rememberStudio(session.user.id, access.studioId).catch(() => {});
 
+  // A connected Discord profile older than a day is refreshed in the background (never blocks the page).
+  maybeRefreshDiscordProfile(session.user.id);
   const actor = { userId: session.user.id, sessionId: session.session.id };
   const [projects, unread, avatar, tutorial] = await Promise.all([
     listProjects(actor, access.studioId),
