@@ -102,7 +102,7 @@ describe("board filters", () => {
     labelIds: [],
     cover: null,
     coverMode: "AUTO",
-    counts: { comments: 0, attachments: 0, unresolvedFeedback: 0, resolvedFeedback: 0, checklistDone: 0, checklistTotal: 0, versions: 0 },
+    counts: { comments: 0, attachments: 0, unresolvedFeedback: 0, resolvedFeedback: 0, checklistDone: 0, checklistTotal: 0, checklistMine: 0, checklistNextDue: null, versions: 0 },
     hasVideo: false,
     hasImage: false,
     unread: false,

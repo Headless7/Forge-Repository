@@ -80,7 +80,7 @@ export function ReviewBanner({
         >
         <div className="flex flex-wrap items-center gap-3 border-b border-state-changes/25 px-4 py-2.5">
           <CircleAlert className="size-5 text-state-changes" />
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 basis-48">
             <p className="text-[13.5px] font-semibold text-state-changes">
               Changes requested{version ? ` on V${version.number}` : ""} · {unresolved.length} unresolved
             </p>

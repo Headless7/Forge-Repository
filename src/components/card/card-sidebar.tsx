@@ -97,8 +97,8 @@ function PeoplePicker({
           {content}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-64 p-1">
-        <ul className="scrollbar-thin max-h-72 overflow-y-auto">
+      <PopoverContent className="w-64 max-h-[min(20rem,var(--radix-popover-content-available-height))] p-1">
+        <ul>
           {members.filter((m) => (filter ? filter(m) : true)).map((m) => {
             const on = selected.includes(m.id);
             return (

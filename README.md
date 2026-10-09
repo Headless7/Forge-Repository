@@ -18,6 +18,10 @@ every revision, decision and comment stays attached to the work it belongs to.
   animation, VFX, SFX…), each with its own owner, reviewer, due date, files,
   revisions, review state and feedback. Simple cards stay simple: one implicit
   deliverable, no extra UI.
+- **Checklists** — each item can be given to one person and due on a day. People
+  see their items in Home, calendars, their calendar subscription and Discord
+  (`/mywork`, `/due`, `/additem`), and can tick their own off without edit rights
+  on the card. Overdue items show on the board card.
 - **Connected canvas** — deliverables on a pan/zoom canvas (or as a list) with
   *dependency* and *association* links; blocked work shows what it is waiting on.
 - **Review workflow** — Not submitted → In progress → Needs review →
@@ -436,7 +440,7 @@ messages and the slash commands. In the [Developer Portal](https://discord.com/d
 3. **General Information → Interactions Endpoint URL:** `{APP_URL}/api/discord/interactions`
    (deploy first: Discord checks the URL answers correctly when you save it).
 
-On start, a production server registers the commands (`/mywork`, `/reviews`, `/card`, `/due`, `/newcard`)
+On start, a production server registers the commands (`/mywork`, `/reviews`, `/card`, `/due`, `/newcard`, `/additem`)
 when they changed and reads the public key that signs Discord's requests (override with
 `DISCORD_PUBLIC_KEY`). Commands work for people who connected Discord in Account → Security,
 act with their own Forge permissions, and only they see the replies.

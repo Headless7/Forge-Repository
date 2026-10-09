@@ -1,13 +1,15 @@
 "use client";
 
 import { DropdownMenu as M, Popover as P, Tooltip as T } from "radix-ui";
-import { Check, ChevronRight } from "lucide-react";
-import { useContext, type ComponentProps, type ReactNode } from "react";
+import { Check, ChevronDown, ChevronRight } from "lucide-react";
+import { useContext, useState, type ComponentProps, type ReactNode } from "react";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { cn } from "@/lib/utils";
 import { PortalContainer } from "./controls";
 
+// Menus never run off a short window: capped to the room Radix measured, then they scroll.
 const panel =
-  "z-50 min-w-44 overflow-hidden rounded-lg border border-border-strong bg-surface-2 p-1 text-[13px] text-fg shadow-lg data-[state=open]:animate-pop-in";
+  "scrollbar-thin z-50 max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-44 max-w-[calc(100vw-16px)] overflow-y-auto overscroll-contain rounded-lg border border-border-strong bg-surface-2 p-1 text-[13px] text-fg shadow-lg data-[state=open]:animate-pop-in";
 const item =
   "relative flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-45 data-[highlighted]:bg-surface-4 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-fg-muted";
 
@@ -17,10 +19,10 @@ export const DropdownMenuSub = M.Sub;
 export const DropdownMenuGroup = M.Group;
 export const DropdownMenuRadioGroup = M.RadioGroup;
 
-export function DropdownMenuContent({ className, sideOffset = 6, ...props }: ComponentProps<typeof M.Content>) {
+export function DropdownMenuContent({ className, sideOffset = 6, collisionPadding = 8, ...props }: ComponentProps<typeof M.Content>) {
   return (
     <M.Portal container={useContext(PortalContainer) ?? undefined}>
-      <M.Content sideOffset={sideOffset} className={cn(panel, className)} {...props} />
+      <M.Content sideOffset={sideOffset} collisionPadding={collisionPadding} className={cn(panel, className)} {...props} />
     </M.Portal>
   );
 }
@@ -79,11 +81,44 @@ export function DropdownMenuSubTrigger({ className, children, ...props }: Compon
   );
 }
 
-export function DropdownMenuSubContent({ className, ...props }: ComponentProps<typeof M.SubContent>) {
+export function DropdownMenuSubContent({ className, collisionPadding = 8, ...props }: ComponentProps<typeof M.SubContent>) {
   return (
     <M.Portal container={useContext(PortalContainer) ?? undefined}>
-      <M.SubContent className={cn(panel, className)} sideOffset={4} {...props} />
+      <M.SubContent className={cn(panel, className)} sideOffset={4} collisionPadding={collisionPadding} {...props} />
     </M.Portal>
+  );
+}
+
+/**
+ * A group of choices inside a menu: a side sub-menu where there's room for one, and on narrow
+ * screens (where a side menu would run off the screen) a section that expands in place.
+ */
+export function DropdownMenuNested({ label, children, contentClassName }: { label: ReactNode; children: ReactNode; contentClassName?: string }) {
+  const narrow = useMediaQuery("(max-width: 639px)");
+  const [expanded, setExpanded] = useState(false);
+  if (narrow) {
+    return (
+      <>
+        <M.Item
+          className={cn(item, expanded && "bg-surface-3")}
+          aria-expanded={expanded}
+          onSelect={(e) => {
+            e.preventDefault();
+            setExpanded((v) => !v);
+          }}
+        >
+          {label}
+          <ChevronDown className={cn("ml-auto transition-transform", expanded && "rotate-180")} />
+        </M.Item>
+        {expanded ? <div className="mb-1 ml-3 border-l border-border pl-1">{children}</div> : null}
+      </>
+    );
+  }
+  return (
+    <M.Sub>
+      <DropdownMenuSubTrigger>{label}</DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className={contentClassName}>{children}</DropdownMenuSubContent>
+    </M.Sub>
   );
 }
 
@@ -101,13 +136,18 @@ export const PopoverTrigger = P.Trigger;
 export const PopoverAnchor = P.Anchor;
 export const PopoverClose = P.Close;
 
-export function PopoverContent({ className, sideOffset = 6, align = "start", ...props }: ComponentProps<typeof P.Content>) {
+/** Popovers stay inside the window: kept 8px from its edges, capped to the room left, scrolling beyond that. */
+export function PopoverContent({ className, sideOffset = 6, align = "start", collisionPadding = 8, ...props }: ComponentProps<typeof P.Content>) {
   return (
     <P.Portal container={useContext(PortalContainer) ?? undefined}>
       <P.Content
         sideOffset={sideOffset}
         align={align}
-        className={cn("z-50 rounded-lg border border-border-strong bg-surface-2 p-3 text-[13px] text-fg shadow-lg outline-none data-[state=open]:animate-pop-in", className)}
+        collisionPadding={collisionPadding}
+        className={cn(
+          "scrollbar-thin z-50 max-h-[var(--radix-popover-content-available-height)] max-w-[calc(100vw-16px)] overflow-y-auto overscroll-contain rounded-lg border border-border-strong bg-surface-2 p-3 text-[13px] text-fg shadow-lg outline-none data-[state=open]:animate-pop-in",
+          className,
+        )}
         {...props}
       />
     </P.Portal>

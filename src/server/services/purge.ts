@@ -499,13 +499,25 @@ export async function enqueueStorageCleanup(ex: Executor, units: string[], reaso
 }
 
 let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
+let cleanupRun: Promise<unknown> | null = null;
 /** Runs the cleanup shortly after a commit (the periodic job catches anything left over). */
 export function scheduleStorageCleanup() {
   if (cleanupTimer) return;
   cleanupTimer = setTimeout(() => {
     cleanupTimer = null;
-    void processStorageDeletions().catch((error) => console.error("[forge] storage cleanup failed", error));
+    cleanupRun = processStorageDeletions()
+      .catch((error) => console.error("[forge] storage cleanup failed", error))
+      .finally(() => (cleanupRun = null));
   }, 250);
+}
+
+/** Cancels a pending post-commit cleanup and waits for one already running (for tests that drive the queue themselves). */
+export async function settleStorageCleanup() {
+  if (cleanupTimer) {
+    clearTimeout(cleanupTimer);
+    cleanupTimer = null;
+  }
+  await cleanupRun;
 }
 
 const backoffMs = (attempts: number) => Math.min(24 * 60 * 60 * 1000, 60_000 * 2 ** Math.max(0, attempts - 1));

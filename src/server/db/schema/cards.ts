@@ -1,5 +1,6 @@
 import {
   boolean,
+  date,
   doublePrecision,
   index,
   integer,
@@ -173,10 +174,14 @@ export const checklistItems = pgTable(
     position: doublePrecision().notNull(),
     doneById: uuid().references(() => users.id, { onDelete: "set null" }),
     doneAt: tsz(),
+    /** The one person doing this item (a project member who can work on cards). */
+    assigneeId: uuid().references(() => users.id, { onDelete: "set null" }),
+    /** The day it is due (no time: due by the end of that day). */
+    dueOn: date({ mode: "string" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("checklist_items_checklist_idx").on(t.checklistId), index("checklist_items_card_idx").on(t.cardId)],
+  (t) => [index("checklist_items_checklist_idx").on(t.checklistId), index("checklist_items_card_idx").on(t.cardId), index("checklist_items_assignee_idx").on(t.assigneeId)],
 );
 
 /** Last time a user opened a card — drives "recently viewed" and unread indicators. */

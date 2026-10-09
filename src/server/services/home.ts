@@ -1,9 +1,9 @@
-import { and, desc, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { roleHas } from "@/lib/permissions";
 import type { ActivityDTO, CardState, CardSummaryDTO, ProjectListItemDTO } from "@/lib/types";
 import { getProjectAccess, requireStudio, type ProjectAccess } from "../access";
 import { db } from "../db";
-import { boardColumns, boards, cardAssignees, cardReviewers, cardViews, cards, deliverableContributors, deliverables } from "../db/schema";
+import { boardColumns, boards, cardAssignees, cardReviewers, cardViews, cards, checklistItems, checklists, deliverableContributors, deliverables } from "../db/schema";
 import { listProjectActivity } from "./activity";
 import { summarizeCards } from "./card-dto";
 import type { Actor } from "./context";
@@ -36,11 +36,61 @@ export interface MyDeliverableItem {
   reviewerId: string | null;
 }
 
+/** An unticked checklist item given to the viewer. */
+export interface MyChecklistItem {
+  id: string;
+  text: string;
+  /** "YYYY-MM-DD", due by the end of that day. */
+  dueOn: string | null;
+  checklistTitle: string;
+  card: { id: string; key: string; title: string };
+  project: ProjectRef;
+  board: BoardRef | null;
+}
+
+/** The viewer's unticked checklist items in these projects (live cards only), soonest due day first. */
+export async function myChecklistItems(userId: string, projectIds: string[], projectRef: (id: string) => ProjectRef, boardRef: (boardId: string) => BoardRef | null, limit = 50): Promise<MyChecklistItem[]> {
+  if (!projectIds.length) return [];
+  const rows = await db
+    .select({ item: checklistItems, checklistTitle: checklists.title, card: cards })
+    .from(checklistItems)
+    .innerJoin(checklists, eq(checklists.id, checklistItems.checklistId))
+    .innerJoin(cards, eq(cards.id, checklistItems.cardId))
+    .innerJoin(boardColumns, eq(boardColumns.id, cards.columnId))
+    .innerJoin(boards, eq(boards.id, cards.boardId))
+    .where(
+      and(
+        inArray(cards.projectId, projectIds),
+        eq(checklistItems.assigneeId, userId),
+        eq(checklistItems.isDone, false),
+        isNull(cards.archivedAt),
+        isNull(boardColumns.archivedAt),
+        isNull(boards.archivedAt),
+      ),
+    )
+    .orderBy(sql`${checklistItems.dueOn} asc nulls last`, desc(cards.lastActivityAt), asc(checklistItems.position))
+    .limit(limit);
+  return rows.map(({ item, checklistTitle, card }) => {
+    const project = projectRef(card.projectId);
+    return {
+      id: item.id,
+      text: item.text,
+      dueOn: item.dueOn,
+      checklistTitle,
+      card: { id: card.id, key: `${project.key}-${card.number}`, title: card.title },
+      project,
+      board: boardRef(card.boardId),
+    };
+  });
+}
+
 export interface StudioHomeDTO {
   projects: ProjectListItemDTO[];
   attention: AttentionItem[];
   /** Unfinished deliverables the viewer works on, soonest deadline first. */
   deliverables: MyDeliverableItem[];
+  /** Unticked checklist items given to the viewer, soonest due day first. */
+  checklistItems: MyChecklistItem[];
   recent: Array<{ card: CardSummaryDTO; project: ProjectRef; board: BoardRef | null; viewedAt: string }>;
   activity: ActivityDTO[];
 }
@@ -98,7 +148,7 @@ export async function getStudioHome(actor: Actor, studioId: string): Promise<Stu
     if (access) accessMap.set(p.id, access);
   }
   const projectIds = [...accessMap.keys()];
-  if (projectIds.length === 0) return { projects: projectList, attention: [], deliverables: [], recent: [], activity: [] };
+  if (projectIds.length === 0) return { projects: projectList, attention: [], deliverables: [], checklistItems: [], recent: [], activity: [] };
 
   const reviewProjectIds = projectIds.filter((id) => roleHas(accessMap.get(id)!.role, "card.review"));
   const soon = new Date(Date.now() + 48 * 60 * 60 * 1000);
@@ -177,6 +227,7 @@ export async function getStudioHome(actor: Actor, studioId: string): Promise<Stu
     projects: projectList,
     attention,
     deliverables: await myDeliverables(actor.userId, projectIds, projectRef, boardRef),
+    checklistItems: await myChecklistItems(actor.userId, projectIds, projectRef, boardRef),
     recent: recentRows.map((r) => ({ card: byId.get(r.card.id)!, project: projectRef(r.card.projectId), board: boardRef(r.card.boardId), viewedAt: r.viewedAt.toISOString() })),
     activity,
   };

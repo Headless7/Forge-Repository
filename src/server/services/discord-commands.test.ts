@@ -16,7 +16,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/discord/interactions/route";
 import { db } from "@/server/db";
-import { cards, comments, deliverables, discordDmDeliveries, discordDmRecipients, oauthAccounts, projects, reviews as reviewRows } from "@/server/db/schema";
+import { cards, checklistItems, checklists, comments, deliverables, discordDmDeliveries, discordDmRecipients, oauthAccounts, projects, reviews as reviewRows } from "@/server/db/schema";
 import { pngBuffer, primaryDeliverable, setupStudio, upload, type Fixture } from "@/test/helpers";
 import * as cardService from "./cards";
 import { DISCORD_COMMANDS, handleInteraction, LAYOUT_LIMITS, layoutSize, parseDueDay, syncDiscordCommands, type Interaction, type InteractionResponse } from "./discord-commands";
@@ -355,7 +355,11 @@ describe("/newcard", () => {
     expect(people.map((c) => c.value)).toEqual(expect.arrayContaining([f.member.id, f.member2.id]));
     expect(people.map((c) => c.value)).not.toContain(f.outsider.id);
     const days = await suggest(manager, [opt("project", f.projectId), opt("due", "", true)]);
-    expect(days.map((c) => c.name.split(" · ")[0])).toEqual(["Today", "Tomorrow", "Friday", "In 1 week", "In 2 weeks"]);
+    // On a Friday, "Friday" (the next one) and "In 1 week" are the same day and are offered once.
+    const labels = days.map((c) => c.name.split(" · ")[0]);
+    expect(labels.slice(0, 3)).toEqual(["Today", "Tomorrow", "Friday"]);
+    expect(labels).toContain("In 2 weeks");
+    expect(new Set(days.map((c) => c.value)).size).toBe(days.length);
 
     const reply = await command(manager, "newcard", [
       opt("title", "@here Sword **VFX**"),
@@ -408,6 +412,145 @@ describe("/newcard", () => {
     expect(parseDueDay("2w", wednesday)).toBe("2026-10-21");
     expect(parseDueDay("2026-12-04", wednesday)).toBe("2026-12-04");
     for (const bad of ["2026-02-30", "someday", "", "in 9999 days"]) expect(parseDueDay(bad, wednesday)).toBeNull();
+  });
+});
+
+describe("checklists in Discord", () => {
+  const opt = (name: string, value: string, focused = false) => ({ name, type: 3, value, ...(focused ? { focused: true } : {}) });
+  const itemsOf = async (cardId: string) => db.select().from(checklistItems).where(eq(checklistItems.cardId, cardId)).orderBy(checklistItems.position);
+
+  it("/additem adds an item with who does it and when it's due, under the app's rules", async () => {
+    const f = await setupStudio();
+    const [manager, viewer] = await Promise.all([link(f.manager.id), link(f.viewer.id)]);
+    const card = await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: "Lantern" });
+
+    const people = await handleInteraction({ ...base(manager), type: 4, data: { name: "additem", options: [opt("card", card.key), opt("assign", "", true)] } });
+    const choices = "data" in people && "choices" in people.data ? people.data.choices.map((c) => c.value) : [];
+    expect(choices).toEqual(expect.arrayContaining(["me", f.member.id, f.developer.id]));
+    expect(choices).not.toContain(f.viewer.id); // Viewers don't take on work
+    expect(choices).not.toContain(f.outsider.id);
+
+    const reply = await command(manager, "additem", [opt("card", card.key), opt("item", "Export the @everyone FBX"), opt("assign", f.member.id), opt("due", "2026-12-04")]);
+    expectValidLayout(reply);
+    expect(shownText(reply)).toContain("✅ Added");
+    expect(shownText(reply)).toContain("Fri 4 Dec");
+    expect(shownText(reply)).toContain("@​everyone");
+    const [item] = await itemsOf(card.id);
+    expect(item).toMatchObject({ text: "Export the @everyone FBX", assigneeId: f.member.id, dueOn: "2026-12-04", isDone: false });
+    const [list] = await db.select().from(checklists).where(eq(checklists.cardId, card.id));
+    expect(list!.title).toBe("Checklist");
+
+    // A named checklist, picked by title.
+    await db.insert(checklists).values({ cardId: card.id, title: "Polish", position: 4096 });
+    const lists = await handleInteraction({ ...base(manager), type: 4, data: { name: "additem", options: [opt("card", card.key), opt("list", "pol", true)] } });
+    expect("data" in lists && "choices" in lists.data ? lists.data.choices.map((c) => c.name) : []).toEqual(["Polish"]);
+    await command(manager, "additem", [opt("card", card.key), opt("item", "Add glow"), opt("list", "polish"), opt("assign", "me")]);
+    const glow = (await itemsOf(card.id)).find((i) => i.text === "Add glow")!;
+    expect(glow.assigneeId).toBe(f.manager.id);
+
+    // What the app refuses, Discord refuses too.
+    expect(shownText(await command(viewer, "additem", [opt("card", card.key), opt("item", "Sneaky")]))).toContain("only to cards you can edit");
+    expect(shownText(await command(manager, "additem", [opt("card", card.key), opt("item", "For a viewer"), opt("assign", f.viewer.id)]))).toContain("Choose who does it");
+    expect(shownText(await command(manager, "additem", [opt("card", card.key), opt("item", "When?"), opt("due", "someday")]))).toContain("didn't understand that due date");
+    expect((await itemsOf(card.id)).map((i) => i.text).sort()).toEqual(["Add glow", "Export the @everyone FBX"]);
+  });
+
+  it("the checklist view lets people tick off their own items, and editors any item", async () => {
+    const f = await setupStudio();
+    const [member2, manager] = await Promise.all([link(f.member2.id), link(f.manager.id)]);
+    const card = await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: "Shield" });
+    await command(manager, "additem", [opt("card", card.key), opt("item", "Bevel the rim"), opt("assign", f.member2.id)]);
+    await command(manager, "additem", [opt("card", card.key), opt("item", "Paint the crest"), opt("assign", f.member.id)]);
+    const [mine, theirs] = await itemsOf(card.id);
+
+    // Member Two can't edit the card, but can tick their own item.
+    const cardView = await command(member2, "card", [opt("find", card.key)]);
+    expect(buttons(cardView)).toContain(`fg:list:${card.id}`);
+    expect(shownText(cardView)).not.toContain("Add checklist items");
+    const view = await click(member2, `fg:list:${card.id}`);
+    expectValidLayout(view);
+    expect(buttons(view)).toContain(`fg:tick:${mine!.id}`);
+    expect(buttons(view)).not.toContain(`fg:tick:${theirs!.id}`);
+    expect(buttons(view).some((b) => b.startsWith("fg:additems:"))).toBe(false);
+    expect(shownText(await click(member2, `fg:tick:${mine!.id}`))).toContain("✅ Ticked off");
+    expect(shownText(await click(member2, `fg:tick:${theirs!.id}`))).toContain("⚠️");
+    const after = await itemsOf(card.id);
+    expect(after.find((i) => i.id === mine!.id)!.isDone).toBe(true);
+    expect(after.find((i) => i.id === theirs!.id)!.isDone).toBe(false);
+
+    // Editors can tick (and untick) anything.
+    const managerView = await click(manager, `fg:list:${card.id}`);
+    expect(buttons(managerView)).toEqual(expect.arrayContaining([`fg:untick:${mine!.id}`, `fg:tick:${theirs!.id}`]));
+    await click(manager, `fg:untick:${mine!.id}`);
+    expect((await itemsOf(card.id)).find((i) => i.id === mine!.id)!.isDone).toBe(false);
+  });
+
+  it("Add items opens a form: each line becomes an item, with an optional person and due date", async () => {
+    const f = await setupStudio();
+    const manager = await link(f.manager.id);
+    const card = await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: "Banner" });
+
+    // No checklist yet: the form makes one.
+    const empty = await click(manager, `fg:list:${card.id}`);
+    expect(buttons(empty)).toContain(`fg:newlist:${card.id}`);
+    const form = await click(manager, `fg:newlist:${card.id}`);
+    expect(form).toMatchObject({ type: 9, data: { custom_id: `fg:newlist!:${card.id}` } });
+    const submit = (customId: string, items: string, assign = "", due = "") =>
+      handleInteraction({
+        ...base(manager),
+        type: 5,
+        data: { custom_id: customId, components: [{ components: [{ custom_id: "items", value: items }] }, { components: [{ custom_id: "assign", value: assign }] }, { components: [{ custom_id: "due", value: due }] }] },
+      });
+    const added = await submit(`fg:newlist!:${card.id}`, "Sketch the logo\n- Pick the colours\n\n[ ] Print a proof", "member", "tomorrow");
+    expect(shownText(added)).toContain("✅ Added 3 items");
+    const items = await itemsOf(card.id);
+    expect(items.map((i) => i.text)).toEqual(["Sketch the logo", "Pick the colours", "Print a proof"]);
+    expect(new Set(items.map((i) => i.assigneeId))).toEqual(new Set([f.member.id]));
+    expect(items.every((i) => i.dueOn === new Date(Date.now() + 86_400_000).toISOString().slice(0, 10))).toBe(true);
+
+    // Into an existing checklist; an unknown person adds nothing.
+    const [list] = await db.select().from(checklists).where(eq(checklists.cardId, card.id));
+    expect(await click(manager, `fg:additems:${list!.id}`)).toMatchObject({ type: 9, data: { custom_id: `fg:additems!:${list!.id}` } });
+    expect(shownText(await submit(`fg:additems!:${list!.id}`, "Mystery", "Nobody Called This"))).toContain("Nothing was added");
+    expect(await itemsOf(card.id)).toHaveLength(3);
+    expect(shownText(await submit(`fg:additems!:${list!.id}`, "Hang it up"))).toContain("✅ Added 1 item");
+    expect(await itemsOf(card.id)).toHaveLength(4);
+  });
+
+  it("/mywork and /due include the person's checklist items", async () => {
+    const f = await setupStudio();
+    const [member, manager] = await Promise.all([link(f.member.id), link(f.manager.id)]);
+    const card = await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: "Helmet" });
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    await command(manager, "additem", [opt("card", card.key), opt("item", "Model the visor"), opt("assign", f.member.id), opt("due", tomorrow)]);
+    await command(manager, "additem", [opt("card", card.key), opt("item", "Someone else's task"), opt("assign", f.member2.id), opt("due", tomorrow)]);
+
+    const work = await command(member, "mywork");
+    expectValidLayout(work);
+    expect(shownText(work)).toContain("Your checklist items");
+    expect(shownText(work)).toContain("Model the visor");
+    expect(shownText(work)).not.toContain("Someone else's task");
+
+    const due = await command(member, "due");
+    expectValidLayout(due);
+    expect(shownText(due)).toContain("Model the visor");
+    expect(buttons(due)).toContain(`fg:list:${card.id}`);
+    expect(shownText(due)).not.toContain("Someone else's task");
+  });
+
+  it("long checklists stay inside Discord's limits", async () => {
+    const f = await setupStudio();
+    const manager = await link(f.manager.id);
+    const card = await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: "Everything" });
+    for (const title of ["One", "Two", "Three", "Four", "Five"]) {
+      const [list] = await db.insert(checklists).values({ cardId: card.id, title: `${title} ${"long title ".repeat(10)}`, position: 1024 }).returning();
+      await db.insert(checklistItems).values(Array.from({ length: 12 }, (_, i) => ({ checklistId: list!.id, cardId: card.id, text: `${"A very long checklist item ".repeat(20)}${i}`, position: (i + 1) * 1024, assigneeId: f.manager.id, dueOn: "2026-12-04" })));
+    }
+    const view = await click(manager, `fg:list:${card.id}`);
+    expectValidLayout(view);
+    expect(shownText(view)).toContain("more items in Forge");
+    expectValidLayout(await command(manager, "mywork"));
+    expectValidLayout(await command(manager, "card", [opt("find", card.key)]));
   });
 });
 

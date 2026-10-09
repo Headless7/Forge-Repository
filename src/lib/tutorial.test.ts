@@ -20,6 +20,7 @@ const full: { [K in TipId]: TipFacts[K] } = {
   "card.attachments": { place: "attachments", canUpload: true, canEdit: true },
   "card.pending-changes": { pendingCount: 1, status: "PUBLISHED", canPublish: true },
   "card.assignment": { canAssign: true, multi: true },
+  "card.checklist-people": { canEdit: true },
   "roblox.preview": {},
   "access.scope": { place: "studio", canManage: true },
   "account.discord-profile": { connected: true },
@@ -54,6 +55,7 @@ describe("tutorial tip definitions", () => {
     expect(eligible("card.resolve-feedback", { canResolveFeedback: false, canUpload: false, canSubmit: false, state: "CHANGES_REQUESTED", unresolved: 3 })).toBe(false);
     expect(eligible("card.resolve-feedback", { canResolveFeedback: true, canUpload: true, canSubmit: true, state: "CHANGES_REQUESTED", unresolved: 0 })).toBe(false);
     expect(eligible("card.assignment", { canAssign: false, multi: true })).toBe(false);
+    expect(eligible("card.checklist-people", { canEdit: false })).toBe(false);
     expect(eligible("card.attachments", { place: "cover", canUpload: true, canEdit: false })).toBe(false);
     expect(eligible("card.attachments", { place: "attachments", canUpload: false, canEdit: true })).toBe(false);
     expect(eligible("access.scope", { place: "studio", canManage: false })).toBe(false);

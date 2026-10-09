@@ -184,7 +184,7 @@ function welcomeMessage(): DiscordMessage {
       "You can also ask me, here or in your team's server (only you see the answers):",
       "`/mywork` your open work · `/reviews` work waiting for you",
       "`/card` look up a card and act on it · `/due` your deadlines",
-      "`/newcard` create a card in one of your projects",
+      "`/newcard` create a card · `/additem` add a checklist item to a card",
       "",
       "To stop these messages, disconnect Discord in your Forge account settings.",
     ].join("\n"),

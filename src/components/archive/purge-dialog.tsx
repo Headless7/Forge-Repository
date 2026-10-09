@@ -87,7 +87,7 @@ export function PurgeDialog({ open, onOpenChange, targets, onDone }: { open: boo
   return (
     <Dialog open={open} onOpenChange={(v) => !running && onOpenChange(v)}>
       <DialogContent title={results ? "Deletion finished" : "Delete permanently?"} description={results ? undefined : "Archived items only. This can't be undone, and restoring won't be possible afterwards."} size="lg">
-        <div className="scrollbar-thin grid max-h-[60vh] gap-4 overflow-y-auto pr-1 text-[13px]">
+        <div className="grid gap-4 text-[13px]">
           {error ? <p role="alert" className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-danger">{error}</p> : null}
           {!preview && !error ? (
             <p className="flex items-center gap-2 text-fg-muted">

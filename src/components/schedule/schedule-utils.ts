@@ -3,7 +3,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { qk } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
-import type { CardState, ScheduleCardDTO, ScheduleDTO, ScheduleDeliverableDTO } from "@/lib/types";
+import { dayToDate, localDay } from "@/lib/checklist";
+import type { CardState, ScheduleCardDTO, ScheduleChecklistItemDTO, ScheduleDTO, ScheduleDeliverableDTO } from "@/lib/types";
 
 export const DAY = 86_400_000;
 
@@ -83,10 +84,15 @@ export function useStudioSchedule(studioId: string, scope: "mine" | "all", from:
   });
 }
 
-/** Something on a calendar day: a start or a deadline of a card or deliverable, or a milestone. */
+/** Opens a checklist item's card. */
+export function openTargetOfItem(item: ScheduleChecklistItemDTO): OpenTarget {
+  return { key: item.card.key, projectSlug: item.card.project.slug, studioSlug: item.card.project.studioSlug, boardNumber: item.card.board.number };
+}
+
+/** Something on a calendar day: a start or a deadline of a card or deliverable, a checklist item's day, or a milestone. */
 export interface CalendarEntry {
   key: string;
-  type: "start" | "due" | "milestone";
+  type: "start" | "due" | "item" | "milestone";
   at: Date;
   title: string;
   /** "UTD-4" or "UTD-4 · D2". */
@@ -98,21 +104,28 @@ export interface CalendarEntry {
   card: ScheduleCardDTO | null;
   deliverable: ScheduleDeliverableDTO | null;
   milestone: ScheduleDTO["milestones"][number] | null;
+  /** An open checklist item due that day (no time of day). */
+  item: ScheduleChecklistItemDTO | null;
 }
 
 /**
  * Calendar entries for a schedule. Deliverables appear for their own dates; ones following the
  * card's are covered by the card's entry — except in "mine" mode for people who work on the
- * deliverable but aren't on the card, who'd otherwise miss their deadline.
+ * deliverable but aren't on the card, who'd otherwise miss their deadline. Checklist items are
+ * included on request (calendars, not the timeline); the schedule already holds only the viewer's
+ * own in "mine" mode.
  */
-export function calendarEntries(schedule: ScheduleDTO | undefined, options: { viewerId?: string; mineOnly?: boolean; showStarts?: boolean; visibleCardIds?: Set<string> | null } = {}): CalendarEntry[] {
+export function calendarEntries(
+  schedule: ScheduleDTO | undefined,
+  options: { viewerId?: string; mineOnly?: boolean; showStarts?: boolean; visibleCardIds?: Set<string> | null; withItems?: boolean } = {},
+): CalendarEntry[] {
   if (!schedule) return [];
   const out: CalendarEntry[] = [];
   const now = Date.now();
   for (const card of schedule.cards) {
     if (options.visibleCardIds && !options.visibleCardIds.has(card.id)) continue;
     const cardMine = !options.mineOnly || (options.viewerId ? card.assigneeIds.includes(options.viewerId) : card.mine);
-    const base = { card, milestone: null };
+    const base = { card, milestone: null, item: null };
     if (cardMine && card.dueAt) {
       out.push({ ...base, key: `c-due-${card.id}`, type: "due", at: new Date(card.dueAt), title: card.title, ref: card.key, state: card.state, overdue: isOverdue(card.dueAt, card.state, now), inherited: false, deliverable: null });
     }
@@ -131,8 +144,16 @@ export function calendarEntries(schedule: ScheduleDTO | undefined, options: { vi
       }
     }
   }
+  if (options.withItems) {
+    const today = localDay();
+    for (const item of schedule.checklistItems ?? []) {
+      if (options.visibleCardIds && !options.visibleCardIds.has(item.card.id)) continue;
+      if (options.mineOnly && options.viewerId && item.assigneeId !== options.viewerId) continue;
+      out.push({ key: `i-${item.id}`, type: "item", at: dayToDate(item.dueOn), title: item.text, ref: item.card.key, state: null, overdue: item.dueOn < today, inherited: false, card: null, deliverable: null, milestone: null, item });
+    }
+  }
   for (const m of schedule.milestones) {
-    out.push({ key: `m-${m.id}`, type: "milestone", at: new Date(m.dueAt), title: m.name, ref: m.project.name, state: null, overdue: false, inherited: false, card: null, deliverable: null, milestone: m });
+    out.push({ key: `m-${m.id}`, type: "milestone", at: new Date(m.dueAt), title: m.name, ref: m.project.name, state: null, overdue: false, inherited: false, card: null, deliverable: null, milestone: m, item: null });
   }
   return out.sort((a, b) => a.at.getTime() - b.at.getTime() || a.ref.localeCompare(b.ref));
 }

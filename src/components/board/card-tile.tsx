@@ -26,9 +26,11 @@ import {
 import { memo, useEffect, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { toast } from "sonner";
 import { CARD_STATE_META, CARD_STATE_ORDER } from "@/lib/card-meta";
+import { checklistDueState } from "@/lib/checklist";
 import { PRODUCTION_META } from "@/lib/deliverables";
 import type { CardDisplayMode, CardSummaryDTO } from "@/lib/types";
 import { cn, formatDuration } from "@/lib/utils";
+import { useLocalDay } from "@/hooks/use-local-day";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
 import { BoardIcon } from "../domain/board-icon";
 import { ColumnIcon } from "../domain/column-icon";
@@ -39,9 +41,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
+  DropdownMenuNested,
   DropdownMenuTrigger,
   Tooltip,
 } from "../ui/menu";
@@ -67,6 +67,40 @@ function useHoverPreview(enabled: boolean) {
   };
 }
 
+/** Checklist progress; red when an open item's day has passed, amber when one is due today, and how many are the viewer's. */
+function ChecklistChip({ counts, compact }: { counts: CardSummaryDTO["counts"]; compact?: boolean }) {
+  const today = useLocalDay();
+  const due = today && counts.checklistNextDue ? checklistDueState(counts.checklistNextDue, false, today) : null;
+  const complete = counts.checklistDone === counts.checklistTotal;
+  const title = [
+    `Checklist: ${counts.checklistDone} of ${counts.checklistTotal} done`,
+    due === "overdue" ? "an item is overdue" : due === "today" ? "an item is due today" : null,
+    counts.checklistMine ? `${counts.checklistMine} open ${counts.checklistMine === 1 ? "item is" : "items are"} yours` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-0.5",
+        complete ? "text-state-approved" : due === "overdue" ? "text-state-changes" : due === "today" ? "text-state-review" : null,
+      )}
+      title={title}
+    >
+      <CheckSquare className="size-3" aria-hidden />
+      <span className="sr-only">{title}</span>
+      <span aria-hidden>
+        {counts.checklistDone}/{counts.checklistTotal}
+      </span>
+      {counts.checklistMine && !compact ? (
+        <span aria-hidden className="ml-0.5 font-medium text-accent">
+          · {counts.checklistMine} yours
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function MetaRow({ card, compact }: { card: CardSummaryDTO; compact?: boolean }) {
   const { membersById } = useBoard();
   const assignees = card.assigneeIds.map((id) => membersById.get(id)).filter((m): m is NonNullable<typeof m> => Boolean(m));
@@ -85,14 +119,7 @@ function MetaRow({ card, compact }: { card: CardSummaryDTO; compact?: boolean })
           <Paperclip className="size-3" aria-hidden /> {counts.attachments}
         </span>
       ) : null}
-      {counts.checklistTotal ? (
-        <span
-          className={cn("inline-flex items-center gap-0.5", counts.checklistDone === counts.checklistTotal && "text-state-approved")}
-          title="Checklist progress"
-        >
-          <CheckSquare className="size-3" aria-hidden /> {counts.checklistDone}/{counts.checklistTotal}
-        </span>
-      ) : null}
+      {counts.checklistTotal ? <ChecklistChip counts={counts} compact={compact} /> : null}
       {compact && counts.versions ? <span className="font-mono">V{card.currentVersionNumber}</span> : null}
       <span className="flex-1" />
       {card.unread ? <span className="size-1.5 rounded-full bg-accent" title="New activity" /> : null}
@@ -148,81 +175,89 @@ function QuickActions({ card, onRename }: { card: CardSummaryDTO; onRename: () =
           </DropdownMenuItem>
         ) : null}
         {perms.canAssign || perms.canSelfAssign ? (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <UserPlus /> Assign
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="max-h-72 w-56 overflow-y-auto">
-              {board.members
-                .filter((m) => perms.canAssign || m.id === board.viewer.userId)
-                .map((m) => (
-                  <DropdownMenuItem key={m.id} onSelect={(e) => { e.preventDefault(); toggleAssignee(card, m.id); }}>
-                    <UserAvatar user={m} size="xs" />
-                    <span className="flex-1 truncate">{m.displayName}</span>
-                    {card.assigneeIds.includes(m.id) ? <Check className="!text-accent" /> : null}
-                  </DropdownMenuItem>
-                ))}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+          <DropdownMenuNested
+            contentClassName="max-h-[min(18rem,var(--radix-dropdown-menu-content-available-height))] w-56"
+            label={
+              <>
+                <UserPlus /> Assign
+              </>
+            }
+          >
+            {board.members
+              .filter((m) => perms.canAssign || m.id === board.viewer.userId)
+              .map((m) => (
+                <DropdownMenuItem key={m.id} onSelect={(e) => { e.preventDefault(); toggleAssignee(card, m.id); }}>
+                  <UserAvatar user={m} size="xs" />
+                  <span className="flex-1 truncate">{m.displayName}</span>
+                  {card.assigneeIds.includes(m.id) ? <Check className="!text-accent" /> : null}
+                </DropdownMenuItem>
+              ))}
+          </DropdownMenuNested>
         ) : null}
         {view === "CATEGORY" && perms.canMove ? (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <MoveRight /> Move to column
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="max-h-72 w-56 overflow-y-auto">
-              {[...board.columns]
-                .sort((a, b) => a.position - b.position)
-                .map((c) => (
-                  <DropdownMenuItem key={c.id} disabled={c.id === card.columnId} onSelect={() => moveCardToColumn(card, c.id)}>
-                    <ColumnIcon name={c.icon} color={c.color} />
-                    <span className="flex-1 truncate">{c.name}</span>
-                    {c.id === card.columnId ? <Check className="!text-accent" /> : null}
-                  </DropdownMenuItem>
-                ))}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+          <DropdownMenuNested
+            contentClassName="max-h-[min(18rem,var(--radix-dropdown-menu-content-available-height))] w-56"
+            label={
+              <>
+                <MoveRight /> Move to column
+              </>
+            }
+          >
+            {[...board.columns]
+              .sort((a, b) => a.position - b.position)
+              .map((c) => (
+                <DropdownMenuItem key={c.id} disabled={c.id === card.columnId} onSelect={() => moveCardToColumn(card, c.id)}>
+                  <ColumnIcon name={c.icon} color={c.color} />
+                  <span className="flex-1 truncate">{c.name}</span>
+                  {c.id === card.columnId ? <Check className="!text-accent" /> : null}
+                </DropdownMenuItem>
+              ))}
+          </DropdownMenuNested>
         ) : null}
         {perms.canMove && board.boards.length > 1 ? (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <LayoutGrid /> Move to board
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="max-h-72 w-56 overflow-y-auto">
-              {board.boards
-                .filter((b) => b.id !== board.boardId)
-                .map((b) => (
-                  <DropdownMenuItem key={b.id} onSelect={() => moveCardToBoard(card, b.id)}>
-                    <BoardIcon name={b.icon} />
-                    <span className="flex-1 truncate">{b.name}</span>
-                  </DropdownMenuItem>
-                ))}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+          <DropdownMenuNested
+            contentClassName="max-h-[min(18rem,var(--radix-dropdown-menu-content-available-height))] w-56"
+            label={
+              <>
+                <LayoutGrid /> Move to board
+              </>
+            }
+          >
+            {board.boards
+              .filter((b) => b.id !== board.boardId)
+              .map((b) => (
+                <DropdownMenuItem key={b.id} onSelect={() => moveCardToBoard(card, b.id)}>
+                  <BoardIcon name={b.icon} />
+                  <span className="flex-1 truncate">{b.name}</span>
+                </DropdownMenuItem>
+              ))}
+          </DropdownMenuNested>
         ) : null}
         {perms.canEdit || perms.canPublish ? (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              {(() => {
-                const Icon = PRODUCTION_ICONS[card.productionStatus];
-                return <Icon />;
-              })()}
-              Production stage
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-52">
-              {PRODUCTION_ORDER.map((status) => {
-                const Icon = PRODUCTION_ICONS[status];
-                const needsPublish = status === "PUBLISHED" || card.productionStatus === "PUBLISHED";
-                return (
-                  <DropdownMenuItem key={status} disabled={card.productionStatus === status || (needsPublish && !perms.canPublish)} onSelect={() => setProductionStage(card, status)}>
-                    <Icon style={{ color: PRODUCTION_COLOR[status] }} />
-                    <span className="flex-1">{PRODUCTION_META[status].label}</span>
-                    {card.productionStatus === status ? <Check className="!text-accent" /> : null}
-                  </DropdownMenuItem>
-                );
-              })}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+          <DropdownMenuNested
+            contentClassName="w-52"
+            label={
+              <>
+                {(() => {
+                  const Icon = PRODUCTION_ICONS[card.productionStatus];
+                  return <Icon />;
+                })()}
+                Production stage
+              </>
+            }
+          >
+            {PRODUCTION_ORDER.map((status) => {
+              const Icon = PRODUCTION_ICONS[status];
+              const needsPublish = status === "PUBLISHED" || card.productionStatus === "PUBLISHED";
+              return (
+                <DropdownMenuItem key={status} disabled={card.productionStatus === status || (needsPublish && !perms.canPublish)} onSelect={() => setProductionStage(card, status)}>
+                  <Icon style={{ color: PRODUCTION_COLOR[status] }} />
+                  <span className="flex-1">{PRODUCTION_META[status].label}</span>
+                  {card.productionStatus === status ? <Check className="!text-accent" /> : null}
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuNested>
         ) : null}
         {multi && (perms.canEdit || perms.canReview || perms.canSubmit) ? (
           <DropdownMenuItem onSelect={() => openCard(card.key)}>
@@ -230,33 +265,35 @@ function QuickActions({ card, onRename }: { card: CardSummaryDTO; onRename: () =
           </DropdownMenuItem>
         ) : null}
         {!multi && (perms.canEdit || perms.canReview || perms.canSubmit) ? (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              {(() => {
-                const Icon = STATE_ICONS[card.state];
-                return <Icon />;
-              })()}
-              Set status
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-52">
-              {CARD_STATE_ORDER.map((state) => {
-                const Icon = STATE_ICONS[state];
-                const reviewOnly = state === "APPROVED" || state === "CHANGES_REQUESTED";
-                const disabled = (reviewOnly && !perms.canReview) || (state === "NEEDS_REVIEW" && !perms.canSubmit) || (!reviewOnly && state !== "NEEDS_REVIEW" && !perms.canEdit && !perms.canReview);
-                return (
-                  <DropdownMenuItem
-                    key={state}
-                    disabled={disabled || card.state === state}
-                    onSelect={() => (state === "CHANGES_REQUESTED" ? openCard(card.key, { action: "request-changes" }) : setCardState(card, state))}
-                  >
-                    <Icon style={{ color: CARD_STATE_META[state].color }} />
-                    <span className="flex-1">{CARD_STATE_META[state].label}</span>
-                    {card.state === state ? <Check className="!text-accent" /> : null}
-                  </DropdownMenuItem>
-                );
-              })}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+          <DropdownMenuNested
+            contentClassName="w-52"
+            label={
+              <>
+                {(() => {
+                  const Icon = STATE_ICONS[card.state];
+                  return <Icon />;
+                })()}
+                Set status
+              </>
+            }
+          >
+            {CARD_STATE_ORDER.map((state) => {
+              const Icon = STATE_ICONS[state];
+              const reviewOnly = state === "APPROVED" || state === "CHANGES_REQUESTED";
+              const disabled = (reviewOnly && !perms.canReview) || (state === "NEEDS_REVIEW" && !perms.canSubmit) || (!reviewOnly && state !== "NEEDS_REVIEW" && !perms.canEdit && !perms.canReview);
+              return (
+                <DropdownMenuItem
+                  key={state}
+                  disabled={disabled || card.state === state}
+                  onSelect={() => (state === "CHANGES_REQUESTED" ? openCard(card.key, { action: "request-changes" }) : setCardState(card, state))}
+                >
+                  <Icon style={{ color: CARD_STATE_META[state].color }} />
+                  <span className="flex-1">{CARD_STATE_META[state].label}</span>
+                  {card.state === state ? <Check className="!text-accent" /> : null}
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuNested>
         ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={copyLink}>

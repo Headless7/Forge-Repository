@@ -8,7 +8,7 @@ import { and, asc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import type { ScheduleCardDTO, ScheduleDTO } from "@/lib/types";
 import { accessibleProjectIds, computeCardPermissions, getProjectAccess, requireProject, requireStudio, type ProjectAccess } from "../access";
 import { db } from "../db";
-import { boardColumns, boards, cardAssignees, cardReviewers, cards, deliverableContributors, deliverableLinks, deliverables, milestones, projects } from "../db/schema";
+import { boardColumns, boards, cardAssignees, cardReviewers, cards, checklistItems, checklists, deliverableContributors, deliverableLinks, deliverables, milestones, projects } from "../db/schema";
 import { invalid, notFound } from "../errors";
 import type { Actor } from "./context";
 
@@ -48,7 +48,7 @@ function liveCards(projectIds: string[], boardId?: string | null) {
 export async function loadSchedule(actor: Actor, scope: Scope, from: string, to: string): Promise<ScheduleDTO> {
   const { start, end } = range(from, to);
   const projectIds = [...scope.accesses.keys()];
-  const empty: ScheduleDTO = { from: start.toISOString(), to: end.toISOString(), cards: [], milestones: [], unscheduled: [], unscheduledTotal: 0, truncated: false };
+  const empty: ScheduleDTO = { from: start.toISOString(), to: end.toISOString(), cards: [], milestones: [], unscheduled: [], unscheduledTotal: 0, truncated: false, checklistItems: [] };
   if (!projectIds.length) return empty;
   const live = liveCards(projectIds, scope.boardId);
   const base = () =>
@@ -173,6 +173,53 @@ export async function loadSchedule(actor: Actor, scope: Scope, from: string, to:
     .where(and(inArray(milestones.projectId, projectIds), isNull(milestones.archivedAt), gte(milestones.dueAt, start), lte(milestones.dueAt, end)))
     .orderBy(asc(milestones.dueAt));
 
+  // Checklist items are due on a day (no time): a day either side covers every time zone.
+  const day = (d: Date) => d.toISOString().slice(0, 10);
+  const itemRows = await db
+    .select({
+      id: checklistItems.id,
+      text: checklistItems.text,
+      dueOn: checklistItems.dueOn,
+      assigneeId: checklistItems.assigneeId,
+      checklistTitle: checklists.title,
+      card: { id: cards.id, number: cards.number, title: cards.title, projectId: cards.projectId },
+      board: { id: boards.id, number: boards.number, name: boards.name },
+    })
+    .from(checklistItems)
+    .innerJoin(checklists, eq(checklists.id, checklistItems.checklistId))
+    .innerJoin(cards, eq(cards.id, checklistItems.cardId))
+    .innerJoin(boardColumns, eq(boardColumns.id, cards.columnId))
+    .innerJoin(boards, eq(boards.id, cards.boardId))
+    .innerJoin(projects, eq(projects.id, cards.projectId))
+    .where(
+      and(
+        live,
+        eq(checklistItems.isDone, false),
+        scope.mineOnly ? eq(checklistItems.assigneeId, actor.userId) : undefined,
+        sql`${checklistItems.dueOn} >= (${day(start)}::date - 1)`,
+        sql`${checklistItems.dueOn} <= (${day(end)}::date + 1)`,
+      ),
+    )
+    .orderBy(asc(checklistItems.dueOn), asc(cards.number))
+    .limit(MAX_CARDS);
+  const checklistItemDtos = itemRows.map((r) => {
+    const access = scope.accesses.get(r.card.projectId)!;
+    return {
+      id: r.id,
+      text: r.text,
+      dueOn: r.dueOn!,
+      assigneeId: r.assigneeId,
+      checklistTitle: r.checklistTitle,
+      card: {
+        id: r.card.id,
+        key: `${access.project.key}-${r.card.number}`,
+        title: r.card.title,
+        project: { id: access.project.id, slug: access.project.slug, name: access.project.name, icon: access.project.icon, key: access.project.key, studioSlug: access.studioSlug },
+        board: r.board,
+      },
+    };
+  });
+
   let unscheduled: ScheduleDTO["unscheduled"] = [];
   let unscheduledTotal = 0;
   if (scope.withUnscheduled) {
@@ -203,6 +250,7 @@ export async function loadSchedule(actor: Actor, scope: Scope, from: string, to:
     unscheduled,
     unscheduledTotal,
     truncated,
+    checklistItems: checklistItemDtos,
   };
 }
 

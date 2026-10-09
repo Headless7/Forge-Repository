@@ -46,6 +46,8 @@ export interface TipFacts {
   "card.attachments": { place: "attachments" | "cover"; canUpload: boolean; canEdit: boolean };
   "card.pending-changes": { pendingCount: number; status: ProductionStatus; canPublish: boolean };
   "card.assignment": { canAssign: boolean; multi: boolean };
+  /** After someone first gives a checklist item a person or a due date. */
+  "card.checklist-people": { canEdit: boolean };
   "roblox.preview": None;
   "access.scope": { place: "studio" | "project"; canManage: boolean };
   /** Account settings, once someone uses the Discord profile controls. */
@@ -217,6 +219,15 @@ export const TIPS: { [K in TipId]: TipDefinition<TipFacts[K]> } = {
         : "Assignees are responsible for this card and get its updates. If you split the work into several deliverables, each one can have its own owner.",
     eligible: (f) => f.canAssign,
     side: "left",
+    align: "start",
+  },
+  "card.checklist-people": {
+    version: 1,
+    title: () => "Items with their own person and day",
+    body: () =>
+      "The person you give an item to sees it in their Home, calendars and Discord, and can tick it off even without edit rights on the card. An item's date turns red once that day has passed.",
+    eligible: (f) => f.canEdit,
+    side: "top",
     align: "start",
   },
   "roblox.preview": {

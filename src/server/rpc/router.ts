@@ -77,6 +77,8 @@ const canvasPointSchema = z.string().regex(/^[trbl]-\d{1,2}$/, "Unknown connecti
 /** A browser push subscription endpoint: an https capability URL issued by the browser's push service. */
 const pushEndpointSchema = z.string().url().max(2048).refine((v) => v.startsWith("https://"), "Unsupported push endpoint.");
 const text = (max: number) => z.string().max(max);
+/** A calendar day, "YYYY-MM-DD" (checked to be a real date by the service). */
+const dueDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Choose a valid due date.");
 
 export const appRouter = {
   // ── Board & columns ───────────────────────────────────────────────────────
@@ -561,11 +563,11 @@ export const appRouter = {
     handler: ({ actor }, i) => checklists.deleteChecklist(actor, i),
   }),
   "checklist.addItem": proc({
-    input: z.object({ checklistId: idSchema, text: text(500) }),
+    input: z.object({ checklistId: idSchema, text: text(500), assigneeId: idSchema.nullable().optional(), dueOn: dueDaySchema.nullable().optional() }),
     handler: ({ actor }, i) => checklists.addChecklistItem(actor, i),
   }),
   "checklist.updateItem": proc({
-    input: z.object({ itemId: idSchema, text: text(500).optional(), isDone: z.boolean().optional() }),
+    input: z.object({ itemId: idSchema, text: text(500).optional(), isDone: z.boolean().optional(), assigneeId: idSchema.nullable().optional(), dueOn: dueDaySchema.nullable().optional() }),
     handler: ({ actor }, i) => checklists.updateChecklistItem(actor, i),
   }),
   "checklist.moveItem": proc({

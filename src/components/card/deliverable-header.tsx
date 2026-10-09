@@ -101,9 +101,9 @@ function ContributorsPicker({ d, members, viewerId, canAssign, canSelfAssign, on
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-1">
+      <PopoverContent align="start" className="w-64 max-h-[min(20rem,var(--radix-popover-content-available-height))] p-1">
         <p className="px-2 py-1.5 text-[11px] text-fg-subtle">They can upload, submit and resolve feedback on this deliverable only.</p>
-        <ul className="scrollbar-thin max-h-64 overflow-y-auto">
+        <ul>
           {workers.map((m) => {
             const mayToggle = canAssign || m.id === viewerId;
             return (
@@ -174,10 +174,10 @@ export function DeliverableHeader() {
             onChange={(e) => setName(e.target.value)}
             onBlur={() => name.trim() && name.trim() !== d.name ? update.mutate({ deliverableId: d.id, name: name.trim() }) : setName(d.name)}
             onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-            className="h-9 flex-1 border-transparent bg-transparent px-1.5 text-lg font-semibold hover:border-border-strong focus:bg-surface-3"
+            className="h-9 min-w-0 flex-1 border-transparent bg-transparent px-1.5 text-lg font-semibold hover:border-border-strong focus:bg-surface-3"
           />
         ) : (
-          <h2 className="flex-1 text-lg font-semibold">{d.name}</h2>
+          <h2 className="min-w-0 flex-1 break-words text-lg font-semibold">{d.name}</h2>
         )}
         <StatePill state={d.state} size="md" />
         {perms.canEdit ? (

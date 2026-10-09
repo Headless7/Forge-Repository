@@ -1,16 +1,16 @@
 "use client";
 
-import { Flag, Play } from "lucide-react";
+import { CheckSquare, Flag, Play } from "lucide-react";
 import { useMemo, useState } from "react";
 import { CARD_STATE_META } from "@/lib/card-meta";
-import type { ScheduleDTO } from "@/lib/types";
+import type { ScheduleChecklistItemDTO, ScheduleDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/menu";
 import { TipAnchor } from "../tutorial/tutorial";
 import { Agenda } from "./agenda";
 import { ScheduleItemDialog, type ScheduleSelection } from "./schedule-item-dialog";
-import { addDays, calendarEntries, dateKey, formatTime, openTargetOf, sameDay, startOfDay, startOfWeek, useBoardSchedule, useStudioSchedule, type CalendarEntry, type OpenTarget } from "./schedule-utils";
+import { addDays, calendarEntries, dateKey, formatTime, openTargetOf, openTargetOfItem, sameDay, startOfDay, startOfWeek, useBoardSchedule, useStudioSchedule, type CalendarEntry, type OpenTarget } from "./schedule-utils";
 import { RangeBar } from "./timeline";
 
 type Mode = "month" | "week";
@@ -25,7 +25,24 @@ function gridRange(anchor: Date, mode: Mode) {
   return { from, to: addDays(from, 42), title: first.toLocaleDateString(undefined, { month: "long", year: "numeric" }) };
 }
 
-function Chip({ entry, onSelect }: { entry: CalendarEntry; onSelect: (s: ScheduleSelection) => void }) {
+type OpenItem = (item: ScheduleChecklistItemDTO) => void;
+
+function Chip({ entry, onSelect, onOpenItem }: { entry: CalendarEntry; onSelect: (s: ScheduleSelection) => void; onOpenItem: OpenItem }) {
+  if (entry.item) {
+    const item = entry.item;
+    return (
+      <button
+        type="button"
+        onClick={() => onOpenItem(item)}
+        title={`${entry.ref} ${item.card.title} — checklist item${entry.overdue ? ", overdue" : ""}: ${entry.title}`}
+        className={cn("flex min-h-6 w-full items-center gap-1 truncate rounded px-1.5 text-left text-[11px] hover:bg-surface-4", entry.overdue ? "bg-danger/10 text-danger" : "bg-surface-3/70")}
+      >
+        <CheckSquare className="size-3 shrink-0 text-fg-subtle" aria-label="Checklist item" />
+        <span className="hidden shrink-0 font-mono text-[10px] text-fg-subtle @min-[150px]:inline">{entry.ref}</span>
+        <span className="truncate">{entry.title}</span>
+      </button>
+    );
+  }
   if (entry.milestone) {
     return (
       <span className="flex min-h-6 items-center gap-1 truncate rounded bg-accent-soft px-1.5 text-[11px] font-medium text-accent" title={`Milestone: ${entry.title}`}>
@@ -51,7 +68,7 @@ function Chip({ entry, onSelect }: { entry: CalendarEntry; onSelect: (s: Schedul
 }
 
 /** The grid itself, given entries. Days show up to three items, then "+N more". */
-function CalendarGrid({ entries, from, to, mode, onSelect }: { entries: CalendarEntry[]; from: Date; to: Date; mode: Mode; onSelect: (s: ScheduleSelection) => void }) {
+function CalendarGrid({ entries, from, to, mode, onSelect, onOpenItem }: { entries: CalendarEntry[]; from: Date; to: Date; mode: Mode; onSelect: (s: ScheduleSelection) => void; onOpenItem: OpenItem }) {
   const byDay = useMemo(() => {
     const map = new Map<string, CalendarEntry[]>();
     for (const e of entries) map.set(dateKey(e.at), [...(map.get(dateKey(e.at)) ?? []), e]);
@@ -76,7 +93,7 @@ function CalendarGrid({ entries, from, to, mode, onSelect }: { entries: Calendar
           <div key={dateKey(d)} role="gridcell" aria-label={d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })} className={cn("@container flex min-h-24 min-w-0 flex-col gap-0.5 border-b border-r border-border p-1", outside && "bg-surface/40", mode === "week" && "min-h-64")}>
             <span className={cn("mb-0.5 inline-flex size-6 items-center justify-center self-end rounded-full text-[11.5px] tabular-nums", sameDay(d, today) ? "bg-accent font-bold text-white" : outside ? "text-fg-subtle/60" : "text-fg-muted")}>{d.getDate()}</span>
             {items.slice(0, limit).map((e) => (
-              <Chip key={e.key} entry={e} onSelect={onSelect} />
+              <Chip key={e.key} entry={e} onSelect={onSelect} onOpenItem={onOpenItem} />
             ))}
             {items.length > limit ? (
               <Popover>
@@ -88,7 +105,7 @@ function CalendarGrid({ entries, from, to, mode, onSelect }: { entries: Calendar
                 <PopoverContent align="start" className="@container grid w-72 gap-1 p-2">
                   <p className="px-1 text-[12px] font-semibold">{d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>
                   {items.map((e) => (
-                    <Chip key={e.key} entry={e} onSelect={onSelect} />
+                    <Chip key={e.key} entry={e} onSelect={onSelect} onOpenItem={onOpenItem} />
                   ))}
                 </PopoverContent>
               </Popover>
@@ -157,6 +174,8 @@ function CalendarBody({ schedule, entries, state, onOpenCard, toolbarExtra, empt
 }) {
   const narrow = useMediaQuery("(max-width: 767px)");
   const [selection, setSelection] = useState<ScheduleSelection | null>(null);
+  // A checklist item has nothing to reschedule here: it opens its card.
+  const openItem: OpenItem = (item) => onOpenCard(openTargetOfItem(item));
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Toolbar
@@ -177,10 +196,10 @@ function CalendarBody({ schedule, entries, state, onOpenCard, toolbarExtra, empt
       </Toolbar>
       {narrow ? (
         <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
-          <Agenda entries={entries} onSelect={setSelection} emptyText={emptyText} />
+          <Agenda entries={entries} onSelect={setSelection} onOpenItem={openItem} emptyText={emptyText} />
         </div>
       ) : (
-        <CalendarGrid entries={entries} from={state.from} to={state.to} mode={state.mode} onSelect={setSelection} />
+        <CalendarGrid entries={entries} from={state.from} to={state.to} mode={state.mode} onSelect={setSelection} onOpenItem={openItem} />
       )}
       <ScheduleItemDialog selection={selection} onClose={() => setSelection(null)} onOpenCard={(s) => onOpenCard(openTargetOf(s.card, s.deliverable))} />
     </div>
@@ -193,7 +212,7 @@ export function BoardCalendar({ projectId, boardId, visibleCardIds, onOpenCard }
   const [allBoards, setAllBoards] = useState(false);
   const schedule = useBoardSchedule(projectId, allBoards ? null : boardId, state.from, state.to);
   // Board filters apply to this board's cards; across boards everything is shown.
-  const entries = calendarEntries(schedule.data, { showStarts: state.showStarts, visibleCardIds: allBoards ? null : visibleCardIds });
+  const entries = calendarEntries(schedule.data, { showStarts: state.showStarts, visibleCardIds: allBoards ? null : visibleCardIds, withItems: true });
   return (
     <CalendarBody
       schedule={schedule}
@@ -223,7 +242,7 @@ export function StudioCalendar({ studioId, viewerId, onOpenCard, toolbarExtra }:
   const state = useCalendarState();
   const [scope, setScope] = useState<"mine" | "all">("mine");
   const schedule = useStudioSchedule(studioId, scope, state.from, state.to);
-  const entries = calendarEntries(schedule.data, { showStarts: state.showStarts, mineOnly: scope === "mine", viewerId });
+  const entries = calendarEntries(schedule.data, { showStarts: state.showStarts, mineOnly: scope === "mine", viewerId, withItems: true });
   return (
     <CalendarBody
       schedule={schedule}

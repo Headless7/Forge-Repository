@@ -162,7 +162,7 @@ export function CreateProjectDialog({ open, onOpenChange, studio }: { open: bool
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="New project" description="Projects get their own boards, members and milestones." size={start === "template" ? "lg" : "md"}>
-        <form onSubmit={onSubmit} className="scrollbar-thin -mr-1 grid max-h-[70vh] gap-4 overflow-y-auto pr-1">
+        <form onSubmit={onSubmit} className="grid gap-4">
           <div className="grid grid-cols-[1fr_96px] gap-3">
             <div>
               <Label htmlFor="project-name">Name</Label>

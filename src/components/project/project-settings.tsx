@@ -418,7 +418,7 @@ function Labels({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
         disabled={!canEdit}
         aria-label="Label name"
         onBlur={(e) => e.target.value.trim() && e.target.value !== l.name && update.mutate({ labelId: l.id, name: e.target.value })}
-        className="h-7 flex-1 rounded-md bg-transparent px-1.5 text-[13px] outline-none focus:bg-surface-3"
+        className="h-7 min-w-0 flex-1 rounded-md bg-transparent px-1.5 text-[13px] outline-none focus:bg-surface-3"
       />
       <LabelChip label={l} />
       {canEdit ? (
@@ -615,7 +615,7 @@ export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: Bo
   ];
   return (
     <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-5xl gap-8 px-4 py-8 md:px-8 lg:grid-cols-[180px_minmax(0,1fr)]">
+      <div className="mx-auto grid max-w-5xl grid-cols-1 gap-8 px-4 py-8 md:px-8 lg:grid-cols-[180px_minmax(0,1fr)]">
         <aside className="lg:sticky lg:top-8 lg:self-start">
           <p className="text-[12px] text-fg-subtle">
             <Link href={`/${studioSlug}/${board.project.slug}`} className="hover:text-fg">
@@ -631,7 +631,7 @@ export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: Bo
             ))}
           </nav>
         </aside>
-        <div className="grid gap-5">
+        <div className="grid grid-cols-1 gap-5">
           {!canEdit ? <p className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-[12.5px] text-fg-muted">Only studio owners and admins can change project settings. You&apos;re viewing them read-only.</p> : null}
           <General board={board} canEdit={canEdit} studioSlug={studioSlug} />
           <Access board={board} canEdit={canEdit} />

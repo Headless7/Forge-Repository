@@ -1,20 +1,22 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, CalendarClock, CircleAlert, Clock, Eye, FolderPlus, Lock } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { qk } from "@/lib/queries";
+import { toast } from "sonner";
+import { qk, useRpcMutation } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
 import type { RpcOutput } from "@/lib/rpc-client";
 import { cn, formatShortDate, timeAgo } from "@/lib/utils";
 import { describeActivity } from "../domain/activity-text";
 import { UserAvatar } from "../domain/avatar";
+import { ChecklistDue } from "../domain/checklist-due";
 import { StatePill } from "../domain/state";
 import { CreateProjectDialog } from "../shell/create-project-dialog";
 import { useShell } from "../shell/shell-context";
 import { Button } from "../ui/button";
-import { EmptyState } from "../ui/controls";
+import { Checkbox, EmptyState } from "../ui/controls";
 
 type Home = RpcOutput<"studio.home">;
 
@@ -24,6 +26,65 @@ const REASONS = {
   OVERDUE: { label: "Overdue", icon: CalendarClock, className: "text-state-changes bg-state-changes/12" },
   DUE_SOON: { label: "Due soon", icon: Clock, className: "text-state-review bg-state-review/12" },
 } as const;
+
+/** Checklist items given to the viewer: tick them off here, or open their card. */
+function MyChecklistItems({ items, studioId, cardHref }: { items: Home["checklistItems"]; studioId: string; cardHref: (projectSlug: string, key: string, board?: { number: number } | null) => string }) {
+  const queryClient = useQueryClient();
+  // Ticked items leave the list straight away; Undo brings them back.
+  const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
+  const mark = (id: string, done: boolean) => setTicked((prev) => {
+    const next = new Set(prev);
+    if (done) next.add(id);
+    else next.delete(id);
+    return next;
+  });
+  const update = useRpcMutation("checklist.updateItem", {
+    onSuccess: (card) => {
+      void queryClient.invalidateQueries({ queryKey: qk.home(studioId) });
+      void queryClient.invalidateQueries({ queryKey: qk.card(card.id) });
+      void queryClient.invalidateQueries({ queryKey: qk.board(card.projectId) });
+    },
+    onError: (_error, input) => mark(input.itemId, false),
+  });
+  const tick = (item: Home["checklistItems"][number]) => {
+    mark(item.id, true);
+    update.mutate(
+      { itemId: item.id, isDone: true },
+      {
+        onSuccess: () =>
+          toast.success(`Ticked off “${item.text.length > 60 ? `${item.text.slice(0, 57)}…` : item.text}”`, {
+            action: {
+              label: "Undo",
+              onClick: () => update.mutate({ itemId: item.id, isDone: false }, { onSuccess: () => mark(item.id, false) }),
+            },
+          }),
+      },
+    );
+  };
+  const open = items.filter((i) => !ticked.has(i.id));
+  if (open.length === 0) return <p className="text-[13px] text-fg-muted">No checklist items are given to you.</p>;
+  return (
+    <ul className="grid grid-cols-1 gap-1.5">
+      {open.map((item) => (
+        <li key={item.id} className="flex items-start gap-3 rounded-lg border border-border bg-surface-2 px-3 py-2.5 transition-colors hover:border-border-strong">
+          <Checkbox checked={false} onCheckedChange={(v) => v === true && tick(item)} aria-label={`Tick off ${item.text}`} className="mt-0.5" />
+          <Link href={cardHref(item.project.slug, item.card.key, item.board)} className="min-w-0 flex-1">
+            <p className="break-words text-[13.5px] font-medium">{item.text}</p>
+            <p className="flex flex-wrap items-center gap-x-2 text-[11.5px] text-fg-subtle">
+              <span className="font-mono">{item.card.key}</span>
+              <span className="min-w-0 max-w-full truncate">{item.card.title}</span>
+              {item.board?.shown ? <span>{item.board.name}</span> : null}
+              {item.dueOn ? <ChecklistDue dueOn={item.dueOn} /> : null}
+            </p>
+          </Link>
+          <span className="shrink-0 text-lg" aria-hidden>
+            {item.project.icon}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function greeting() {
   const h = new Date().getHours();
@@ -66,7 +127,7 @@ export function StudioHome({ initial }: { initial: Home }) {
               action={can("project.create") ? <Button variant="primary" onClick={() => setCreateOpen(true)}>Create a project</Button> : null}
             />
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {data.projects.map((p) => (
                 <Link key={p.id} href={`/${studio.slug}/${p.slug}`} className="group rounded-xl border border-border bg-surface-2 p-4 transition-colors hover:border-border-strong hover:bg-surface-3/60">
                   <div className="flex items-start gap-3">
@@ -91,13 +152,13 @@ export function StudioHome({ initial }: { initial: Home }) {
           )}
         </section>
 
-        <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_380px]">
           <section>
             <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wide text-fg-subtle">Needs your attention</h2>
             {data.attention.length === 0 ? (
               <EmptyState title="You're all caught up" description="Nothing is waiting on you right now — no change requests, reviews or deadlines." />
             ) : (
-              <ul className="grid gap-2">
+              <ul className="grid grid-cols-1 gap-2">
                 {data.attention.map(({ reason, card, project, board }) => {
                   const meta = REASONS[reason];
                   const Icon = meta.icon;
@@ -133,7 +194,7 @@ export function StudioHome({ initial }: { initial: Home }) {
             {data.deliverables.length === 0 ? (
               <p className="text-[13px] text-fg-muted">No deliverables are waiting on you.</p>
             ) : (
-              <ul className="grid gap-1.5">
+              <ul className="grid grid-cols-1 gap-1.5">
                 {data.deliverables.map((item) => {
                   const overdue = item.dueAt ? new Date(item.dueAt).getTime() < Date.now() : false;
                   return (
@@ -177,18 +238,26 @@ export function StudioHome({ initial }: { initial: Home }) {
               </ul>
             )}
 
+            <h2 className="mb-1 mt-8 text-[13px] font-semibold uppercase tracking-wide text-fg-subtle">Your checklist items</h2>
+            <p className="mb-3 text-[12px] text-fg-subtle">Checklist items on cards that are given to you, soonest day first.</p>
+            <MyChecklistItems items={data.checklistItems} studioId={studio.id} cardHref={cardHref} />
+
             <h2 className="mb-3 mt-8 text-[13px] font-semibold uppercase tracking-wide text-fg-subtle">Recently viewed</h2>
             {data.recent.length === 0 ? (
               <p className="text-[13px] text-fg-muted">Cards you open will show up here.</p>
             ) : (
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
                 {data.recent.map(({ card, project, board, viewedAt }) => (
                   <Link key={card.id} href={cardHref(project.slug, card.key, board)} className="flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-surface-2 p-2 hover:border-border-strong">
                     {card.cover?.thumbUrl ? <img src={card.cover.thumbUrl} alt="" className="h-9 w-14 shrink-0 rounded object-cover" /> : <span className="flex h-9 w-14 shrink-0 items-center justify-center rounded bg-surface-4">{project.icon}</span>}
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13px] font-medium">{card.title}</p>
                       <p className="truncate text-[11px] text-fg-subtle">
-                        viewed {timeAgo(viewedAt)}
+                        viewed{" "}
+                        {/* "54 seconds ago" can tick over between the server's HTML and the browser taking over. */}
+                        <time dateTime={viewedAt} suppressHydrationWarning>
+                          {timeAgo(viewedAt)}
+                        </time>
                         {boardSuffix(board)}
                       </p>
                     </div>
@@ -204,7 +273,7 @@ export function StudioHome({ initial }: { initial: Home }) {
             {data.activity.length === 0 ? (
               <p className="text-[13px] text-fg-muted">No activity yet.</p>
             ) : (
-              <ol className="grid gap-3">
+              <ol className="grid grid-cols-1 gap-3">
                 {data.activity.map((e) => (
                   <li key={e.id} className="flex gap-2.5 text-[12.5px]">
                     <UserAvatar user={e.actor} size="sm" />
@@ -213,7 +282,9 @@ export function StudioHome({ initial }: { initial: Home }) {
                         <strong className="font-medium text-fg">{e.actor?.displayName ?? "Someone"}</strong> {describeActivity(e, () => "someone", true)}
                       </p>
                       <p className="text-[11px] text-fg-subtle">
-                        {timeAgo(e.createdAt)}
+                        <time dateTime={e.createdAt} suppressHydrationWarning>
+                          {timeAgo(e.createdAt)}
+                        </time>
                         {e.project ? ` · ${e.project.icon} ${e.project.name}` : ""}
                       </p>
                     </div>

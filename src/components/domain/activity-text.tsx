@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { CARD_STATE_META, PRIORITY_META } from "@/lib/card-meta";
+import { formatDueDay } from "@/lib/checklist";
 import type { ActivityDTO, CardState, Priority } from "@/lib/types";
 import { formatShortDate } from "@/lib/utils";
 
@@ -72,6 +73,12 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
       return <>resolved feedback “{s(d.excerpt)}”</>;
     case "feedback.reopened":
       return <>reopened feedback “{s(d.excerpt)}”</>;
+    case "checklist.item_assigned":
+      return d.userId ? <>gave the checklist item “{s(d.item)}” to <strong className="font-medium text-fg">{resolveUser(s(d.userId))}</strong></> : <>took the person off the checklist item “{s(d.item)}”</>;
+    case "checklist.item_due":
+      return d.to ? <>set the checklist item “{s(d.item)}” due {formatDueDay(s(d.to))}</> : <>removed the due date of the checklist item “{s(d.item)}”</>;
+    case "checklist.item_done":
+      return <>ticked off the checklist item “{s(d.item)}”</>;
     case "checklist.completed":
       return <>completed the checklist “{s(d.checklistTitle)}”{withCard ? <> on {card}</> : null}</>;
     case "column.created":

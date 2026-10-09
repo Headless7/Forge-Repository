@@ -14,7 +14,7 @@ import type { Actor } from "@/server/services/context";
 import * as deliverables from "@/server/services/deliverables";
 import * as media from "@/server/services/media";
 import * as projects from "@/server/services/projects";
-import { previewPurge, processStorageDeletions, purge, storageUnits } from "@/server/services/purge";
+import { previewPurge, processStorageDeletions, purge, settleStorageCleanup, storageUnits } from "@/server/services/purge";
 import { studioStorageUsed } from "@/server/services/storage-quota";
 import * as studios from "@/server/services/studios";
 import { storage } from "@/server/storage";
@@ -113,6 +113,8 @@ describe("bulk deletion of archived content", () => {
 
     const usedBefore = await studioStorageUsed(f.studioId);
     const result = await purge(f.admin.actor, { targets: preview.items.map((i) => ({ type: i.type, id: i.id })) });
+    // This test runs the cleanup queue itself, so the automatic run after the purge mustn't race it.
+    await settleStorageCleanup();
     const status = new Map(result.results.map((r) => [r.id, r.status]));
     expect(status.get(archivedColumn.id)).toBe("deleted");
     expect(status.get(inOldColumn.card.id)).toBe("deleted");
@@ -188,9 +190,11 @@ describe("bulk deletion of archived content", () => {
   it("keeps retrying storage cleanup until it succeeds", async () => {
     const { card, file } = await cardWithFile("Flaky storage", f.columns.ui);
     await cards.setCardArchived(f.owner.actor, { cardId: card.id, archived: true });
+    await settleStorageCleanup(); // nothing left over from earlier purges may use up the failure below
     const store = storage();
     const failing = vi.spyOn(store, "deletePrefix").mockRejectedValueOnce(new Error("storage unavailable"));
     await purge(f.owner.actor, { targets: [{ type: "card", id: card.id }] });
+    await settleStorageCleanup();
     const [unit] = storageUnits(file);
     await db.update(storageDeletions).set({ nextAttemptAt: new Date(0) }).where(eq(storageDeletions.prefix, unit!));
     expect(await processStorageDeletions()).toMatchObject({ failed: 1 });

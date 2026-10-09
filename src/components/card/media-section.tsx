@@ -165,7 +165,7 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
               onChange={(e) => setUrl(e.target.value)}
               placeholder="…or paste an image URL"
               aria-label="Image URL"
-              className="h-8 flex-1 rounded-md border border-border-strong bg-surface-3 px-2.5 text-[13px] outline-none focus:border-accent"
+              className="h-8 min-w-0 flex-1 rounded-md border border-border-strong bg-surface-3 px-2.5 text-[13px] outline-none focus:border-accent"
             />
           </div>
         )}

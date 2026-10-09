@@ -103,6 +103,10 @@ export interface CardCountsDTO {
   resolvedFeedback: number;
   checklistDone: number;
   checklistTotal: number;
+  /** Unticked checklist items given to the viewer. */
+  checklistMine: number;
+  /** Earliest due day ("YYYY-MM-DD") of an unticked item, so the board can flag overdue ones. */
+  checklistNextDue: string | null;
   versions: number;
 }
 
@@ -352,6 +356,17 @@ export interface ScheduleCardDTO {
   links: Array<{ fromId: string; toId: string; type: DeliverableLinkType }>;
 }
 
+/** A checklist item with a due day, for the calendars. */
+export interface ScheduleChecklistItemDTO {
+  id: string;
+  text: string;
+  /** "YYYY-MM-DD": due by the end of that day. */
+  dueOn: string;
+  assigneeId: string | null;
+  checklistTitle: string;
+  card: { id: string; key: string; title: string; project: ScheduleCardDTO["project"]; board: { id: string; number: number; name: string } };
+}
+
 /** Scheduled work overlapping a date range, for the timeline and calendars. */
 export interface ScheduleDTO {
   from: string;
@@ -363,6 +378,8 @@ export interface ScheduleDTO {
   unscheduledTotal: number;
   /** More matched than were returned (very busy ranges). */
   truncated: boolean;
+  /** Unticked checklist items due in the range (in the "mine" scopes, the viewer's own). */
+  checklistItems: ScheduleChecklistItemDTO[];
 }
 
 /** A board in the project's switcher — light: no columns or cards. */
@@ -500,6 +517,10 @@ export interface ChecklistItemDTO {
   position: number;
   doneById: string | null;
   doneAt: string | null;
+  /** The one person doing it. */
+  assigneeId: string | null;
+  /** The day it is due ("YYYY-MM-DD"; due by the end of that day). */
+  dueOn: string | null;
 }
 
 export interface ChecklistDTO {

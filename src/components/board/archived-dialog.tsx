@@ -55,7 +55,7 @@ function Section({ title, rows, selected, onToggle, canDelete }: { title: string
           {title} · {rows.length}
         </h3>
       </div>
-      <ul className="grid gap-1">
+      <ul className="grid grid-cols-1 gap-1">
         {rows.map((r) => {
           const key = `${r.kind}:${r.id}`;
           return (
@@ -222,7 +222,7 @@ export function ArchivedItems({ projectId, canDelete, canRestoreColumns }: { pro
 
   return (
     <>
-      <div className="grid gap-4">
+      <div className="grid grid-cols-1 gap-4">
         <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Show">
           {FILTERS.map((f) => {
             const count = f.id === "all" ? total : rows[f.id].length;
@@ -269,7 +269,7 @@ export function ArchivedDialog({ open, onOpenChange, projectId, canDelete, canRe
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="Archived items" description="Restore anything archived, or permanently delete it to free storage." size="lg">
-        <div className="scrollbar-thin max-h-[65vh] overflow-y-auto pr-1">{open ? <ArchivedItems projectId={projectId} canDelete={canDelete} canRestoreColumns={canRestoreColumns} /> : null}</div>
+        <div>{open ? <ArchivedItems projectId={projectId} canDelete={canDelete} canRestoreColumns={canRestoreColumns} /> : null}</div>
       </DialogContent>
     </Dialog>
   );

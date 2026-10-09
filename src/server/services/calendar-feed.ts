@@ -69,7 +69,7 @@ interface CalendarEvent {
   summary: string;
   description: string;
   url: string;
-  /** A deadline (timed) or a milestone (all-day). */
+  /** A deadline (timed), or a milestone or checklist item's day (all-day). */
   at: Date;
   allDay?: boolean;
 }
@@ -92,7 +92,8 @@ export function renderCalendar(events: CalendarEvent[], generatedAt: Date): stri
 /**
  * The feed behind a token, or null when the token isn't (or no longer is) valid. Deadlines of the
  * person's unfinished work (cards they're assigned to; deliverables they're responsible for,
- * contribute to or review) from a month ago to a year ahead, plus their projects' milestones.
+ * contribute to or review; open checklist items given to them) from a month ago to a year ahead,
+ * plus their projects' milestones.
  */
 export async function calendarFeedFor(token: string): Promise<string | null> {
   if (!/^[A-Za-z0-9_-]{20,100}$/.test(token)) return null;
@@ -116,6 +117,18 @@ export async function calendarFeedFor(token: string): Promise<string | null> {
       const url = `${link}&d=${d.number}`;
       events.push({ uid: `deliverable-${d.id}-due@forge`, summary: `${card.key} · D${d.number} ${d.name} — due`, description: `${card.title}\n${card.project.name} · ${card.board.name}\n${url}`, url, at: new Date(d.dueAt) });
     }
+  }
+  // Open checklist items given to the person, on their day (all-day: they have no time).
+  for (const item of schedule.checklistItems) {
+    const url = `${origin}/${item.card.project.studioSlug}/${item.card.project.slug}/b/${item.card.board.number}?card=${encodeURIComponent(item.card.key)}`;
+    events.push({
+      uid: `checklist-item-${item.id}@forge`,
+      summary: `☐ ${item.text}`,
+      description: `${item.card.key} ${item.card.title} · ${item.checklistTitle}\n${item.card.project.name} · ${item.card.board.name}\n${url}`,
+      url,
+      at: new Date(`${item.dueOn}T00:00:00Z`),
+      allDay: true,
+    });
   }
   for (const m of schedule.milestones) {
     if (m.released) continue;

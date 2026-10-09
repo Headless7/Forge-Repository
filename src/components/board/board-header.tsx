@@ -276,7 +276,8 @@ export function BoardHeader({
   return (
     <header className="@container flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-surface/80 px-3 py-2 backdrop-blur md:px-4">
       <div className="flex min-w-0 items-center gap-2">
-        <span className="text-xl leading-none" aria-hidden>
+        {/* Very narrow headers leave it to the top bar, so the board name has room. */}
+        <span className="hidden text-xl leading-none @min-[400px]:inline" aria-hidden>
           {project.icon}
         </span>
         {/* The name shows here on wide headers (narrower ones have it in the sidebar or top bar). */}
@@ -299,7 +300,7 @@ export function BoardHeader({
                 type="button"
                 aria-label={`Milestone filter: ${milestoneText}`}
                 className={cn(
-                  "inline-flex h-7 min-w-0 max-w-[40vw] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border px-2 text-[12.5px] font-medium md:max-w-52",
+                  "inline-flex h-7 min-w-[3.25rem] max-w-[40vw] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border px-2 text-[12.5px] font-medium md:max-w-52",
                   activeMilestone ? "border-accent/50 bg-accent-soft text-fg" : "border-border-strong text-fg-muted hover:text-fg",
                 )}
               >

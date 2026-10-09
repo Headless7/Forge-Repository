@@ -1,13 +1,25 @@
 "use client";
 
-import { Flag, Play } from "lucide-react";
+import { CheckSquare, Flag, Play } from "lucide-react";
 import { CARD_STATE_META } from "@/lib/card-meta";
+import type { ScheduleChecklistItemDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import type { ScheduleSelection } from "./schedule-item-dialog";
 import { dateKey, formatDayHeading, formatTime, sameDay, startOfDay, type CalendarEntry } from "./schedule-utils";
 
-/** Starts, deadlines and milestones as a day-by-day list (phones, and anywhere a grid is too wide). */
-export function Agenda({ entries, onSelect, emptyText = "Nothing scheduled in this period." }: { entries: CalendarEntry[]; onSelect: (selection: ScheduleSelection) => void; emptyText?: string }) {
+/** Starts, deadlines, checklist items and milestones as a day-by-day list (phones, and anywhere a grid is too wide). */
+export function Agenda({
+  entries,
+  onSelect,
+  onOpenItem,
+  emptyText = "Nothing scheduled in this period.",
+}: {
+  entries: CalendarEntry[];
+  onSelect: (selection: ScheduleSelection) => void;
+  /** Opens a checklist item's card (calendars list items; the timeline doesn't). */
+  onOpenItem?: (item: ScheduleChecklistItemDTO) => void;
+  emptyText?: string;
+}) {
   if (!entries.length) return <p className="px-4 py-10 text-center text-[13px] text-fg-muted">{emptyText}</p>;
   const days: Array<{ day: Date; items: CalendarEntry[] }> = [];
   for (const e of entries) {
@@ -28,7 +40,22 @@ export function Agenda({ entries, onSelect, emptyText = "Nothing scheduled in th
           <ul className="mt-1 grid grid-cols-1 gap-1">
             {items.map((e) => (
               <li key={e.key}>
-                {e.milestone ? (
+                {e.item ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenItem?.(e.item!)}
+                    className={cn("flex min-h-11 w-full items-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2 text-left text-[13px] hover:border-border-strong", e.overdue && "border-danger/50")}
+                  >
+                    <CheckSquare className="size-4 shrink-0 text-fg-subtle" aria-label="Checklist item" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block break-words font-medium">{e.title}</span>
+                      <span className="block truncate text-[11.5px] text-fg-subtle">
+                        <span className="font-mono">{e.ref}</span> · {e.item.card.title} · {e.item.card.project.name}
+                      </span>
+                    </span>
+                    <span className={cn("shrink-0 text-right text-[11.5px]", e.overdue ? "font-semibold text-danger" : "text-fg-muted")}>{e.overdue ? "overdue" : "checklist"}</span>
+                  </button>
+                ) : e.milestone ? (
                   <div className="flex min-h-11 items-center gap-2 rounded-lg border border-dashed border-border-strong px-3 py-2 text-[13px]">
                     <Flag className="size-4 shrink-0 text-accent" />
                     <span className="min-w-0 flex-1 truncate font-medium">{e.title}</span>

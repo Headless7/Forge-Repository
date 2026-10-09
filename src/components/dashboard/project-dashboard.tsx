@@ -13,7 +13,7 @@ import { StatePill } from "../domain/state";
 import { TipAnchor, useTipOnOpen } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
 import { Select, Skeleton } from "../ui/controls";
-import { Dialog, DialogContent } from "../ui/dialog";
+import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 
 const DAY = 86_400_000;
 /** Approved first; red and green never side by side (checked for colour-vision deficiencies). */
@@ -233,7 +233,7 @@ function Drilldown({ open, title, items, loading, studioSlug, projectSlug, onClo
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent title={title} description={items ? `${items.length} deliverable${items.length === 1 ? "" : "s"}` : undefined} size="lg">
-        <div className="scrollbar-thin max-h-[60vh] overflow-y-auto pr-1">
+        <div>
           {loading || !items ? (
             <Skeleton className="h-24" />
           ) : items.length === 0 ? (
@@ -262,7 +262,7 @@ function Drilldown({ open, title, items, loading, studioSlug, projectSlug, onClo
           )}
         </div>
         {items?.length ? (
-          <div className="mt-3 flex justify-end">
+          <DialogFooter>
             <Button
               size="sm"
               variant="secondary"
@@ -275,7 +275,7 @@ function Drilldown({ open, title, items, loading, studioSlug, projectSlug, onClo
             >
               <Download /> Export CSV
             </Button>
-          </div>
+          </DialogFooter>
         ) : null}
       </DialogContent>
     </Dialog>
@@ -332,7 +332,7 @@ export function ProjectDashboard({ projectId, studioSlug, projectSlug, projectNa
 
   return (
     <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-6xl gap-4 px-4 py-6 md:px-8">
+      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 px-4 py-6 md:px-8">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-0 flex-1">
             <p className="text-[12px] text-fg-subtle">

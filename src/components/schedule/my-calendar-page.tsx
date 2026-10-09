@@ -48,7 +48,7 @@ function SubscribeDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
         if (!v) setUrl(null);
       }}
     >
-      <DialogContent title="Subscribe in your calendar app" description="Your deadlines and milestones in Google Calendar, Apple Calendar or Outlook, kept up to date automatically.">
+      <DialogContent title="Subscribe in your calendar app" description="Your deadlines, checklist items and milestones in Google Calendar, Apple Calendar or Outlook, kept up to date automatically.">
         <div className="grid gap-3 text-[13px]">
           {url ? (
             <>

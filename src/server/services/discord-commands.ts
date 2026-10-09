@@ -12,19 +12,20 @@
 import "server-only";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { roleHas } from "@/lib/permissions";
-import type { CardDetailDTO, CardState, Priority, ProductionStatus } from "@/lib/types";
+import type { CardDetailDTO, CardState, ChecklistItemDTO, MemberDTO, Priority, ProductionStatus } from "@/lib/types";
 import { accessibleProjectIds, getProjectAccess, requireCard, requireDeliverable, type ProjectAccess } from "../access";
 import { db } from "../db";
-import { assetVersions, boardColumns, boards, cardReviewers, cards, deliverables, discordConnections, oauthAccounts, studioMembers, studios, users } from "../db/schema";
+import { assetVersions, boardColumns, boards, cardReviewers, cards, checklistItems, checklists, deliverables, discordConnections, oauthAccounts, studioMembers, studios, users } from "../db/schema";
 import { appOrigin, env } from "../env";
 import { AppError } from "../errors";
 import { enforceRateLimit } from "../rate-limit";
 import { loadCardDetail } from "./card-dto";
 import { createCard } from "./cards";
+import { addChecklistItems, canTickItem, checklistAssignees, updateChecklistItem } from "./checklists";
 import type { Actor } from "./context";
 import { discordApi, discordConfigured } from "./discord";
 import { discordTime, escapeMarkdown, truncate } from "./discord-message";
-import { myDeliverables, type BoardRef, type MyDeliverableItem } from "./home";
+import { myChecklistItems, myDeliverables, type BoardRef, type MyChecklistItem, type MyDeliverableItem } from "./home";
 import { listProjectMembers } from "./members-query";
 import { moveProduction } from "./production";
 import { approve, requestChanges, submitForReview } from "./reviews";
@@ -75,6 +76,19 @@ export const DISCORD_COMMANDS = [
       { type: 3, name: "due", description: "Deadline, e.g. friday, tomorrow, in 3 days or 2026-10-20", required: false, autocomplete: true, max_length: 40 },
       { type: 3, name: "priority", description: "How urgent it is (default Normal)", required: false, choices: PRIORITY_CHOICES },
       { type: 3, name: "description", description: "Details for whoever picks it up", required: false, max_length: 2000 },
+    ],
+  },
+  {
+    name: "additem",
+    type: 1,
+    description: "Add an item to a card's checklist, with who does it and when it's due.",
+    ...EVERYWHERE,
+    options: [
+      { type: 3, name: "card", description: "Card key or title, e.g. UTD-4", required: true, autocomplete: true, max_length: 100 },
+      { type: 3, name: "item", description: "What needs doing", required: true, max_length: 500 },
+      { type: 3, name: "assign", description: "Who does it", required: false, autocomplete: true, max_length: 100 },
+      { type: 3, name: "due", description: "When it's due, e.g. friday, tomorrow, in 3 days or 2026-10-20", required: false, autocomplete: true, max_length: 40 },
+      { type: 3, name: "list", description: "Which checklist (default: the card's first)", required: false, autocomplete: true, max_length: 100 },
     ],
   },
 ];
@@ -329,11 +343,11 @@ function dueText(iso: string | null, nowMs: number) {
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** One row of a list: the card (linking to Forge), a grey detail line, and a View button. */
-function listRow(nextId: (base: string) => string, cardId: string, title: string, detail: string, button: { label: string; style: 1 | 2 } = { label: "View", style: 2 }): Section {
+function listRow(nextId: (base: string) => string, cardId: string, title: string, detail: string, button: { label: string; style: 1 | 2; verb?: "open" | "list" } = { label: "View", style: 2 }): Section {
   return {
     type: 9,
     components: [text(`**${title}**${detail ? `\n-# ${detail}` : ""}`)],
-    accessory: { type: 2, style: button.style, label: button.label, custom_id: nextId(`fg:open:${cardId}`) },
+    accessory: { type: 2, style: button.style, label: button.label, custom_id: nextId(`fg:${button.verb ?? "open"}:${cardId}`) },
   };
 }
 
@@ -359,8 +373,34 @@ function groupedRows<T>(items: T[], groups: Array<{ title: string; test: (item: 
 
 const SOON_MS = 48 * 60 * 60 * 1000;
 
-export function myWorkView(items: MyDeliverableItem[], scope: Scope, studioSlugOf: (projectId: string) => string, nowMs = Date.now()): Reply {
+/** Your checklist items as one compact list (each line links to its card). */
+function checklistLines(items: MyChecklistItem[], studioSlugOf: (projectId: string) => string, max = 8) {
+  const today = todayDay();
+  const lines = items.slice(0, max).map((i) => {
+    const url = cardUrl(studioSlugOf(i.project.id), i.project.slug, i.board?.number, i.card.key);
+    return `⬜ ${cardLink(i.card.key, i.card.title, url, 40)} — ${escapeMarkdown(truncate(i.text, 60))}${i.dueOn ? ` · ${itemDue(i.dueOn, today)}` : ""}`;
+  });
+  if (items.length > max) lines.push(`-# …and ${items.length - max} more. Open a card's checklist to tick items off.`);
+  else lines.push("-# Open a card's checklist (View → Checklist) to tick items off.");
+  return lines.join("\n");
+}
+
+export function myWorkView(items: MyDeliverableItem[], scope: Scope, studioSlugOf: (projectId: string) => string, nowMs = Date.now(), checklist: MyChecklistItem[] = []): Reply {
   const home = link("Open Forge", `${appOrigin()}/${scope.studios[0]?.slug ?? ""}`);
+  const checklistBlock = checklist.length ? [text("### ☑️ Your checklist items"), text(checklistLines(checklist, studioSlugOf))] : [];
+  if (!items.length && checklist.length) {
+    return {
+      components: [
+        panel(COLORS.work, [
+          text(`## 🧰 Your work\n-# No open deliverables · ${plural(checklist.length, "checklist item")} · ${studioLine(scope)}`),
+          divider(),
+          ...checklistBlock,
+          divider(),
+          row(home),
+        ]),
+      ],
+    };
+  }
   if (!items.length) {
     return {
       components: [
@@ -397,9 +437,10 @@ export function myWorkView(items: MyDeliverableItem[], scope: Scope, studioSlugO
   return {
     components: [
       panel(overdue ? COLORS.late : COLORS.work, [
-        text(`## 🧰 Your work\n-# ${plural(items.length, "open deliverable")}${overdue ? ` · ${overdue} overdue` : ""} · ${studioLine(scope)}`),
+        text(`## 🧰 Your work\n-# ${plural(items.length, "open deliverable")}${overdue ? ` · ${overdue} overdue` : ""}${checklist.length ? ` · ${plural(checklist.length, "checklist item")}` : ""} · ${studioLine(scope)}`),
         divider(),
         ...rows,
+        ...checklistBlock,
         divider(),
         row(home),
       ]),
@@ -413,8 +454,10 @@ async function myWork(scope: Scope): Promise<Reply> {
     const a = scope.accesses.get(id)!;
     return { id, slug: a.project.slug, name: a.project.name, icon: a.project.icon, key: a.project.key };
   };
-  const items = ids.length ? await myDeliverables(scope.userId, ids, projectRef, await boardRefs(ids)) : [];
-  return myWorkView(items, scope, (id) => scope.accesses.get(id)!.studioSlug);
+  const boardRef = await boardRefs(ids);
+  const items = ids.length ? await myDeliverables(scope.userId, ids, projectRef, boardRef) : [];
+  const checklist = ids.length ? await myChecklistItems(scope.userId, ids, projectRef, boardRef, 30) : [];
+  return myWorkView(items, scope, (id) => scope.accesses.get(id)!.studioSlug, Date.now(), checklist);
 }
 
 // ── /reviews ────────────────────────────────────────────────────────────────────────────────
@@ -517,6 +560,8 @@ const DAY = 86_400_000;
 interface DueItem {
   due: number;
   dueAt: string;
+  /** A checklist item: due on this day ("YYYY-MM-DD"), shown without a time; View opens the checklist. */
+  day?: string;
   cardId: string;
   title: string;
   detail: string | null;
@@ -550,6 +595,13 @@ async function deadlines(scope: Scope, days: number, teamRequested: boolean): Pr
       items.push({ due: Date.parse(d.dueAt), dueAt: d.dueAt, cardId: card.id, title: cardLink(card.key, card.title, `${url}&d=${d.number}`), detail: deliverableName(d.name, card.title), people: [] });
     }
   }
+  const endDay = new Date(end).toISOString().slice(0, 10);
+  for (const item of schedule.checklistItems) {
+    if (item.dueOn > endDay) continue;
+    const url = cardUrl(item.card.project.studioSlug, item.card.project.slug, item.card.board.number, item.card.key);
+    // Due by the end of that day.
+    items.push({ due: Date.parse(`${item.dueOn}T23:59:59Z`), dueAt: `${item.dueOn}T23:59:59Z`, day: item.dueOn, cardId: item.card.id, title: cardLink(item.card.key, item.card.title, url), detail: `☑️ ${escapeMarkdown(truncate(item.text, 60))}`, people: item.assigneeId ? [item.assigneeId] : [] });
+  }
   items.sort((a, b) => a.due - b.due);
   const names = new Map<string, string>();
   const peopleIds = [...new Set(items.flatMap((i) => i.people))];
@@ -573,8 +625,9 @@ async function deadlines(scope: Scope, days: number, teamRequested: boolean): Pr
   const nextId = idMaker();
   const toRow = (i: DueItem) => {
     const who = team && i.people.length ? escapeMarkdown(truncate(i.people.map((p) => names.get(p) ?? "?").join(", "), 50)) : null;
-    const detail = [i.detail, `${dueText(i.dueAt, at)} (${discordTime(i.dueAt, "f")})`, who ? `👤 ${who}` : null].filter(Boolean).join(" · ");
-    return listRow(nextId, i.cardId, i.title, detail);
+    const when = i.day ? itemDue(i.day, todayDay()) : `${dueText(i.dueAt, at)} (${discordTime(i.dueAt, "f")})`;
+    const detail = [i.detail, when, who ? `👤 ${who}` : null].filter(Boolean).join(" · ");
+    return listRow(nextId, i.cardId, i.title, detail, i.day ? { label: "View", style: 2, verb: "list" } : undefined);
   };
   const rows = groupedRows(
     items,
@@ -748,6 +801,11 @@ export function cardView(detail: CardDetailDTO, info: CardInfo, options: { banne
   const bottom: Button[] = [];
   if (actions.complete) bottom.push({ type: 2, style: 1, label: "Mark completed", custom_id: nextId(`fg:complete:${detail.id}`), emoji: { name: "🏁" } });
   if (actions.publish) bottom.push({ type: 2, style: 1, label: "Mark published", custom_id: nextId(`fg:publish:${detail.id}`), emoji: { name: "🚀" } });
+  const listTotal = detail.checklists.reduce((n, l) => n + l.items.length, 0);
+  const listDone = detail.checklists.reduce((n, l) => n + l.items.filter((i) => i.isDone).length, 0);
+  if (listTotal || detail.permissions.canEdit) {
+    bottom.push({ type: 2, style: 2, label: listTotal ? `Checklist ${listDone}/${listTotal}` : "Add checklist items", custom_id: nextId(`fg:list:${detail.id}`), emoji: { name: "☑️" } });
+  }
   bottom.push(link("Open in Forge", info.url));
   body.push(divider(), row(...bottom));
 
@@ -1115,9 +1173,249 @@ async function newCard(scope: Scope, actor: Actor, interaction: Interaction): Pr
   });
 }
 
+// ── Checklists ──────────────────────────────────────────────────────────────────────────────
+
+const todayDay = () => new Date().toISOString().slice(0, 10);
+
+/** "📅 due Fri 16 Oct", "⏰ due today" or "🚨 was due Mon 12 Oct" (items are due by the end of their day). */
+function itemDue(day: string, today: string) {
+  return day < today ? `🚨 was due ${dayLabel(day)}` : day === today ? "⏰ due today" : `📅 due ${dayLabel(day)}`;
+}
+
+/** Most items shown in one checklist view (Discord's text and button limits); the rest are in Forge. */
+const CHECKLIST_VIEW_ITEMS = 18;
+
+export function checklistView(detail: CardDetailDTO, info: CardInfo & { viewerId: string }, banner?: string): Reply {
+  const today = todayDay();
+  const canEdit = detail.permissions.canEdit;
+  const tickable = (item: ChecklistItemDTO) => canTickItem({ perms: detail.permissions }, item, info.viewerId);
+  const nextId = idMaker();
+  const all = detail.checklists.flatMap((l) => l.items);
+  const done = all.filter((i) => i.isDone).length;
+  const lists = detail.checklists.slice(0, 4);
+  const body: Container["components"] = [
+    text(`-# 📇 ${escapeMarkdown(truncate(info.projectName, 60))}${info.boardName ? ` · ${escapeMarkdown(truncate(info.boardName, 40))}` : ""}\n## ${cardLink(detail.key, detail.title, info.url, 120)}`),
+    text(all.length ? `### ☑️ Checklist · ${done} of ${all.length} done` : `### ☑️ Checklist\nNo items yet.${canEdit ? " Add the first ones below." : ""}`),
+    divider(),
+  ];
+  // Discord allows 40 components: whatever isn't needed for the frame goes to Tick off buttons.
+  const frame = (banner ? 1 : 0) + 1 + body.length + lists.length * (canEdit ? 4 : 2) + (detail.checklists.length > lists.length ? 1 : 0) + 2 + 3;
+  let buttons = Math.max(0, Math.floor((LAYOUT_LIMITS.components - frame) / 3));
+  let shown = 0;
+  for (const list of lists) {
+    const listDone = list.items.filter((i) => i.isDone).length;
+    body.push(text(`**${escapeMarkdown(truncate(list.title, 80))}** · ${listDone}/${list.items.length}`));
+    let plain: string[] = [];
+    const flush = () => {
+      if (plain.length) body.push(text(plain.join("\n")));
+      plain = [];
+    };
+    for (const item of list.items) {
+      if (shown >= CHECKLIST_VIEW_ITEMS) break;
+      shown++;
+      const facts = [
+        item.assigneeId ? `👤 ${escapeMarkdown(truncate(info.names.get(item.assigneeId) ?? "Former member", 40))}` : null,
+        item.dueOn && !item.isDone ? itemDue(item.dueOn, today) : null,
+      ].filter(Boolean);
+      const label = escapeMarkdown(truncate(item.text, 90));
+      const line = `${item.isDone ? `✅ ~~${label}~~` : `⬜ **${label}**`}${facts.length ? `\n-# ${facts.join(" · ")}` : ""}`;
+      if (tickable(item) && buttons > 0) {
+        buttons--;
+        flush();
+        body.push({
+          type: 9,
+          components: [text(line)],
+          accessory: item.isDone
+            ? { type: 2, style: 2, label: "Untick", custom_id: nextId(`fg:untick:${item.id}`) }
+            : { type: 2, style: 3, label: "Tick off", custom_id: nextId(`fg:tick:${item.id}`), emoji: { name: "✅" } },
+        });
+      } else plain.push(line);
+    }
+    flush();
+    if (canEdit) body.push(row({ type: 2, style: 2, label: truncate(`Add items to ${list.title}`, 80), custom_id: nextId(`fg:additems:${list.id}`), emoji: { name: "➕" } }));
+  }
+  const notShown = all.length - shown;
+  if (notShown > 0 || detail.checklists.length > lists.length) body.push(text(`-# ${notShown > 0 ? `…and ${plural(notShown, "more item")}` : "More checklists"} in Forge.`));
+  const bottom: Button[] = [{ type: 2, style: 2, label: "Back to card", custom_id: nextId(`fg:open:${detail.id}`) }];
+  if (canEdit && !detail.checklists.length) bottom.push({ type: 2, style: 1, label: "Add items", custom_id: nextId(`fg:newlist:${detail.id}`), emoji: { name: "➕" } });
+  bottom.push(link("Open in Forge", info.url));
+  body.push(divider(), row(...bottom));
+  return { components: [...(banner ? [text(banner)] : []), panel(all.length && done === all.length ? COLORS.done : COLORS.work, body)] };
+}
+
+async function checklistReply(userId: string, cardId: string, banner?: string): Promise<Reply> {
+  const ctx = await requireCard(userId, cardId);
+  const detail = await loadCardDetail(ctx);
+  const [board] = await db.select({ number: boards.number, name: boards.name }).from(boards).where(eq(boards.id, ctx.card.boardId));
+  const ids = [...new Set(detail.checklists.flatMap((l) => l.items.map((i) => i.assigneeId)).filter((v): v is string => Boolean(v)))];
+  const names = new Map((ids.length ? await db.select({ id: users.id, name: users.displayName }).from(users).where(inArray(users.id, ids)) : []).map((u) => [u.id, u.name]));
+  return checklistView(
+    detail,
+    {
+      url: cardUrl(ctx.access.studioSlug, ctx.access.project.slug, board?.number, detail.key),
+      projectName: `${ctx.access.project.icon} ${ctx.access.project.name}`.trim(),
+      boardName: board?.name ?? null,
+      studioName: ctx.access.studioName,
+      names,
+      viewerId: userId,
+    },
+    banner,
+  );
+}
+
+/** A person from what was typed: an autocomplete pick (their id), "me", a username or a name. */
+function matchMember(members: MemberDTO[], value: string, actorId: string): MemberDTO | null {
+  const v = value.trim().replace(/^@/, "").toLowerCase();
+  if (!v) return null;
+  if (UUID.test(v)) return members.find((m) => m.id === v) ?? null;
+  if (v === "me") return members.find((m) => m.id === actorId) ?? null;
+  const byUsername = members.find((m) => m.username.toLowerCase() === v);
+  if (byUsername) return byUsername;
+  const exact = members.filter((m) => m.displayName.toLowerCase() === v);
+  if (exact.length === 1) return exact[0]!;
+  const partial = members.filter((m) => m.displayName.toLowerCase().includes(v));
+  return partial.length === 1 ? partial[0]! : null;
+}
+
+/** After "Added …": who does them and when, if set. */
+function addedSuffix(assignee: MemberDTO | null, day: string | null) {
+  return `${assignee ? ` for **${escapeMarkdown(truncate(assignee.displayName, 40))}**` : ""}${day ? `, due ${dayLabel(day)}` : ""}`;
+}
+
+/** Ticks an item off (or back on) as the person: its assignee, or anyone who can edit the card. */
+async function tickItem(actor: Actor, itemId: string, isDone: boolean): Promise<Reply> {
+  const [item] = await db.select({ cardId: checklistItems.cardId, text: checklistItems.text }).from(checklistItems).where(eq(checklistItems.id, itemId));
+  if (!item) return problem("That item was deleted. Run the command again.");
+  try {
+    await updateChecklistItem(actor, { itemId, isDone });
+  } catch (error) {
+    if (error instanceof AppError) return checklistReply(actor.userId, item.cardId, `⚠️ ${escapeMarkdown(error.message)}`);
+    throw error;
+  }
+  const label = `“${escapeMarkdown(truncate(item.text, 80))}”`;
+  return checklistReply(actor.userId, item.cardId, isDone ? `✅ Ticked off ${label}.` : `↩️ ${label} is open again.`);
+}
+
+/** The "Add items" form: one item per line, and optionally who does them and when they're due. */
+async function addItemsModal(userId: string, target: { checklistId: string } | { cardId: string }): Promise<InteractionResponse> {
+  let cardId: string;
+  let title = "Checklist";
+  if ("checklistId" in target) {
+    const [list] = await db.select({ cardId: checklists.cardId, title: checklists.title }).from(checklists).where(eq(checklists.id, target.checklistId));
+    if (!list) return respond(7, problem("That checklist was deleted. Run the command again."));
+    cardId = list.cardId;
+    title = list.title;
+  } else cardId = target.cardId;
+  const ctx = await requireCard(userId, cardId);
+  if (!ctx.perms.canEdit) return respond(7, await checklistReply(userId, cardId, "⚠️ You can add checklist items only to cards you can edit."));
+  const input = (custom_id: string, label: string, style: 1 | 2, required: boolean, placeholder: string, max_length: number) => ({ type: 1, components: [{ type: 4, custom_id, label, style, required, placeholder, max_length }] });
+  return {
+    type: 9,
+    data: {
+      custom_id: "checklistId" in target ? `fg:additems!:${target.checklistId}` : `fg:newlist!:${cardId}`,
+      title: truncate(`Add items · ${title}`, 45),
+      components: [
+        input("items", "Items (one per line)", 2, true, "Export the hilt FBX\nRig the cape bones", 4000),
+        input("assign", "Who does them? (optional)", 1, false, "A name, a username, or me", 100),
+        input("due", "When are they due? (optional)", 1, false, "friday, tomorrow, in 3 days or 2026-10-20", 40),
+      ],
+    },
+  };
+}
+
+function formValue(interaction: Interaction, id: string) {
+  return interaction.data?.components?.flatMap((r) => r.components ?? []).find((c) => c.custom_id === id)?.value ?? "";
+}
+
+async function submitAddItems(actor: Actor, interaction: Interaction, target: { checklistId: string } | { cardId: string }): Promise<Reply> {
+  let cardId: string;
+  if ("checklistId" in target) {
+    const [list] = await db.select({ cardId: checklists.cardId }).from(checklists).where(eq(checklists.id, target.checklistId));
+    if (!list) return problem("That checklist was deleted. Run the command again.");
+    cardId = list.cardId;
+  } else cardId = target.cardId;
+  const texts = formValue(interaction, "items")
+    .slice(0, 4000)
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[-*•]|\[ ?\])\s*/, "").trim())
+    .filter(Boolean);
+  if (!texts.length) return checklistReply(actor.userId, cardId, "⚠️ Write at least one item.");
+  const ctx = await requireCard(actor.userId, cardId);
+  const assignText = formValue(interaction, "assign");
+  const assignee = assignText.trim() ? matchMember(await checklistAssignees(ctx.access.project), assignText, actor.userId) : null;
+  if (assignText.trim() && !assignee) return checklistReply(actor.userId, cardId, `⚠️ Forge couldn't find “${escapeMarkdown(truncate(assignText, 40))}” among the people who can work on this project. Nothing was added.`);
+  const dueValue = formValue(interaction, "due");
+  const day = dueValue.trim() ? parseDueDay(dueValue) : null;
+  if (dueValue.trim() && !day) return checklistReply(actor.userId, cardId, "⚠️ Forge didn't understand that due date. Try friday, tomorrow, in 3 days or 2026-10-20. Nothing was added.");
+  try {
+    const result = await addChecklistItems(actor, { cardId, checklistId: "checklistId" in target ? target.checklistId : null, texts, assigneeId: assignee?.id ?? null, dueOn: day });
+    return checklistReply(actor.userId, cardId, `✅ Added ${plural(result.added, "item")} to **${escapeMarkdown(truncate(result.checklist.title, 60))}**${addedSuffix(assignee, day)}.`);
+  } catch (error) {
+    if (error instanceof AppError) return checklistReply(actor.userId, cardId, `⚠️ ${escapeMarkdown(error.message)}`);
+    throw error;
+  }
+}
+
+/** /additem: one item on a card's checklist, optionally with who does it and when it's due. */
+async function addItemCommand(scope: Scope, actor: Actor, interaction: Interaction): Promise<Reply> {
+  const query = optionText(interaction, "card");
+  const cardId = await findCard(scope, actor, query);
+  if (!cardId) return problem(`No card you can see matches “${truncate(query, 60)}”.`);
+  const itemText = optionText(interaction, "item").trim();
+  if (!itemText) return problem("Say what needs doing.");
+  const ctx = await requireCard(actor.userId, cardId);
+  if (!ctx.perms.canEdit) return problem("You can add checklist items only to cards you can edit.");
+  const assignText = optionText(interaction, "assign");
+  const assignee = assignText.trim() ? matchMember(await checklistAssignees(ctx.access.project), assignText, actor.userId) : null;
+  if (assignText.trim() && !assignee) return problem("Choose who does it from the list while typing: people who can work on this card's project.");
+  const dueValue = optionText(interaction, "due");
+  const day = dueValue.trim() ? parseDueDay(dueValue) : null;
+  if (dueValue.trim() && !day) return problem("Forge didn't understand that due date. Try friday, tomorrow, in 3 days or 2026-10-20.");
+  const listText = optionText(interaction, "list").trim();
+  let checklistId: string | null = null;
+  if (listText) {
+    const lists = await db.select({ id: checklists.id, title: checklists.title }).from(checklists).where(eq(checklists.cardId, cardId)).orderBy(asc(checklists.position));
+    const match = UUID.test(listText) ? lists.find((l) => l.id === listText) : lists.find((l) => l.title.toLowerCase() === listText.toLowerCase());
+    if (!match) return problem("Choose a checklist from the list while typing (or leave it out for the card's first one).");
+    checklistId = match.id;
+  }
+  try {
+    const result = await addChecklistItems(actor, { cardId, checklistId, texts: [itemText], assigneeId: assignee?.id ?? null, dueOn: day });
+    return checklistReply(actor.userId, cardId, `✅ Added “${escapeMarkdown(truncate(itemText, 80))}” to **${escapeMarkdown(truncate(result.checklist.title, 60))}**${addedSuffix(assignee, day)}.`);
+  } catch (error) {
+    if (error instanceof AppError) return problem(error.message);
+    throw error;
+  }
+}
+
+/** Suggestions while typing /additem: cards you can see, then (for that card) people, days and checklists. */
+async function suggestForAddItem(scope: Scope, actor: Actor, interaction: Interaction): Promise<Choice[]> {
+  const focused = interaction.data?.options?.find((o) => o.focused);
+  const typed = typeof focused?.value === "string" ? focused.value : "";
+  if (focused?.name === "card") return suggestCards(scope, actor, typed);
+  if (focused?.name === "due") return suggestDays(typed);
+  const cardId = await findCard(scope, actor, optionText(interaction, "card"));
+  if (!cardId) return [];
+  const ctx = await requireCard(actor.userId, cardId);
+  const { choices, add } = choiceList();
+  const q = typed.trim().toLowerCase();
+  if (focused?.name === "assign") {
+    const members = await checklistAssignees(ctx.access.project);
+    if (members.some((m) => m.id === actor.userId) && (!q || "me".startsWith(q))) add("me", "Me");
+    for (const m of members) {
+      if (m.id === actor.userId) continue;
+      if (!q || m.displayName.toLowerCase().includes(q) || m.username.toLowerCase().includes(q)) add(m.id, `${m.displayName} (@${m.username})`);
+    }
+  } else if (focused?.name === "list") {
+    const lists = await db.select({ id: checklists.id, title: checklists.title }).from(checklists).where(eq(checklists.cardId, cardId)).orderBy(asc(checklists.position));
+    for (const l of lists) if (!q || l.title.toLowerCase().includes(q)) add(l.id, l.title);
+  }
+  return choices;
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────────────────────────
 
-const COMPONENT = /^fg:(open|approve|approve!|submit|submit!|changes|complete|complete!|publish|publish!):([0-9a-f-]{36})(?::\d{1,2})?$/;
+const COMPONENT = /^fg:(open|approve|approve!|submit|submit!|changes|complete|complete!|publish|publish!|list|tick|untick|additems|newlist):([0-9a-f-]{36})(?::\d{1,2})?$/;
 
 /**
  * Answers one interaction (already verified as coming from Discord). The person is identified by
@@ -1144,6 +1442,7 @@ export async function handleInteraction(interaction: Interaction): Promise<Inter
     if (interaction.type === 4) {
       const scope = await scopeFor(user.id, interaction.guild_id);
       if (interaction.data?.name === "newcard") return { type: 8, data: { choices: await suggestForNewCard(scope, interaction) } };
+      if (interaction.data?.name === "additem") return { type: 8, data: { choices: await suggestForAddItem(scope, actor, interaction) } };
       const typed = interaction.data?.options?.find((o) => o.focused)?.value;
       return { type: 8, data: { choices: await suggestCards(scope, actor, typeof typed === "string" ? typed : "") } };
     }
@@ -1168,6 +1467,8 @@ export async function handleInteraction(interaction: Interaction): Promise<Inter
         }
         case "newcard":
           return send(await newCard(scope, actor, interaction));
+        case "additem":
+          return send(await addItemCommand(scope, actor, interaction));
         default:
           return send(problem("Forge doesn't know that command."));
       }
@@ -1184,16 +1485,21 @@ export async function handleInteraction(interaction: Interaction): Promise<Inter
       if (!match || !UUID.test(match[2]!)) return send(problem("That button no longer works. Run the command again."));
       const [, verb, id] = match as unknown as [string, string, string];
       if (verb === "open") return send(await cardReply(user.id, id));
+      if (verb === "list") return send(await checklistReply(user.id, id));
+      if (verb === "tick" || verb === "untick") return send(await tickItem(actor, id, verb === "tick"));
+      if (verb === "additems") return await addItemsModal(user.id, { checklistId: id });
+      if (verb === "newlist") return await addItemsModal(user.id, { cardId: id });
       if (verb === "changes") return await changesModal(user.id, id);
       if (verb.endsWith("!")) return send(await perform(actor, verb.slice(0, -1) as Verb, id));
       const pending = await pendingFor(user.id, verb as Verb, id);
       return send(await cardReply(user.id, pending.cardId, { pending }));
     }
     if (interaction.type === 5) {
-      const match = /^fg:changes!:([0-9a-f-]{36})$/.exec(interaction.data?.custom_id ?? "");
-      if (!match || !UUID.test(match[1]!)) return send(problem("That form no longer works. Run the command again."));
-      const input = interaction.data?.components?.flatMap((r) => r.components ?? []).find((c) => c.custom_id === "items")?.value ?? "";
-      return send(await submitChanges(actor, match[1]!, input.slice(0, 4000)));
+      const match = /^fg:(changes|additems|newlist)!:([0-9a-f-]{36})$/.exec(interaction.data?.custom_id ?? "");
+      if (!match || !UUID.test(match[2]!)) return send(problem("That form no longer works. Run the command again."));
+      if (match[1] === "additems") return send(await submitAddItems(actor, interaction, { checklistId: match[2]! }));
+      if (match[1] === "newlist") return send(await submitAddItems(actor, interaction, { cardId: match[2]! }));
+      return send(await submitChanges(actor, match[2]!, formValue(interaction, "items").slice(0, 4000)));
     }
     return send(problem("Forge doesn't handle that kind of interaction."));
   } catch (error) {

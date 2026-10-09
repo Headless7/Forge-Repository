@@ -19,6 +19,8 @@ export const viewport: Viewport = {
   themeColor: "#0c0d10",
   width: "device-width",
   initialScale: 1,
+  // The on-screen keyboard shrinks the layout (Android), so dialogs fit above it with their actions visible.
+  interactiveWidget: "resizes-content",
 };
 
 const SYSTEM_THEME_SCRIPT = `try{var m=window.matchMedia('(prefers-color-scheme: light)');document.documentElement.dataset.theme=m.matches?'light':'dark';}catch(e){}`;

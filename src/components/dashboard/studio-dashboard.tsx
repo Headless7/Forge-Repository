@@ -15,7 +15,7 @@ export function StudioDashboard() {
   const rows = useQuery({ queryKey: ["dashboard-studio", studio.id], queryFn: () => rpc("dashboard.studio", { studioId: studio.id }), staleTime: 30_000 });
   return (
     <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-5xl gap-4 px-4 py-6 md:px-8">
+      <div className="mx-auto grid max-w-5xl grid-cols-1 gap-4 px-4 py-6 md:px-8">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-0 flex-1">
             <p className="text-[12px] text-fg-subtle">{studio.name}</p>

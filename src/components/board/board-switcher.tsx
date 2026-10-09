@@ -175,7 +175,7 @@ export function CreateBoardDialog({ open, onOpenChange, board, studioSlug }: { o
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="Create board" description={`A new space in ${board.project.name}, with its own columns and cards. Members, labels and access stay the project's.`}>
-        <form onSubmit={submit} className="scrollbar-thin -mr-1 grid max-h-[min(70vh,calc(100dvh-160px))] gap-4 overflow-y-auto pr-1">
+        <form onSubmit={submit} className="grid gap-4">
           <div>
             <Label htmlFor="board-name">Name</Label>
             <Input id="board-name" autoFocus maxLength={60} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Update 7, Marketing, Bugs" aria-invalid={Boolean(error)} />

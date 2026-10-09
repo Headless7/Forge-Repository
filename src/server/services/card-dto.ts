@@ -199,6 +199,8 @@ export async function summarizeCards(
         cardId: checklistItems.cardId,
         total: sql<number>`count(*)`.mapWith(Number),
         done: sql<number>`count(*) filter (where ${checklistItems.isDone})`.mapWith(Number),
+        mine: sql<number>`count(*) filter (where not ${checklistItems.isDone} and ${checklistItems.assigneeId} = ${viewerId})`.mapWith(Number),
+        nextDue: sql<string | null>`to_char(min(${checklistItems.dueOn}) filter (where not ${checklistItems.isDone}), 'YYYY-MM-DD')`,
       })
       .from(checklistItems)
       .where(inArray(checklistItems.cardId, ids))
@@ -290,6 +292,8 @@ export async function summarizeCards(
           resolvedFeedback: c?.resolved ?? 0,
           checklistDone: k?.done ?? 0,
           checklistTotal: k?.total ?? 0,
+          checklistMine: k?.mine ?? 0,
+          checklistNextDue: k?.nextDue ?? null,
           versions: v?.total ?? 0,
         },
         hasVideo: Boolean(a?.hasVideo),
@@ -452,6 +456,8 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
         position: i.position,
         doneById: i.doneById,
         doneAt: i.doneAt?.toISOString() ?? null,
+        assigneeId: i.assigneeId,
+        dueOn: i.dueOn,
       })),
   }));
 
