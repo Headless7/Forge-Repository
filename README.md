@@ -6,7 +6,9 @@ to a card, reviewers leave feedback pinned to exact frames, pixels and moments, 
 every revision, decision and comment stays attached to the work it belongs to.
 
 - **Board first** — customisable categories (VFX, Animations, UI, Scripting…),
-  drag-and-drop cards and columns, visual (media-first) and compact card layouts.
+  drag-and-drop cards and columns, visual (media-first) and compact card layouts,
+  and a background per board (a preset or your own image). Drag the open board to
+  scroll sideways.
 - **Card covers** — a card's tile shows its current revision automatically, or an
   image/video someone chose (uploaded just for the cover or picked from the card's
   files). A chosen cover stays through new revisions and reviews; covers never create
@@ -15,7 +17,7 @@ every revision, decision and comment stays attached to the work it belongs to.
   view with *To-do → Completed → Published* stages. Each person's choice is
   remembered; filters, counts and quick-add work in both.
 - **Deliverables** — a card can hold several pieces of work (a model, a rig, an
-  animation, VFX, SFX…), each with its own owner, reviewer, due date, cover, files,
+  animation, VFX, SFX…), each with its own owner, reviewer, due date, cover, colour, files,
   revisions, review state and feedback. Simple cards stay simple: one implicit
   deliverable, no extra UI.
 - **Checklists** — each item can be given to one person and due on a day. People

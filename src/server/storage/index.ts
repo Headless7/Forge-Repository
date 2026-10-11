@@ -39,4 +39,9 @@ export function avatarKey(userId: string, version: string) {
   return `avatars/${userId}/${version}.webp`;
 }
 
+/** A board's uploaded background image (inside its project, so the project's cleanup covers it). */
+export function boardBackgroundKey(parts: { studioId: string; projectId: string; boardId: string; version: string }) {
+  return `studios/${parts.studioId}/projects/${parts.projectId}/boards/${parts.boardId}/background-${parts.version}.webp`;
+}
+
 export type { StorageDriver } from "./types";

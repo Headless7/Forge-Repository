@@ -54,6 +54,7 @@ import { Select } from "../ui/controls";
 import { ConfirmDialog, Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Textarea } from "../ui/input";
 import { DeliverableCoverControl } from "./cover-control";
+import { DeliverableColorPicker } from "./deliverable-color";
 import { DeliverableWork } from "./deliverable-work";
 import { useWorkspace } from "./workspace-context";
 
@@ -97,7 +98,11 @@ const DeliverableNodeView = memo(function DeliverableNodeView({ data }: NodeProp
     <div
       onDoubleClick={() => onOpen(d.id)}
       className={cn("flex h-full w-full flex-col rounded-lg border border-border-strong bg-surface-2 text-left shadow-md", attention, data.selected && "outline outline-2 outline-accent")}
-      style={{ borderLeft: `3px solid ${CARD_STATE_META[d.state].color}` }}
+      style={{
+        borderLeft: `3px solid ${CARD_STATE_META[d.state].color}`,
+        // Its own colour: a soft tint and a coloured top edge (the left edge stays the review state).
+        ...(d.color ? { borderTop: `3px solid ${d.color}`, backgroundColor: `color-mix(in oklab, ${d.color} 14%, var(--surface-2))` } : {}),
+      }}
     >
       {data.canEdit && data.selected
         ? CORNERS.map((position) => (
@@ -734,6 +739,9 @@ function Canvas({ deliverables, links, canEdit, actions, onOpen }: { deliverable
           {canEdit ? (
             <div className="mt-2">
               <DeliverableCoverControl key={selectedDeliverable.id} deliverable={selectedDeliverable} compact />
+              <div className="mt-1">
+                <DeliverableColorPicker deliverable={selectedDeliverable} compact />
+              </div>
             </div>
           ) : null}
           {canEdit ? (

@@ -2,7 +2,7 @@
 
 import { format } from "date-fns";
 import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Ellipsis, Link2, Lock, Plus, Users } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { CARD_STATE_META } from "@/lib/card-meta";
 import { roleHas } from "@/lib/permissions";
 import { useCardMutation } from "@/lib/queries";
@@ -16,7 +16,8 @@ import { ConfirmDialog } from "../ui/dialog";
 import { Input, Textarea } from "../ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip } from "../ui/menu";
 import { DeliverableCoverControl } from "./cover-control";
-import { AddDeliverableDialog } from "./deliverables-panel";
+import { DeliverableColorPicker } from "./deliverable-color";
+import { AddDeliverableDialog, useDeliverableTypes } from "./deliverables-panel";
 import { useScope, useWorkspace } from "./workspace-context";
 
 /** Where you are: card › deliverable, with the way back to the card overview. */
@@ -149,6 +150,9 @@ export function DeliverableHeader() {
   const [description, setDescription] = useState(d.description);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [addDependent, setAddDependent] = useState(false);
+  const types = useDeliverableTypes();
+  const typesListId = useId();
+  const saveType = (value: string) => value.trim() !== d.assetType && update.mutate({ deliverableId: d.id, assetType: value.trim() });
   useEffect(() => setName(d.name), [d.name]);
   useEffect(() => setDescription(d.description), [d.description]);
 
@@ -205,6 +209,10 @@ export function DeliverableHeader() {
           <span className="text-[11px] text-fg-subtle">Cover</span>
           <DeliverableCoverControl deliverable={d} />
         </div>
+        <div className="grid content-start gap-0.5">
+          <span className="text-[11px] text-fg-subtle">Colour</span>
+          <DeliverableColorPicker deliverable={d} />
+        </div>
         <label className="grid content-start gap-0.5">
           <span className="text-[11px] text-fg-subtle">Type</span>
           <Input
@@ -214,9 +222,21 @@ export function DeliverableHeader() {
             maxLength={40}
             placeholder="e.g. Animation"
             aria-label="Deliverable type"
+            list={typesListId}
             className="h-7 text-[12.5px]"
-            onBlur={(e) => e.target.value.trim() !== d.assetType && update.mutate({ deliverableId: d.id, assetType: e.target.value.trim() })}
+            onBlur={(e) => saveType(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+            // Picking a suggestion (not typing) saves straight away.
+            onInput={(e) => {
+              const inputType = (e.nativeEvent as InputEvent).inputType;
+              if (inputType === undefined || inputType === "insertReplacementText") saveType(e.currentTarget.value);
+            }}
           />
+          <datalist id={typesListId}>
+            {types.map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
         </label>
         <div className="grid gap-0.5">
           <span className="text-[11px] text-fg-subtle">Responsible</span>

@@ -288,6 +288,17 @@ export async function buildRobloxManifest(storageKey: string): Promise<Record<st
 }
 
 /** Square WebP avatar from an uploaded image buffer. */
+/** A board background: any common image, at most 2560×1600 (never enlarged), as WebP. */
+export async function renderBackground(buffer: Buffer): Promise<Buffer> {
+  const sniffed = sniffMedia(buffer);
+  if (!sniffed || sniffed.kind !== "IMAGE") throw invalid("Backgrounds must be PNG, JPG, WebP or GIF images.");
+  return sharp(buffer, { limitInputPixels: 8192 * 8192 })
+    .rotate()
+    .resize(2560, 1600, { fit: "inside", withoutEnlargement: true })
+    .webp({ quality: 80 })
+    .toBuffer();
+}
+
 export async function renderAvatar(buffer: Buffer): Promise<Buffer> {
   const sniffed = sniffMedia(buffer);
   if (!sniffed || sniffed.kind !== "IMAGE") throw invalid("Avatars must be PNG, JPG, WebP or GIF images.");

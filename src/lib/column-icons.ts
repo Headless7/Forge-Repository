@@ -44,6 +44,7 @@ export const ACCENT_COLORS = [
 
 export const LABEL_COLORS = ACCENT_COLORS;
 
+/** Board backgrounds: a project's default, or a board's own (see .board-bg-* in globals.css). */
 export const PROJECT_BACKGROUNDS = [
   { id: "default", label: "Graphite" },
   { id: "midnight", label: "Midnight" },
@@ -51,7 +52,19 @@ export const PROJECT_BACKGROUNDS = [
   { id: "forest", label: "Forest" },
   { id: "ember", label: "Ember" },
   { id: "ocean", label: "Deep ocean" },
+  { id: "aurora", label: "Aurora" },
+  { id: "sunset", label: "Sunset" },
+  { id: "lagoon", label: "Lagoon" },
+  { id: "moss", label: "Moss" },
+  { id: "grape", label: "Grape" },
+  { id: "crimson", label: "Crimson" },
+  { id: "sky", label: "Sky" },
+  { id: "peach", label: "Peach" },
 ] as const;
+
+export type BackgroundId = (typeof PROJECT_BACKGROUNDS)[number]["id"];
+export const BACKGROUND_IDS = PROJECT_BACKGROUNDS.map((b) => b.id) as [BackgroundId, ...BackgroundId[]];
+export const isBackgroundId = (value: string): value is BackgroundId => (BACKGROUND_IDS as string[]).includes(value);
 
 export const ROBLOX_TEMPLATE: Array<{ name: string; icon: ColumnIconName; color: string; mode: "VISUAL" | "COMPACT" }> = [
   { name: "VFX", icon: "sparkles", color: "#a78bfa", mode: "VISUAL" },

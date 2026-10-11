@@ -387,6 +387,13 @@ async function deleteTarget(tx: Executor, actor: Actor, scope: PurgeScope, bytes
     targetId: t.id,
     data: { name: scope.label, ...scope.counts, bytes },
   });
+  // Board background images aren't attachments: collect them before their boards go.
+  const backgrounds =
+    t.type === "project" || t.type === "board"
+      ? (await tx.select({ key: boards.backgroundImageKey }).from(boards).where(t.type === "project" ? eq(boards.projectId, t.id) : eq(boards.id, t.id)))
+          .map((r) => r.key)
+          .filter((key): key is string => Boolean(key))
+      : [];
   switch (t.type) {
     case "project":
       await tx.delete(cards).where(eq(cards.projectId, t.id));
@@ -423,7 +430,7 @@ async function deleteTarget(tx: Executor, actor: Actor, scope: PurgeScope, bytes
       break;
     }
   }
-  const units = [...new Set(scope.files.flatMap(storageUnits))];
+  const units = [...new Set([...scope.files.flatMap(storageUnits), ...backgrounds])];
   await enqueueStorageCleanup(tx, units, `${t.type} ${t.id} deleted`);
 }
 

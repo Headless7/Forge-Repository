@@ -654,6 +654,7 @@ export async function duplicateCardInTx(
         canvasY: d.canvasY,
         canvasW: d.canvasW,
         canvasH: d.canvasH,
+        color: d.color,
         position: d.position,
         createdById: actor.userId,
         createdAt,

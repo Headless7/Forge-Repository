@@ -32,6 +32,12 @@ const DeliverableCanvas = dynamic(() => import("./deliverable-canvas"), {
 const VIEW_KEY = "forge:deliverable-view";
 const TYPE_SUGGESTIONS = ["Model", "Rig", "Animation", "VFX", "Audio", "Texture", "UI", "Map", "Script", "Other"];
 
+/** Types to suggest for a deliverable: the ones this card already uses, then common ones. */
+export function useDeliverableTypes() {
+  const { deliverables } = useWorkspace();
+  return useMemo(() => [...new Set([...deliverables.map((d) => d.assetType).filter(Boolean), ...TYPE_SUGGESTIONS])], [deliverables]);
+}
+
 /** Where the overview shows deliverables — remembered per browser. */
 function useDeliverableView() {
   const [view, setView] = useState<"canvas" | "list">(() => {
@@ -70,7 +76,7 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
   }, [open, startWith]);
   const [description, setDescription] = useState("");
   const create = useCardMutation("deliverable.create", card.id, card.projectId);
-  const types = useMemo(() => [...new Set([...deliverables.map((d) => d.assetType).filter(Boolean), ...TYPE_SUGGESTIONS])], [deliverables]);
+  const types = useDeliverableTypes();
   const canAssign = card.permissions.canAssign;
   const reset = () => {
     setName("");
@@ -211,7 +217,10 @@ function DeliverableRow({ d, index, total, canEdit, onMove }: { d: DeliverableDT
   const KindIcon = kind ? KIND_ICONS[kind] : Layers;
   const blockedNames = d.blockedBy.map((id) => deliverables.find((x) => x.id === id)?.name ?? "?");
   return (
-    <li className="group flex items-center gap-2.5 rounded-lg border border-border bg-surface-2 px-2.5 py-2 hover:border-border-strong">
+    <li
+      className="group flex items-center gap-2.5 rounded-lg border border-border bg-surface-2 px-2.5 py-2 hover:border-border-strong"
+      style={d.color ? { boxShadow: `inset 3px 0 0 ${d.color}` } : undefined}
+    >
       <button type="button" onClick={() => openDeliverable(d.id)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left" aria-label={`Open ${d.name}`}>
         <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-surface-4">
           {d.cover?.thumbUrl ? <img src={d.cover.thumbUrl} alt="" className="h-full w-full object-cover" /> : <KindIcon className="size-4 text-fg-subtle" />}

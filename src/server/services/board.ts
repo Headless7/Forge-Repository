@@ -1,6 +1,6 @@
 import { and, asc, count, eq, inArray, isNotNull, isNull, max, ne, sql } from "drizzle-orm";
 import { isBoardIcon } from "@/lib/board-icons";
-import { ROBLOX_TEMPLATE } from "@/lib/column-icons";
+import { isBackgroundId, ROBLOX_TEMPLATE } from "@/lib/column-icons";
 import { permissionsFor, roleHas } from "@/lib/permissions";
 import { POSITION_GAP, positionBetween, resolveInsertIndex, spacedPositions } from "@/lib/positions";
 import type { BoardDTO, BoardSummaryDTO, BoardView, CardDisplayMode, ColumnDTO, LabelDTO, MilestoneDTO, ProjectDTO } from "@/lib/types";
@@ -9,6 +9,8 @@ import { db, type Executor } from "../db";
 import { boardColumns, boards, cards, labels, milestones, notifications, projects, userBoardPrefs } from "../db/schema";
 import { invalid, notFound } from "../errors";
 import { now } from "../clock";
+import { renderBackground } from "../media/process";
+import { boardBackgroundKey, storage } from "../storage";
 import { logActivity } from "./activity";
 import { summarizeCards } from "./card-dto";
 import type { Actor } from "./context";
@@ -162,6 +164,10 @@ async function buildBoard(access: ProjectAccess, boardRow: BoardRow): Promise<Bo
     members,
     labels: labelRows.map((l): LabelDTO => ({ id: l.id, name: l.name, color: l.color })),
     milestones: milestoneRows.map(milestoneToDTO),
+    background: {
+      preset: boardRow.background,
+      imageUrl: boardRow.backgroundImageKey ? await storage().signedUrl(boardRow.backgroundImageKey) : null,
+    },
     viewer: { userId: access.userId, role: access.role, permissions: permissionsFor(access.role) },
     prefs: { collapsedColumnIds: prefRows[0]?.collapsedColumnIds ?? [], view: prefRows[0]?.view ?? "CATEGORY" },
   };
@@ -359,6 +365,33 @@ export async function updateBoard(actor: Actor, input: { boardId: string; name?:
   });
   new Effects().project(access.project.id).flush(actor.clientId);
   return boardToDTO(updated);
+}
+
+/**
+ * A board's own background: one of the presets, or null to use the project's. Either way an
+ * uploaded image is removed (its file deleted).
+ */
+export async function setBoardBackground(actor: Actor, input: { boardId: string; background: string | null }) {
+  const { board, access } = await loadBoard(actor, input.boardId);
+  if (board.archivedAt) throw invalid("Restore the board before changing its background.");
+  if (input.background !== null && !isBackgroundId(input.background)) throw invalid("Unknown background.");
+  await db.update(boards).set({ background: input.background, backgroundImageKey: null }).where(eq(boards.id, board.id));
+  if (board.backgroundImageKey) await storage().delete(board.backgroundImageKey).catch(() => {});
+  new Effects().project(access.project.id).flush(actor.clientId);
+  return { ok: true };
+}
+
+/** Uploads an image as the board's background (shown instead of any preset), replacing an earlier one. */
+export async function setBoardBackgroundImage(actor: Actor, boardId: string, buffer: Buffer) {
+  const { board, access } = await loadBoard(actor, boardId);
+  if (board.archivedAt) throw invalid("Restore the board before changing its background.");
+  const image = await renderBackground(buffer);
+  const key = boardBackgroundKey({ studioId: access.studioId, projectId: access.project.id, boardId: board.id, version: Date.now().toString(36) });
+  await storage().put(key, image, "image/webp");
+  await db.update(boards).set({ backgroundImageKey: key }).where(eq(boards.id, board.id));
+  if (board.backgroundImageKey && board.backgroundImageKey !== key) await storage().delete(board.backgroundImageKey).catch(() => {});
+  new Effects().project(access.project.id).flush(actor.clientId);
+  return { imageUrl: await storage().signedUrl(key) };
 }
 
 export async function moveBoard(actor: Actor, input: { boardId: string; afterBoardId?: string | null; beforeBoardId?: string | null; index?: number | null }): Promise<BoardSummaryDTO> {

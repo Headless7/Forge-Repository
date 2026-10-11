@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, max, ne, or, sql } from "drizzle-orm";
 import { clampSize, DEFAULT_FROM_POINT, DEFAULT_TO_POINT, isValidPoint, NODE_DEFAULT, nodeSize, remapPoint } from "@/lib/canvas-points";
+import { ACCENT_COLORS } from "@/lib/column-icons";
 import { deliverableTeam, rollupState, wouldCreateCycle } from "@/lib/deliverables";
 import { roleHas } from "@/lib/permissions";
 import { positionBetween, POSITION_GAP } from "@/lib/positions";
@@ -265,6 +266,8 @@ export interface DeliverableInput {
   reviewerId?: string | null;
   startAt?: string | null;
   dueAt?: string | null;
+  /** Colour of its card (one of ACCENT_COLORS), or null for none. */
+  color?: string | null;
 }
 
 /** A deliverable's planned start must not be after its deadline (each its own, or the card's). */
@@ -399,6 +402,11 @@ export async function updateDeliverable(actor: Actor, input: DeliverableInput & 
   if (input.assetType !== undefined && input.assetType.trim() !== d.assetType) {
     patch.assetType = input.assetType.trim();
     changed.push("type");
+  }
+  if (input.color !== undefined && input.color !== d.color) {
+    if (input.color !== null && !(ACCENT_COLORS as readonly string[]).includes(input.color)) throw invalid("Choose one of the colours.");
+    patch.color = input.color;
+    changed.push("colour");
   }
   if (input.required !== undefined && input.required !== d.required) {
     patch.required = input.required;

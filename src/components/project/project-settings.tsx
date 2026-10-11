@@ -96,7 +96,8 @@ function General({ board, canEdit, studioSlug }: { board: BoardDTO; canEdit: boo
           </div>
         </div>
         <div>
-          <Label>Board background</Label>
+          <Label>Default board background</Label>
+          <p className="-mt-0.5 mb-1.5 text-[12px] text-fg-subtle">Boards use this unless they have their own — set from a board&apos;s menu (an image or a preset).</p>
           <div className="flex flex-wrap gap-2">
             {PROJECT_BACKGROUNDS.map((bg) => (
               <button

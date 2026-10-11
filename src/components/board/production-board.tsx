@@ -3,7 +3,8 @@
 import { DndContext, DragOverlay, useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CircleAlert, Info, Plus } from "lucide-react";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useDragScroll } from "@/hooks/use-drag-scroll";
 import { resolveDisplayMode } from "@/lib/card-meta";
 import { PRODUCTION_META } from "@/lib/deliverables";
 import type { CardSummaryDTO, ColumnDTO, ProductionStatus } from "@/lib/types";
@@ -152,6 +153,9 @@ export const ProductionBoard = memo(function ProductionBoard({
   onCreate: (columnId: string, title: string, open: boolean) => void;
 }) {
   const { board, cardsById, columnsById } = useBoard();
+  // Click-and-drag on the open board scrolls the stages sideways.
+  const scroller = useRef<HTMLDivElement>(null);
+  useDragScroll(scroller);
   const categories = useMemo(() => [...board.columns].sort((a, b) => a.position - b.position), [board.columns]);
 
   const derivedItems = useMemo(() => {
@@ -207,11 +211,11 @@ export const ProductionBoard = memo(function ProductionBoard({
         </div>
         <span className="hidden text-fg-subtle md:inline">Stages are independent of categories and review status. Completing needs every required deliverable approved.</span>
       </div>
-      <div className="scrollbar-thin min-h-0 flex-1 overflow-x-auto overflow-y-hidden max-md:snap-x max-md:snap-mandatory">
+      <div ref={scroller} className="scrollbar-thin min-h-0 flex-1 overflow-x-auto overflow-y-hidden max-md:snap-x max-md:snap-mandatory">
         <DndContext id={`production-${board.project.id}`} {...dndProps}>
-          <div className="flex h-full items-start gap-3 p-3 md:p-4">
+          <div data-pan-surface className="flex h-full items-start gap-3 p-3 md:p-4">
             {PRODUCTION_ORDER.map((stage) => (
-              <div key={stage} className="h-full max-md:snap-start">
+              <div key={stage} data-pan-surface className="h-full max-md:snap-start">
                 <StageColumn
                   stage={stage}
                   cardIds={items[stage] ?? []}

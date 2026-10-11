@@ -410,6 +410,8 @@ export interface BoardDTO {
   milestones: MilestoneDTO[];
   viewer: ViewerDTO;
   prefs: { collapsedColumnIds: string[]; view: BoardView };
+  /** This board's own background: a preset (null = the project's), or an uploaded image shown instead. */
+  background: { preset: string | null; imageUrl: string | null };
 }
 
 export interface AttachmentDTO {
@@ -584,6 +586,8 @@ export interface DeliverableDTO {
   coverMode: "AUTO" | "MANUAL" | "NONE";
   /** The chosen cover (MANUAL), whether or not it can be shown right now. */
   coverPinnedId: string | null;
+  /** Colour of its card (canvas tint and edge, list stripe); null = none. */
+  color: string | null;
   versionCount: number;
   /** Current revision has at least one uploaded file. */
   hasFiles: boolean;

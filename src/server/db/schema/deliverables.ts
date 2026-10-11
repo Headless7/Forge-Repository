@@ -59,6 +59,8 @@ export const deliverables = pgTable(
     coverMode: text({ enum: ["AUTO", "MANUAL", "NONE"] }).notNull().default("AUTO"),
     /** The chosen cover (MANUAL): one of its files, or an image or video uploaded just for this. */
     coverPinnedId: uuid().references((): AnyPgColumn => attachments.id, { onDelete: "set null" }),
+    /** Colour of its card on the canvas and in the list (one of lib/column-icons ACCENT_COLORS); null = none. */
+    color: text(),
     /** Position on the card's deliverable canvas. */
     canvasX: real().notNull().default(0),
     canvasY: real().notNull().default(0),

@@ -13,6 +13,8 @@
   color-scheme: dark;
   --bg: #0c0d10;
   --bg-board: #0a0b0e;
+  /* Over an uploaded board background, so columns and text stay readable. */
+  --board-image-dim: rgb(10 11 14 / 0.45);
   --surface: #121418;
   --surface-2: #181b20;
   --surface-3: #1f232a;
@@ -51,6 +53,7 @@
   color-scheme: light;
   --bg: #f4f5f7;
   --bg-board: #eceef2;
+  --board-image-dim: rgb(236 238 242 / 0.35);
   --surface: #ffffff;
   --surface-2: #ffffff;
   --surface-3: #f1f2f5;
@@ -233,6 +236,31 @@
 [data-theme="light"] .board-bg-forest { background: linear-gradient(180deg, #e2f0e8 0%, var(--bg-board) 60%); }
 [data-theme="light"] .board-bg-ember { background: linear-gradient(180deg, #f6e7e1 0%, var(--bg-board) 60%); }
 [data-theme="light"] .board-bg-ocean { background: linear-gradient(180deg, #e0eef3 0%, var(--bg-board) 60%); }
+/* Bolder presets: the same in both themes (columns keep their own surfaces on top). */
+.board-bg-aurora { background: linear-gradient(135deg, #3b2a7a 0%, #1f4f8a 52%, #0f6b6b 100%); }
+.board-bg-sunset { background: linear-gradient(135deg, #6d2346 0%, #a8472d 55%, #c08429 100%); }
+.board-bg-lagoon { background: linear-gradient(135deg, #0b4f6c 0%, #0f7a7a 60%, #2a9d8f 100%); }
+.board-bg-moss { background: linear-gradient(135deg, #1d3627 0%, #2f5d3a 60%, #52703a 100%); }
+.board-bg-grape { background: linear-gradient(135deg, #2e1748 0%, #5b2a72 100%); }
+.board-bg-crimson { background: linear-gradient(135deg, #3f0e1b 0%, #741c2c 100%); }
+.board-bg-sky { background: linear-gradient(135deg, #1d4ed8 0%, #0ea5e9 100%); }
+.board-bg-peach { background: linear-gradient(135deg, #ea580c 0%, #e11d48 100%); }
+
+/* Click-and-drag on the open board scrolls it (see useDragScroll): a grab cursor on empty space only. */
+@media (pointer: fine) {
+  [data-can-pan],
+  [data-can-pan] [data-pan-surface] {
+    cursor: grab;
+  }
+  [data-can-pan] [data-pan-surface] > :not([data-pan-surface]) {
+    cursor: auto;
+  }
+  [data-panning],
+  [data-panning] * {
+    cursor: grabbing !important;
+    user-select: none;
+  }
+}
 
 /* Controls revealed on hover stay visible where there's no hover (touch screens). */
 @media (hover: none) {

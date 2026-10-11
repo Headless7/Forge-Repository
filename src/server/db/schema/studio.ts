@@ -185,6 +185,10 @@ export const boards = pgTable(
     description: text().notNull().default(""),
     /** Lucide name from lib/board-icons; null = the default board icon. Independent of project/column icons. */
     icon: text(),
+    /** Background preset (lib/column-icons BACKGROUNDS); null = the project's background. */
+    background: text(),
+    /** An uploaded background image (storage key); shown instead of any preset. */
+    backgroundImageKey: text(),
     /** Order in the board switcher; the first board is the project's default. */
     position: doublePrecision().notNull().default(0),
     archivedAt: tsz(),

@@ -17,6 +17,7 @@ import { PRODUCTION_META } from "@/lib/deliverables";
 import { errorMessage, rpc, RpcError } from "@/lib/rpc-client";
 import type { BoardDTO, BoardView as BoardViewMode, CardDisplayMode, CardState, CardSummaryDTO, ColumnDTO, ProductionStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useDragScroll } from "@/hooks/use-drag-scroll";
 import { useHotkeys } from "@/hooks/use-hotkeys";
 import { CardModal } from "../card/card-modal";
 import type { OpenTarget } from "../schedule/schedule-utils";
@@ -626,6 +627,8 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
+  // Click-and-drag on the open board (not on a card or column) scrolls the columns sideways.
+  useDragScroll(scroller);
   useHotkeys(
     {
       c: (e) => {
@@ -663,7 +666,11 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
 
   return (
     <BoardContext.Provider value={boardValue}>
-      <div className={cn("flex h-full flex-col", `board-bg-${board.project.background}`)}>
+      <div
+        className={cn("flex h-full flex-col", `board-bg-${board.background?.preset ?? board.project.background}`)}
+        // An uploaded image wins over the presets, dimmed so columns and text stay readable.
+        style={board.background?.imageUrl ? { backgroundImage: `linear-gradient(var(--board-image-dim), var(--board-image-dim)), url("${board.background.imageUrl}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
+      >
         <BoardHeader
           board={board}
           studioSlug={studioSlug}
@@ -791,9 +798,9 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
           ) : (
             <DndContext id={`board-${boardId}`} {...dndProps}>
               <SortableContext items={columnOrder} strategy={horizontalListSortingStrategy}>
-                <div className="flex h-full items-start gap-3 p-3 md:p-4">
+                <div data-pan-surface className="flex h-full items-start gap-3 p-3 md:p-4">
                   {columns.map((column) => (
-                    <div key={column.id} className="h-full max-md:snap-start">
+                    <div key={column.id} data-pan-surface className="h-full max-md:snap-start">
                       <BoardColumn
                         column={column}
                         cardIds={items[column.id] ?? []}

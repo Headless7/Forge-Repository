@@ -4,6 +4,7 @@
  * validated input onto them. The client imports `AppRouter` as a type only.
  */
 import { z } from "zod";
+import { BACKGROUND_IDS } from "@/lib/column-icons";
 import type { DashboardListKey } from "@/lib/types";
 import {
   annotationSchema,
@@ -99,6 +100,10 @@ export const appRouter = {
   "board.update": proc({
     input: z.object({ boardId: idSchema, name: boardNameSchema.optional(), description: text(2000).optional(), icon: z.enum(BOARD_ICONS).nullable().optional() }),
     handler: ({ actor }, i) => board.updateBoard(actor, i),
+  }),
+  "board.setBackground": proc({
+    input: z.object({ boardId: idSchema, background: z.enum(BACKGROUND_IDS).nullable() }),
+    handler: ({ actor }, i) => board.setBoardBackground(actor, i),
   }),
   "board.move": proc({
     input: z.object({
@@ -333,6 +338,7 @@ export const appRouter = {
       reviewerId: idSchema.nullable().optional(),
       startAt: isoDateSchema.nullable().optional(),
       dueAt: isoDateSchema.nullable().optional(),
+      color: z.string().max(20).nullable().optional(),
     }),
     handler: ({ actor }, i) => deliverables.updateDeliverable(actor, i),
   }),
@@ -651,7 +657,7 @@ export const appRouter = {
       description: text(2000).optional(),
       icon: emojiSchema.optional(),
       color: colorSchema.optional(),
-      background: z.enum(["default", "midnight", "violet", "forest", "ember", "ocean"]).optional(),
+      background: z.enum(BACKGROUND_IDS).optional(),
       defaultCardMode: displayModeSchema.optional(),
       visibility: z.enum(["STUDIO", "PRIVATE"]).optional(),
       settings: z

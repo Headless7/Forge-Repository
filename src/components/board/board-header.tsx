@@ -7,6 +7,7 @@ import {
   ChartGantt,
   ChevronDown,
   Gauge,
+  ImageIcon,
   LayoutGrid,
   PencilLine,
   CircleAlert,
@@ -54,6 +55,7 @@ import {
 } from "../ui/menu";
 import { useMenuPopover } from "@/hooks/use-menu-popover";
 import { BoardIcon } from "../domain/board-icon";
+import { BoardBackgroundDialog } from "./board-background-dialog";
 import { BoardIconPicker, BoardSwitcher, CreateBoardDialog, EditBoardDialog, useBoardIcon } from "./board-switcher";
 import { FilterPopover } from "./filter-popover";
 import { countMyWork, type BoardFilters } from "./filters";
@@ -252,6 +254,7 @@ export function BoardHeader({
   const iconPicker = useMenuPopover();
   const changeIcon = useBoardIcon(board);
   const [creatingBoard, setCreatingBoard] = useState(false);
+  const [backgroundOpen, setBackgroundOpen] = useState(false);
   const [archivingBoard, setArchivingBoard] = useState(false);
   const archiveBoard = useRpcMutation("board.archive", {
     onSuccess: () => {
@@ -407,6 +410,9 @@ export function BoardHeader({
                 <DropdownMenuItem onSelect={iconPicker.request}>
                   <BoardIcon name={board.board.icon} /> Change icon
                 </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setBackgroundOpen(true)}>
+                  <ImageIcon /> Background…
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setCreatingBoard(true)}>
                   <LayoutGrid /> Create board
                 </DropdownMenuItem>
@@ -461,6 +467,7 @@ export function BoardHeader({
       </div>
       <EditBoardDialog open={editingBoard} onOpenChange={setEditingBoard} board={board} returnFocusRef={iconPicker.triggerRef} />
       <CreateBoardDialog open={creatingBoard} onOpenChange={setCreatingBoard} board={board} studioSlug={studioSlug} />
+      {canManageBoards ? <BoardBackgroundDialog open={backgroundOpen} onOpenChange={setBackgroundOpen} board={board} /> : null}
       <ConfirmDialog
         open={archivingBoard}
         onOpenChange={setArchivingBoard}
