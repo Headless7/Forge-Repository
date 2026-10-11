@@ -6,6 +6,14 @@ import type { ComponentProps, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "./button";
 
+/**
+ * Clicking a toast (e.g. its Undo) while a dialog is open isn't a click "outside": the dialog stays.
+ * Pass to Radix's onInteractOutside, before any handler of the caller's own.
+ */
+export function keepOpenForToasts(event: { target: EventTarget | null; preventDefault: () => void }) {
+  if (event.target instanceof Element && event.target.closest("[data-sonner-toaster]")) event.preventDefault();
+}
+
 export const Dialog = D.Root;
 export const DialogTrigger = D.Trigger;
 export const DialogClose = D.Close;
@@ -31,6 +39,7 @@ export function DialogContent({
   description,
   size = "md",
   hideTitle,
+  onInteractOutside,
   ...props
 }: ComponentProps<typeof D.Content> & { title: ReactNode; description?: ReactNode; size?: keyof typeof sizes; hideTitle?: boolean }) {
   return (
@@ -44,6 +53,10 @@ export function DialogContent({
           className,
         )}
         {...props}
+        onInteractOutside={(e) => {
+          keepOpenForToasts(e);
+          onInteractOutside?.(e);
+        }}
       >
         <div className="flex shrink-0 items-start justify-between gap-4 px-5 pt-4">
           {hideTitle ? (
@@ -80,6 +93,7 @@ export function SheetContent({
   className,
   children,
   title,
+  onInteractOutside,
   ...props
 }: ComponentProps<typeof D.Content> & { side?: "left" | "right"; title: string }) {
   return (
@@ -92,6 +106,10 @@ export function SheetContent({
           className,
         )}
         {...props}
+        onInteractOutside={(e) => {
+          keepOpenForToasts(e);
+          onInteractOutside?.(e);
+        }}
       >
         <VisuallyHidden.Root>
           <D.Title>{title}</D.Title>

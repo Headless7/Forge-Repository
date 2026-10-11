@@ -195,6 +195,7 @@ function ChecklistBlock({ list }: { list: ChecklistDTO }) {
                 {editingId === item.id ? (
                   <input
                     autoFocus
+                    data-inline-edit
                     value={editText}
                     onChange={(e) => setEditText(e.target.value)}
                     onBlur={() => {
@@ -241,6 +242,7 @@ function ChecklistBlock({ list }: { list: ChecklistDTO }) {
           <div className="mt-1 flex gap-1.5">
             <input
               autoFocus
+              data-inline-edit
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {

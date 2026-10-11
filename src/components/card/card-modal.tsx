@@ -18,7 +18,7 @@ import type { VideoPlayerHandle } from "../media/video-player";
 import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
 import { Kbd, Skeleton } from "../ui/controls";
-import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
+import { Dialog, DialogContent, DialogFooter, keepOpenForToasts } from "../ui/dialog";
 import { Tooltip } from "../ui/menu";
 import { useUploads } from "../upload/upload-manager";
 import { CardSidebar } from "./card-sidebar";
@@ -53,6 +53,7 @@ function TitleEditor({ card }: { card: CardDetailDTO }) {
       rows={1}
       maxLength={200}
       aria-label="Card title"
+      data-inline-edit
       onChange={(e) => setValue(e.target.value.replace(/\n/g, ""))}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -561,7 +562,13 @@ export function CardModal({
             else toast.error("You don't have permission to upload here.");
           }}
           onOpenAutoFocus={(e) => e.preventDefault()}
+          onInteractOutside={keepOpenForToasts}
           onEscapeKeyDown={(e) => {
+            // Esc in an inline edit (a name being changed) cancels just that edit.
+            if (e.target instanceof Element && e.target.closest("[data-inline-edit]")) {
+              e.preventDefault();
+              return;
+            }
             // Esc steps back from a deliverable to the card overview before closing.
             if (mode === "deliverable" && !isTypingTarget(e.target)) {
               e.preventDefault();

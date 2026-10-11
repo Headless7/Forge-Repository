@@ -494,6 +494,8 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
         createdAt: d.createdAt.toISOString(),
         archivedAt: d.archivedAt?.toISOString() ?? null,
         cover: await mediaRef(d.coverAttachmentId ? attachmentById.get(d.coverAttachmentId) : undefined),
+        coverMode: d.coverMode,
+        coverPinnedId: d.coverPinnedId,
         versionCount: f.versionCount,
         hasFiles: f.hasFiles,
         kinds: [...new Set(currentFiles.map((a) => a.kind))].filter((k) => PREVIEWABLE.has(k) || k === "FILE"),

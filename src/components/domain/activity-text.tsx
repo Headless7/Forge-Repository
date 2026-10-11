@@ -59,6 +59,10 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
       return <>attached {s(d.filename)}</>;
     case "card.cover_changed":
       return d.mode === "AUTO" ? <>set the cover back to automatic</> : d.mode === "NONE" ? <>removed the cover</> : <>set the cover to {s(d.filename)}</>;
+    case "deliverable.cover_changed": {
+      const of = <strong className="font-medium text-fg">{s(d.deliverable)}</strong>;
+      return d.mode === "AUTO" ? <>set the cover of {of} back to automatic</> : d.mode === "NONE" ? <>removed the cover of {of}</> : <>set the cover of {of} to {s(d.filename)}</>;
+    }
     case "review.submitted":
       return <>submitted {it}{v(d)} for review</>;
     case "review.approved":

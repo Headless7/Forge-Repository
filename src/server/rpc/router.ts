@@ -316,6 +316,7 @@ export const appRouter = {
       canvasX: z.number().finite().min(-100_000).max(100_000).optional(),
       canvasY: z.number().finite().min(-100_000).max(100_000).optional(),
       linkFrom: z.object({ id: idSchema, type: z.enum(["DEPENDENCY", "ASSOCIATION"]) }).nullable().optional(),
+      requires: z.array(idSchema).max(50).optional(),
     }),
     limit: { max: 120, windowMs: 60_000 },
     handler: ({ actor }, i) => deliverables.createDeliverable(actor, i),
@@ -338,6 +339,14 @@ export const appRouter = {
   "deliverable.archive": proc({
     input: z.object({ deliverableId: idSchema, archived: z.boolean() }),
     handler: ({ actor }, i) => deliverables.setDeliverableArchived(actor, i),
+  }),
+  "deliverable.setCover": proc({
+    input: z.object({ deliverableId: idSchema, attachmentId: idSchema }),
+    handler: ({ actor }, i) => media.setDeliverableCover(actor, i),
+  }),
+  "deliverable.setCoverMode": proc({
+    input: z.object({ deliverableId: idSchema, mode: z.enum(["AUTO", "NONE"]) }),
+    handler: ({ actor }, i) => media.setDeliverableCoverMode(actor, i),
   }),
   "deliverable.layout": proc({
     input: z.object({

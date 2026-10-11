@@ -127,9 +127,17 @@ async function assertUploadAllowed(
     return { ctx, deliverableId: null };
   }
   if (input.purpose === "cover") {
-    // Changing the cover is a card edit; the file belongs to no deliverable or revision.
+    // Changing a cover is a card edit; the file belongs to no revision — and to the deliverable
+    // whose cover it is, if any (else it's the card's).
     assertCard(ctx.perms, "canEdit", "You don't have permission to change this card's cover.");
-    return { ctx, deliverableId: null };
+    if (!input.deliverableId) return { ctx, deliverableId: null };
+    const [d] = await ex
+      .select({ id: deliverables.id, archivedAt: deliverables.archivedAt })
+      .from(deliverables)
+      .where(and(eq(deliverables.id, input.deliverableId), eq(deliverables.cardId, ctx.card.id)));
+    if (!d) throw notFound("Deliverable");
+    if (d.archivedAt) throw conflict("This deliverable is archived. Restore it to change its cover.");
+    return { ctx, deliverableId: d.id };
   }
   let deliverableId = input.deliverableId ?? null;
   if (input.purpose === "version") {
@@ -365,7 +373,8 @@ export async function completeUpload(
     } else if (attachment.purpose === "COVER") {
       // Uploaded to be the cover: becomes it now (no revision, no review state change).
       if (!(COVER_KINDS as readonly string[]).includes(row!.kind)) throw invalid("A cover must be an image or a video.");
-      await pinCover(tx, ctx, row!.id, actor.userId);
+      if (row!.deliverableId) await pinDeliverableCover(tx, ctx, row!.deliverableId, row!.id, actor.userId);
+      else await pinCover(tx, ctx, row!.id, actor.userId);
     } else if (attachment.purpose === "CARD") {
       await logActivity(tx, {
         studioId: ctx.access.studioId,
@@ -460,13 +469,24 @@ export async function restoreAttachment(actor: Actor, input: { attachmentId: str
 
 // ── Card covers ─────────────────────────────────────────────────────────────
 
-/** A cover upload that is no longer the cover has no other use: archive it (the stored file stays). */
-async function retireCoverUpload(tx: Executor, cardId: string, attachmentId: string | null, keep: string | null) {
+/**
+ * A cover upload that is no longer the cover has no other use: archive it (the stored file stays).
+ * `deliverableId` says whose cover it was (null: the card's) — one never retires the other's.
+ */
+async function retireCoverUpload(tx: Executor, cardId: string, attachmentId: string | null, keep: string | null, deliverableId: string | null = null) {
   if (!attachmentId || attachmentId === keep) return;
   await tx
     .update(attachments)
     .set({ archivedAt: now() })
-    .where(and(eq(attachments.id, attachmentId), eq(attachments.cardId, cardId), eq(attachments.purpose, "COVER"), isNull(attachments.archivedAt)));
+    .where(
+      and(
+        eq(attachments.id, attachmentId),
+        eq(attachments.cardId, cardId),
+        eq(attachments.purpose, "COVER"),
+        deliverableId ? eq(attachments.deliverableId, deliverableId) : isNull(attachments.deliverableId),
+        isNull(attachments.archivedAt),
+      ),
+    );
 }
 
 /** Makes an attachment the card's chosen cover (inside the caller's transaction). */
@@ -498,8 +518,9 @@ export async function setCover(actor: Actor, input: { cardId: string; attachment
     .select()
     .from(attachments)
     .where(and(eq(attachments.id, input.attachmentId), eq(attachments.cardId, ctx.card.id), isNull(attachments.archivedAt)));
-  // Files on other cards (even ones the actor can see) are "not found" here, never borrowed.
-  if (!attachment || !["CARD", "VERSION", "COVER"].includes(attachment.purpose)) throw notFound("File");
+  // Files on other cards (even ones the actor can see) are "not found" here, never borrowed; nor is
+  // an image uploaded as a deliverable's cover (that deliverable may replace it any time).
+  if (!attachment || !["CARD", "VERSION", "COVER"].includes(attachment.purpose) || (attachment.purpose === "COVER" && attachment.deliverableId)) throw notFound("File");
   if (!(COVER_KINDS as readonly string[]).includes(attachment.kind)) throw invalid("Only an image or a video can be the cover.");
   if (attachment.status === "FAILED" || attachment.status === "PENDING") throw conflict("That file hasn't finished uploading, so it can't be the cover yet.");
   await db.transaction(async (tx) => {
@@ -520,6 +541,79 @@ export async function setCoverMode(actor: Actor, input: { cardId: string; mode: 
     await tx.update(cards).set({ coverMode: input.mode, coverPinnedId: null }).where(eq(cards.id, ctx.card.id));
     await recomputeCardRollup(tx, ctx.card.id);
     await logActivity(tx, { studioId: ctx.access.studioId, projectId: ctx.card.projectId, cardId: ctx.card.id, actorId: actor.userId, type: "card.cover_changed", data: { mode: input.mode } });
+    await touchCard(tx, ctx.card.id, actor.userId);
+  });
+  new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
+  return { ok: true };
+}
+
+// ── Deliverable covers ──────────────────────────────────────────────────────
+
+/** Makes an image or video the deliverable's chosen cover (inside the caller's transaction). */
+async function pinDeliverableCover(tx: Executor, ctx: CardAccess, deliverableId: string, attachmentId: string, actorId: string) {
+  const [d] = await tx.select({ name: deliverables.name, pinned: deliverables.coverPinnedId }).from(deliverables).where(eq(deliverables.id, deliverableId));
+  if (!d) throw notFound("Deliverable");
+  await retireCoverUpload(tx, ctx.card.id, d.pinned, attachmentId, deliverableId);
+  await tx.update(deliverables).set({ coverMode: "MANUAL", coverPinnedId: attachmentId }).where(eq(deliverables.id, deliverableId));
+  await recomputeDeliverableCover(tx, deliverableId);
+  // The card's automatic cover follows its first deliverable's cover.
+  await recomputeCardRollup(tx, ctx.card.id);
+  const [file] = await tx.select({ filename: attachments.filename }).from(attachments).where(eq(attachments.id, attachmentId));
+  await logActivity(tx, {
+    studioId: ctx.access.studioId,
+    projectId: ctx.card.projectId,
+    cardId: ctx.card.id,
+    actorId,
+    type: "deliverable.cover_changed",
+    data: { deliverableId, deliverable: d.name, mode: "MANUAL", filename: file?.filename ?? "" },
+  });
+}
+
+async function editableDeliverable(actor: Actor, deliverableId: string) {
+  const ctx = await requireDeliverable(actor.userId, deliverableId);
+  assertCard(ctx.perms, "canEdit", "You don't have permission to change this deliverable's cover.");
+  if (ctx.deliverable.archivedAt) throw conflict("This deliverable is archived. Restore it to change its cover.");
+  return ctx;
+}
+
+/**
+ * Uses one of the deliverable's own images or videos (from any of its revisions, or an earlier
+ * cover upload) as its cover. It stays through new revisions and reviews until someone changes it.
+ */
+export async function setDeliverableCover(actor: Actor, input: { deliverableId: string; attachmentId: string }) {
+  const ctx = await editableDeliverable(actor, input.deliverableId);
+  const [attachment] = await db
+    .select()
+    .from(attachments)
+    .where(and(eq(attachments.id, input.attachmentId), eq(attachments.deliverableId, ctx.deliverable.id), isNull(attachments.archivedAt)));
+  // Another deliverable's or card's files are "not found" here, never borrowed.
+  if (!attachment || !["VERSION", "COVER"].includes(attachment.purpose)) throw notFound("File");
+  if (!(COVER_KINDS as readonly string[]).includes(attachment.kind)) throw invalid("Only an image or a video can be the cover.");
+  if (attachment.status === "FAILED" || attachment.status === "PENDING") throw conflict("That file hasn't finished uploading, so it can't be the cover yet.");
+  await db.transaction(async (tx) => {
+    await pinDeliverableCover(tx, ctx, ctx.deliverable.id, attachment.id, actor.userId);
+    await touchCard(tx, ctx.card.id, actor.userId);
+  });
+  new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
+  return { ok: true };
+}
+
+/** AUTO: back to its current file. NONE: no cover. */
+export async function setDeliverableCoverMode(actor: Actor, input: { deliverableId: string; mode: "AUTO" | "NONE" }) {
+  const ctx = await editableDeliverable(actor, input.deliverableId);
+  await db.transaction(async (tx) => {
+    await retireCoverUpload(tx, ctx.card.id, ctx.deliverable.coverPinnedId, null, ctx.deliverable.id);
+    await tx.update(deliverables).set({ coverMode: input.mode, coverPinnedId: null }).where(eq(deliverables.id, ctx.deliverable.id));
+    await recomputeDeliverableCover(tx, ctx.deliverable.id);
+    await recomputeCardRollup(tx, ctx.card.id);
+    await logActivity(tx, {
+      studioId: ctx.access.studioId,
+      projectId: ctx.card.projectId,
+      cardId: ctx.card.id,
+      actorId: actor.userId,
+      type: "deliverable.cover_changed",
+      data: { deliverableId: ctx.deliverable.id, deliverable: ctx.deliverable.name, mode: input.mode },
+    });
     await touchCard(tx, ctx.card.id, actor.userId);
   });
   new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);

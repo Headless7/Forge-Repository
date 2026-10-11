@@ -53,7 +53,12 @@ export const deliverables = pgTable(
     currentVersionId: uuid().references((): AnyPgColumn => assetVersions.id, { onDelete: "set null" }),
     /** Most recent approved revision — kept when newer, unapproved revisions arrive. */
     approvedVersionId: uuid().references((): AnyPgColumn => assetVersions.id, { onDelete: "set null" }),
+    /** The media shown for it (derived from coverMode — see recomputeDeliverableCover). */
     coverAttachmentId: uuid().references((): AnyPgColumn => attachments.id, { onDelete: "set null" }),
+    /** AUTO: its current file. MANUAL: coverPinnedId (falls back to AUTO while unusable). NONE: no cover. */
+    coverMode: text({ enum: ["AUTO", "MANUAL", "NONE"] }).notNull().default("AUTO"),
+    /** The chosen cover (MANUAL): one of its files, or an image or video uploaded just for this. */
+    coverPinnedId: uuid().references((): AnyPgColumn => attachments.id, { onDelete: "set null" }),
     /** Position on the card's deliverable canvas. */
     canvasX: real().notNull().default(0),
     canvasY: real().notNull().default(0),

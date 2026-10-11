@@ -24,10 +24,39 @@ export const COVER_KINDS = ["IMAGE", "VIDEO"] as const;
 
 // ── Derived state ───────────────────────────────────────────────────────────
 
-/** The file shown for a deliverable: first previewable file of its current revision, else its newest. */
+/**
+ * The file shown for a deliverable, by its coverMode. AUTO: the first previewable file of its
+ * current revision, else its newest. MANUAL: the chosen image or video while it's usable (still
+ * its own, not removed, not failed), else AUTO. NONE: nothing.
+ */
 export async function recomputeDeliverableCover(tx: Executor, deliverableId: string) {
-  const [d] = await tx.select({ currentVersionId: deliverables.currentVersionId }).from(deliverables).where(eq(deliverables.id, deliverableId));
+  const [d] = await tx
+    .select({ currentVersionId: deliverables.currentVersionId, coverMode: deliverables.coverMode, coverPinnedId: deliverables.coverPinnedId })
+    .from(deliverables)
+    .where(eq(deliverables.id, deliverableId));
   if (!d) return;
+  if (d.coverMode === "NONE") {
+    await tx.update(deliverables).set({ coverAttachmentId: null }).where(eq(deliverables.id, deliverableId));
+    return;
+  }
+  if (d.coverMode === "MANUAL" && d.coverPinnedId) {
+    const [pinned] = await tx
+      .select({ id: attachments.id })
+      .from(attachments)
+      .where(
+        and(
+          eq(attachments.id, d.coverPinnedId),
+          eq(attachments.deliverableId, deliverableId),
+          isNull(attachments.archivedAt),
+          inArray(attachments.kind, [...COVER_KINDS]),
+          inArray(attachments.status, ["READY", "PROCESSING"]),
+        ),
+      );
+    if (pinned) {
+      await tx.update(deliverables).set({ coverAttachmentId: pinned.id }).where(eq(deliverables.id, deliverableId));
+      return;
+    }
+  }
   const base = and(
     eq(attachments.deliverableId, deliverableId),
     eq(attachments.purpose, "VERSION"),
@@ -247,12 +276,22 @@ function assertDates(card: { startAt: Date | null; dueAt: Date | null }, own: { 
 
 export async function createDeliverable(
   actor: Actor,
-  input: DeliverableInput & { cardId: string; name: string; canvasX?: number; canvasY?: number; linkFrom?: { id: string; type: DeliverableLinkType } | null },
+  input: DeliverableInput & {
+    cardId: string;
+    name: string;
+    canvasX?: number;
+    canvasY?: number;
+    linkFrom?: { id: string; type: DeliverableLinkType } | null;
+    /** Deliverables on this card the new one requires (it's blocked until they're approved). */
+    requires?: string[];
+  },
 ): Promise<CardDetailDTO> {
   const ctx = await requireCard(actor.userId, input.cardId);
   assertCard(ctx.perms, "canEdit", "You don't have permission to add deliverables to this card.");
   const name = input.name.trim();
   if (!name) throw invalid("Give the deliverable a name.");
+  // A dependency given as linkFrom is just one more prerequisite.
+  const requires = [...new Set([...(input.requires ?? []), ...(input.linkFrom?.type === "DEPENDENCY" ? [input.linkFrom.id] : [])])];
   assertDates(ctx.card, { startAt: input.startAt ? new Date(input.startAt) : null, dueAt: input.dueAt ? new Date(input.dueAt) : null });
   const contributorIds = [...new Set(input.contributorIds ?? [])].filter((id) => id !== input.ownerId);
   const fx = new Effects();
@@ -289,12 +328,24 @@ export async function createDeliverable(
         createdAt: now(),
       })
       .returning();
-    if (input.linkFrom) {
+    // Prerequisites: active deliverables on this card. A brand-new deliverable can't close a loop
+    // (nothing depends on it yet), so no cycle check is needed.
+    if (requires.length) {
+      const found = await tx
+        .select({ id: deliverables.id, archivedAt: deliverables.archivedAt })
+        .from(deliverables)
+        .where(and(eq(deliverables.cardId, ctx.card.id), inArray(deliverables.id, requires)));
+      if (found.length !== requires.length) throw notFound("Deliverable");
+      if (found.some((f) => f.archivedAt)) throw conflict("Archived deliverables can't be connected.");
+      await tx.insert(deliverableLinks).values(requires.map((fromId) => ({ cardId: ctx.card.id, fromId, toId: row!.id, type: "DEPENDENCY" as const, createdById: actor.userId })));
+    }
+    if (input.linkFrom && input.linkFrom.type !== "DEPENDENCY") {
       const [source] = await tx
-        .select({ id: deliverables.id })
+        .select({ id: deliverables.id, archivedAt: deliverables.archivedAt })
         .from(deliverables)
         .where(and(eq(deliverables.id, input.linkFrom.id), eq(deliverables.cardId, ctx.card.id)));
       if (!source) throw notFound("Deliverable");
+      if (source.archivedAt) throw conflict("Archived deliverables can't be connected.");
       await tx.insert(deliverableLinks).values({ cardId: ctx.card.id, fromId: source.id, toId: row!.id, type: input.linkFrom.type, createdById: actor.userId });
     }
     await setContributors(tx, row!.id, contributorIds, actor.userId);

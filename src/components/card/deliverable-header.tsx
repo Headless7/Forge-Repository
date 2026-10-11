@@ -15,6 +15,7 @@ import { Checkbox, Select } from "../ui/controls";
 import { ConfirmDialog } from "../ui/dialog";
 import { Input, Textarea } from "../ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip } from "../ui/menu";
+import { DeliverableCoverControl } from "./cover-control";
 import { AddDeliverableDialog } from "./deliverables-panel";
 import { useScope, useWorkspace } from "./workspace-context";
 
@@ -200,7 +201,11 @@ export function DeliverableHeader() {
       </div>
 
       <div className="grid gap-2 rounded-xl border border-border bg-surface-2 p-2.5 text-[12.5px] sm:grid-cols-2 xl:grid-cols-3">
-        <label className="grid gap-0.5">
+        <div className="grid content-start gap-0.5">
+          <span className="text-[11px] text-fg-subtle">Cover</span>
+          <DeliverableCoverControl deliverable={d} />
+        </div>
+        <label className="grid content-start gap-0.5">
           <span className="text-[11px] text-fg-subtle">Type</span>
           <Input
             key={d.assetType}

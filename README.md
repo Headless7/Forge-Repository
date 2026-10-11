@@ -15,7 +15,7 @@ every revision, decision and comment stays attached to the work it belongs to.
   view with *To-do → Completed → Published* stages. Each person's choice is
   remembered; filters, counts and quick-add work in both.
 - **Deliverables** — a card can hold several pieces of work (a model, a rig, an
-  animation, VFX, SFX…), each with its own owner, reviewer, due date, files,
+  animation, VFX, SFX…), each with its own owner, reviewer, due date, cover, files,
   revisions, review state and feedback. Simple cards stay simple: one implicit
   deliverable, no extra UI.
 - **Checklists** — each item can be given to one person and due on a day. People

@@ -43,7 +43,8 @@ export function Providers({ children, theme }: { children: ReactNode; theme: "da
           closeButton
           toastOptions={{
             classNames: {
-              toast: "!bg-surface-2 !border-border-strong !text-fg !shadow-lg",
+              // An open dialog or card turns pointer events off outside itself; toasts (and their Undo) stay clickable.
+              toast: "!pointer-events-auto !bg-surface-2 !border-border-strong !text-fg !shadow-lg",
               description: "!text-fg-muted",
             },
           }}

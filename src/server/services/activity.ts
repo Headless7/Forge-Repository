@@ -28,6 +28,7 @@ export type ActivityType =
   | "card.description_changed"
   | "card.state_changed"
   | "card.cover_changed"
+  | "deliverable.cover_changed"
   | "version.uploaded"
   | "attachment.added"
   | "review.submitted"

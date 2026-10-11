@@ -3,7 +3,7 @@
 import { Check, Film, ImageOff, ImagePlus, Images, Loader2, RotateCcw, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { useCardMutation } from "@/lib/queries";
-import type { AttachmentDTO } from "@/lib/types";
+import type { AttachmentDTO, DeliverableDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/menu";
@@ -13,9 +13,55 @@ import { useWorkspace } from "./workspace-context";
 
 const COVER_FILE_TYPES = "image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime";
 
-/** Images and videos on this card that can be the cover. */
+const coverable = (a: AttachmentDTO) => (a.kind === "IMAGE" || a.kind === "VIDEO") && (a.status === "READY" || a.status === "PROCESSING");
+
+/** Images and videos on this card that can be its cover (not ones uploaded as a deliverable's cover). */
 function coverChoices(attachments: AttachmentDTO[]) {
-  return attachments.filter((a) => (a.kind === "IMAGE" || a.kind === "VIDEO") && ["CARD", "VERSION", "COVER"].includes(a.purpose) && (a.status === "READY" || a.status === "PROCESSING"));
+  return attachments.filter((a) => coverable(a) && ["CARD", "VERSION", "COVER"].includes(a.purpose) && !(a.purpose === "COVER" && a.deliverableId));
+}
+
+/** A deliverable's own images and videos: from any of its revisions, or uploaded as its cover. */
+function deliverableCoverChoices(attachments: AttachmentDTO[], deliverableId: string) {
+  return attachments.filter((a) => coverable(a) && a.deliverableId === deliverableId && ["VERSION", "COVER"].includes(a.purpose));
+}
+
+/** A grid of images and videos to pick the cover from. */
+function CoverChooser({ label, choices, currentId, onPick, onDone }: { label: string; choices: AttachmentDTO[]; currentId: string | null; onPick: (attachmentId: string) => void; onDone: () => void }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface-3/50 p-2" role="group" aria-label="Choose a cover">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-[11.5px] font-medium text-fg-muted">{label}</span>
+        <Button size="xs" variant="ghost" onClick={onDone}>
+          Done
+        </Button>
+      </div>
+      <ul className="grid max-h-56 grid-cols-3 gap-1.5 overflow-y-auto">
+        {choices.map((a) => {
+          const current = currentId === a.id;
+          return (
+            <li key={a.id}>
+              <button
+                type="button"
+                aria-label={`Use ${a.filename} as the cover`}
+                aria-pressed={current}
+                title={a.filename}
+                onClick={() => onPick(a.id)}
+                className={cn("relative block w-full overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:ring-ring", current ? "border-accent" : "border-border hover:border-border-strong")}
+              >
+                <Thumb file={a} className="aspect-video w-full rounded-none border-0" />
+                {current ? (
+                  <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-accent text-accent-fg">
+                    <Check className="size-3" />
+                  </span>
+                ) : null}
+                <span className="block truncate px-1 py-0.5 text-left text-[10.5px] text-fg-muted">{a.filename}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 }
 
 function Thumb({ file, className }: { file: { kind: string; thumbUrl: string | null; status: string } | null; className?: string }) {
@@ -57,7 +103,7 @@ export function CoverControl() {
       ? "No cover"
       : card.coverMode === "AUTO"
         ? card.cover
-          ? "Automatic — the first deliverable's current file"
+          ? "Automatic — the first deliverable's cover"
           : "Automatic — appears with the first image or video"
         : pinnedShown
           ? card.cover?.status === "PROCESSING"
@@ -119,41 +165,112 @@ export function CoverControl() {
       </div>
       <p className={cn("text-[11.5px] leading-snug [overflow-wrap:anywhere]", card.coverMode === "MANUAL" && !pinnedShown ? "text-state-review" : "text-fg-muted")}>{status}</p>
       {choosing && canEdit ? (
-        <div className="rounded-lg border border-border bg-surface-3/50 p-2" role="group" aria-label="Choose a cover">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-[11.5px] font-medium text-fg-muted">Images and videos on this card</span>
-            <Button size="xs" variant="ghost" onClick={() => setChoosing(false)}>
-              Done
-            </Button>
-          </div>
-          <ul className="grid max-h-56 grid-cols-3 gap-1.5 overflow-y-auto">
-            {choices.map((a) => {
-              const current = card.cover?.attachmentId === a.id;
-              return (
-                <li key={a.id}>
-                  <button
-                    type="button"
-                    aria-label={`Use ${a.filename} as the cover`}
-                    aria-pressed={current}
-                    title={a.filename}
-                    onClick={() => setCover.mutate({ cardId: card.id, attachmentId: a.id })}
-                    className={cn("relative block w-full overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:ring-ring", current ? "border-accent" : "border-border hover:border-border-strong")}
-                  >
-                    <Thumb file={a} className="aspect-video w-full rounded-none border-0" />
-                    {current ? (
-                      <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-accent text-accent-fg">
-                        <Check className="size-3" />
-                      </span>
-                    ) : null}
-                    <span className="block truncate px-1 py-0.5 text-left text-[10.5px] text-fg-muted">{a.filename}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
+        <CoverChooser
+          label="Images and videos on this card"
+          choices={choices}
+          currentId={card.cover?.attachmentId ?? null}
+          onPick={(attachmentId) => setCover.mutate({ cardId: card.id, attachmentId })}
+          onDone={() => setChoosing(false)}
+        />
       ) : null}
     </div>
     </TipAnchor>
+  );
+}
+
+/**
+ * A deliverable's cover, shown on its canvas box, in the list and in its header: automatic (its
+ * current file), a chosen image or video (uploaded just for this, or one of its own files), or
+ * none. Changing it never creates a revision or changes review status. `compact` fits the
+ * canvas summary panel.
+ */
+export function DeliverableCoverControl({ deliverable: d, compact }: { deliverable: DeliverableDTO; compact?: boolean }) {
+  const { card, uploadTarget } = useWorkspace();
+  const uploads = useUploads();
+  const input = useRef<HTMLInputElement>(null);
+  const [choosing, setChoosing] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const setCover = useCardMutation("deliverable.setCover", card.id, card.projectId);
+  const setMode = useCardMutation("deliverable.setCoverMode", card.id, card.projectId);
+  const canEdit = card.permissions.canEdit && !d.archivedAt;
+  const choices = deliverableCoverChoices(card.attachments, d.id);
+  const pinned = d.coverPinnedId ? card.attachments.find((a) => a.id === d.coverPinnedId) : undefined;
+  const pinnedShown = d.coverMode === "MANUAL" && d.cover?.attachmentId === d.coverPinnedId;
+
+  const status =
+    d.coverMode === "NONE"
+      ? "No cover"
+      : d.coverMode === "AUTO"
+        ? d.cover
+          ? "Automatic — its current file"
+          : "Automatic — appears with its first image or video"
+        : pinnedShown
+          ? d.cover?.status === "PROCESSING"
+            ? `Chosen: ${pinned?.filename ?? "file"} (processing…)`
+            : `Chosen: ${pinned?.filename ?? "file"}`
+          : "Your chosen cover was removed or couldn't be processed — showing the automatic one";
+
+  const uploadCover = async (files: File[]) => {
+    if (!files.length) return;
+    setUploading(true);
+    try {
+      await uploads.uploadFiles({ ...uploadTarget, deliverableId: d.id, label: `${d.name} cover` }, files.slice(0, 1), "cover");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-center gap-2">
+        <Thumb file={d.cover} className={compact ? "h-9 w-16" : "h-12 w-[86px]"} />
+        {compact ? <p className="min-w-0 flex-1 text-[11px] leading-snug text-fg-muted [overflow-wrap:anywhere]">{status}</p> : <span className="flex-1" />}
+        {canEdit ? (
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button size="xs" variant="ghost" aria-label={`Change the cover of ${d.name}`} disabled={uploading}>
+                {uploading ? <Loader2 className="animate-spin" /> : <ImagePlus />} {compact ? "Cover" : "Change"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuItem onSelect={() => input.current?.click()}>
+                <Upload /> Upload image or video…
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={!choices.length} onSelect={() => setChoosing(true)}>
+                <Images /> Choose from its files…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem disabled={d.coverMode === "AUTO"} onSelect={() => setMode.mutate({ deliverableId: d.id, mode: "AUTO" })}>
+                <RotateCcw /> Use automatic cover
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={d.coverMode === "NONE"} onSelect={() => setMode.mutate({ deliverableId: d.id, mode: "NONE" })}>
+                <ImageOff /> Remove cover
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+        <input
+          ref={input}
+          type="file"
+          hidden
+          accept={COVER_FILE_TYPES}
+          aria-label={`Cover image or video for ${d.name}`}
+          onChange={(e) => {
+            void uploadCover([...(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
+        />
+      </div>
+      {compact ? null : <p className={cn("text-[11.5px] leading-snug [overflow-wrap:anywhere]", d.coverMode === "MANUAL" && !pinnedShown ? "text-state-review" : "text-fg-muted")}>{status}</p>}
+      {choosing && canEdit ? (
+        <CoverChooser
+          label={`Images and videos of ${d.name}`}
+          choices={choices}
+          currentId={d.cover?.attachmentId ?? null}
+          onPick={(attachmentId) => setCover.mutate({ deliverableId: d.id, attachmentId })}
+          onDone={() => setChoosing(false)}
+        />
+      ) : null}
+    </div>
   );
 }

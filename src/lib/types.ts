@@ -580,6 +580,10 @@ export interface DeliverableDTO {
   createdAt: string;
   archivedAt: string | null;
   cover: MediaRefDTO | null;
+  /** AUTO: follows its current file. MANUAL: someone chose it. NONE: no cover. */
+  coverMode: "AUTO" | "MANUAL" | "NONE";
+  /** The chosen cover (MANUAL), whether or not it can be shown right now. */
+  coverPinnedId: string | null;
   versionCount: number;
   /** Current revision has at least one uploaded file. */
   hasFiles: boolean;

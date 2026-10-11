@@ -2,7 +2,7 @@
 
 import { ArrowDown, ArrowUp, ChevronRight, Layers, List, Lock, MessageSquareWarning, Network, Plus } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useCardMutation } from "@/lib/queries";
 import { rpc, errorMessage } from "@/lib/rpc-client";
@@ -62,7 +62,12 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
   const [ownerId, setOwnerId] = useState<string>("none");
   const [reviewerId, setReviewerId] = useState<string>("none");
   const [dueAt, setDueAt] = useState("");
-  const [dependsOn, setDependsOn] = useState<string>(linkFrom?.id ?? "none");
+  // Prerequisites (each must be approved before the new one is unblocked); a "requires this" opener starts with it ticked.
+  const [requires, setRequires] = useState<string[]>([]);
+  const startWith = linkFrom?.type === "DEPENDENCY" ? linkFrom.id : null;
+  useEffect(() => {
+    if (open) setRequires(startWith ? [startWith] : []);
+  }, [open, startWith]);
   const [description, setDescription] = useState("");
   const create = useCardMutation("deliverable.create", card.id, card.projectId);
   const types = useMemo(() => [...new Set([...deliverables.map((d) => d.assetType).filter(Boolean), ...TYPE_SUGGESTIONS])], [deliverables]);
@@ -91,7 +96,8 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
         dueAt: dueAt ? new Date(dueAt).toISOString() : null,
         canvasX: last ? last.canvasX + 300 : 0,
         canvasY: last ? last.canvasY : 0,
-        linkFrom: dependsOn !== "none" ? { id: dependsOn, type: linkFrom?.type ?? "DEPENDENCY" } : null,
+        requires,
+        linkFrom: linkFrom && linkFrom.type !== "DEPENDENCY" ? linkFrom : null,
       });
       const created = detail.deliverables.find((d) => d.name === name.trim() && !deliverables.some((x) => x.id === d.id));
       onOpenChange(false);
@@ -160,13 +166,22 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
           </div>
           {deliverables.length ? (
             <div className="grid gap-1 text-[12px] font-medium text-fg-muted">
-              Requires (optional)
-              <Select
-                aria-label="Requires"
-                value={dependsOn}
-                onValueChange={setDependsOn}
-                options={[{ value: "none", label: "Nothing" }, ...deliverables.map((d) => ({ value: d.id, label: d.name }))]}
-              />
+              <span id="add-deliverable-requires">Requires (optional)</span>
+              <div role="group" aria-labelledby="add-deliverable-requires" className="scrollbar-thin grid max-h-44 gap-0.5 overflow-y-auto rounded-lg border border-border-strong p-1">
+                {deliverables.map((d) => (
+                  <label key={d.id} className="flex min-h-8 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-[13px] font-normal text-fg hover:bg-surface-3">
+                    <Checkbox
+                      checked={requires.includes(d.id)}
+                      onCheckedChange={(checked) => setRequires((ids) => (checked === true ? [...ids, d.id] : ids.filter((id) => id !== d.id)))}
+                    />
+                    <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                    <StatePill state={d.state} size="sm" />
+                  </label>
+                ))}
+              </div>
+              <span className="text-[11px] font-normal text-fg-subtle">
+                {requires.length ? `Blocked until ${requires.length === 1 ? "it's" : `all ${requires.length} are`} approved.` : "Nothing ticked: it can start right away."}
+              </span>
             </div>
           ) : null}
           <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What does done look like? (optional)" maxLength={5000} />
@@ -260,6 +275,8 @@ export function DeliverablesPanel() {
   const link = useCardMutation("deliverable.link", card.id, card.projectId);
   const unlink = useCardMutation("deliverable.unlink", card.id, card.projectId);
   const updateLink = useCardMutation("deliverable.updateLink", card.id, card.projectId);
+  const updateDeliverable = useCardMutation("deliverable.update", card.id, card.projectId);
+  const archiveDeliverable = useCardMutation("deliverable.archive", card.id, card.projectId);
   const archived = card.deliverables.filter((d) => d.archivedAt);
 
   const actions: CanvasActions = {
@@ -279,6 +296,8 @@ export function DeliverablesPanel() {
     unlink: (linkId) => unlink.mutate({ linkId }),
     reverse: (linkId) => updateLink.mutate({ linkId, reverse: true }),
     setPoints: (linkId, points) => updateLink.mutate({ linkId, ...points }),
+    rename: (deliverableId, name) => updateDeliverable.mutate({ deliverableId, name }),
+    archive: (deliverableId, archived) => archiveDeliverable.mutateAsync({ deliverableId, archived }),
   };
 
   const onMove = (d: DeliverableDTO, dir: -1 | 1) => {

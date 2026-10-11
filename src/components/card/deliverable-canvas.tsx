@@ -27,7 +27,7 @@ import {
   type ResizeParams,
   type Viewport,
 } from "@xyflow/react";
-import { ArrowLeftRight, ArrowRight, Link2, Lock, MessageSquareWarning, Minus, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { Archive, ArrowLeftRight, ArrowRight, Check, Link2, Lock, MessageSquareWarning, Minus, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -51,8 +51,9 @@ import { KIND_ICONS } from "../domain/production";
 import { StatePill } from "../domain/state";
 import { Button } from "../ui/button";
 import { Select } from "../ui/controls";
-import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
+import { ConfirmDialog, Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Textarea } from "../ui/input";
+import { DeliverableCoverControl } from "./cover-control";
 import { DeliverableWork } from "./deliverable-work";
 import { useWorkspace } from "./workspace-context";
 
@@ -224,6 +225,9 @@ export interface CanvasActions {
   reverse: (linkId: string) => void;
   /** Re-attach an arrow's ends to other points of the same two deliverables. */
   setPoints: (linkId: string, points: { fromPoint?: string; toPoint?: string }) => void;
+  rename: (deliverableId: string, name: string) => void;
+  /** Archive (or restore) a deliverable; settles once saved and rejects if it couldn't be. */
+  archive: (deliverableId: string, archived: boolean) => Promise<unknown>;
 }
 
 function ConnectDialog({
@@ -283,6 +287,72 @@ function ConnectDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** The summary panel's title: a click (or tap) turns it into a field — Enter, ✓ or leaving it saves, Esc cancels. */
+function SummaryName({ deliverable, canEdit, onRename }: { deliverable: DeliverableDTO; canEdit: boolean; onRename: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(deliverable.name);
+  // Each edit ends once: saved or cancelled (a blur while the field goes away mustn't save again).
+  const ended = useRef(false);
+  useEffect(() => {
+    if (!editing) setValue(deliverable.name);
+  }, [deliverable.name, editing]);
+  if (!canEdit) return <p className="min-w-0 flex-1 break-words text-[13px] font-semibold">{deliverable.name}</p>;
+  if (editing) {
+    const commit = () => {
+      if (ended.current) return;
+      ended.current = true;
+      setEditing(false);
+      const name = value.trim();
+      if (name && name !== deliverable.name) onRename(name);
+      else setValue(deliverable.name);
+    };
+    return (
+      <div className="-my-0.5 flex min-w-0 flex-1 items-center gap-1">
+        <input
+          autoFocus
+          value={value}
+          maxLength={120}
+          aria-label="Deliverable name"
+          // Esc cancels the rename here instead of closing the card.
+          data-inline-edit
+          onFocus={(e) => e.currentTarget.select()}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            if (e.key === "Escape") {
+              ended.current = true;
+              setValue(deliverable.name);
+              setEditing(false);
+            }
+          }}
+          className="h-7 min-w-0 flex-1 rounded-md border border-accent bg-surface-3 px-1.5 text-[13px] font-semibold outline-none"
+        />
+        {/* Phones don't always leave a field when you tap elsewhere: an explicit save. Pressing it
+            keeps focus in the field, so the save happens once (here, not on blur). */}
+        <Button size="icon-sm" variant="ghost" aria-label="Save name" onPointerDown={(e) => e.preventDefault()} onClick={commit}>
+          <Check />
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        ended.current = false;
+        setEditing(true);
+      }}
+      aria-label={`Rename ${deliverable.name}`}
+      title="Rename"
+      className="group/name -mx-1 -my-0.5 flex min-h-7 min-w-0 flex-1 items-start gap-1.5 rounded-md px-1 py-0.5 text-left text-[13px] font-semibold hover:bg-surface-3"
+    >
+      <span className="min-w-0 break-words">{deliverable.name}</span>
+      <Pencil className="hover-reveal mt-0.5 size-3.5 shrink-0 text-fg-subtle opacity-0 group-hover/name:opacity-100 group-focus-visible/name:opacity-100" aria-hidden />
+    </button>
   );
 }
 
@@ -435,6 +505,26 @@ function Canvas({ deliverables, links, canEdit, actions, onOpen }: { deliverable
 
   const selected = selectedEdge ? links.find((l) => l.id === selectedEdge) : null;
   const selectedDeliverable = selectedNode ? byId.get(selectedNode) : null;
+  const [archiving, setArchiving] = useState<DeliverableDTO | null>(null);
+  const [archivePending, setArchivePending] = useState(false);
+  const confirmArchive = () => {
+    const d = archiving;
+    if (!d) return;
+    setArchivePending(true);
+    actions
+      .archive(d.id, true)
+      .then(() => {
+        setArchiving(null);
+        setSelectedNode(null);
+        toast.success(`Archived “${byId.get(d.id)?.name ?? d.name}”.`, {
+          description: "Its revisions, reviews and comments are kept.",
+          action: { label: "Undo", onClick: () => void actions.archive(d.id, false).catch(() => {}) },
+        });
+      })
+      // The error is already shown; the dialog stays open to try again or cancel.
+      .catch(() => {})
+      .finally(() => setArchivePending(false));
+  };
   const initialViewport = savedViewports.get(card.id);
   const fitted = useRef(Boolean(initialViewport));
 
@@ -623,9 +713,13 @@ function Canvas({ deliverables, links, canEdit, actions, onOpen }: { deliverable
           <p className="mt-2 text-[11px] text-fg-subtle">Removing a connection never changes either deliverable&apos;s files, reviews or history.</p>
         </div>
       ) : selectedDeliverable ? (
-        <div className="absolute bottom-3 right-3 z-10 w-[min(320px,calc(100%-24px))] rounded-lg border border-border-strong bg-surface-2 p-3 shadow-lg" role="dialog" aria-label="Deliverable summary">
+        <div
+          className="scrollbar-thin absolute bottom-3 right-3 z-10 max-h-[calc(100%-24px)] w-[min(320px,calc(100%-24px))] overflow-y-auto overscroll-contain rounded-lg border border-border-strong bg-surface-2 p-3 shadow-lg"
+          role="dialog"
+          aria-label="Deliverable summary"
+        >
           <div className="flex items-start gap-2">
-            <p className="flex-1 text-[13px] font-semibold">{selectedDeliverable.name}</p>
+            <SummaryName key={selectedDeliverable.id} deliverable={selectedDeliverable} canEdit={canEdit} onRename={(name) => actions.rename(selectedDeliverable.id, name)} />
             <button type="button" aria-label="Close" onClick={() => setSelectedNode(null)} className="touch-target -m-1 flex size-7 shrink-0 items-center justify-center rounded text-fg-subtle hover:bg-surface-3 hover:text-fg">
               <X className="size-4" />
             </button>
@@ -636,6 +730,11 @@ function Canvas({ deliverables, links, canEdit, actions, onOpen }: { deliverable
           </p>
           {selectedDeliverable.description.trim() ? (
             <p className="mt-1.5 line-clamp-4 whitespace-pre-wrap break-words text-[12px] text-fg-muted">{selectedDeliverable.description}</p>
+          ) : null}
+          {canEdit ? (
+            <div className="mt-2">
+              <DeliverableCoverControl key={selectedDeliverable.id} deliverable={selectedDeliverable} compact />
+            </div>
           ) : null}
           {canEdit ? (
             <div className="mt-2 flex flex-wrap items-center gap-1" role="group" aria-label={`Size of ${selectedDeliverable.name}`}>
@@ -663,13 +762,34 @@ function Canvas({ deliverables, links, canEdit, actions, onOpen }: { deliverable
               ) : null}
             </div>
           ) : null}
-          <div className="mt-2 flex gap-1.5">
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <Button size="xs" variant="primary" onClick={() => onOpen(selectedDeliverable.id)}>
               Open deliverable <ArrowRight />
             </Button>
+            {canEdit ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={deliverables.length <= 1}
+                title={deliverables.length <= 1 ? "A card needs at least one deliverable — archive the card instead." : undefined}
+                onClick={() => setArchiving(selectedDeliverable)}
+              >
+                <Archive /> Archive
+              </Button>
+            ) : null}
           </div>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={archiving !== null}
+        onOpenChange={(open) => !open && !archivePending && setArchiving(null)}
+        title={`Archive ${archiving ? (byId.get(archiving.id)?.name ?? archiving.name) : "deliverable"}?`}
+        confirmLabel="Archive"
+        loading={archivePending}
+        onConfirm={confirmArchive}
+        description="It leaves the card's progress and canvas. Its revisions, reviews and comments are kept, and you can restore it under Archived deliverables."
+      />
 
       <ConnectDialog
         pending={pendingConnection}
