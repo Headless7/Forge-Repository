@@ -16,6 +16,7 @@ import { cn, formatShortDate } from "@/lib/utils";
 import { ArchivedItems } from "../board/archived-dialog";
 import { CreateBoardDialog } from "../board/board-switcher";
 import { UserAvatar } from "../domain/avatar";
+import { matchesPerson, PeopleSearch } from "../domain/people-menu";
 import { BoardIcon } from "../domain/board-icon";
 import { LabelChip } from "../domain/state";
 import { NewForumDialog } from "../forums/forum-dialogs";
@@ -145,6 +146,8 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
       toast.success("Visibility updated.");
     },
   });
+  const [memberQuery, setMemberQuery] = useState("");
+  const people = (access.data ?? []).filter((m) => matchesPerson({ displayName: m.displayName, username: m.username, title: null, discord: null } as never, memberQuery));
   return (
     <Section id="members" title="Members & permissions" description="Studio roles apply by default. Give someone a different role on this project, or make the project private.">
       <TipAnchor tip="access.scope" place="project" facts={{ place: "project", canManage: canEdit }}>
@@ -171,8 +174,10 @@ function Access({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
         ))}
       </div>
       </TipAnchor>
+      {(access.data?.length ?? 0) > 5 ? <PeopleSearch value={memberQuery} onChange={setMemberQuery} autoFocus={false} className="mb-2 max-w-xs" /> : null}
       <ul className="divide-y divide-border rounded-lg border border-border">
-        {(access.data ?? []).map((m) => {
+        {people.length === 0 && memberQuery ? <li className="px-3 py-2 text-[12.5px] text-fg-muted">No one matches.</li> : null}
+        {people.map((m) => {
           const privileged = m.studioRole === "OWNER" || m.studioRole === "ADMIN";
           // Private projects, and project-only collaborators anywhere, need to be added explicitly —
           // except people whose studio role already opens the project.
@@ -323,7 +328,9 @@ function Workflow({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
       toast.success("Saved.");
     },
   });
-  const reviewers = board.members.filter((m) => ["OWNER", "ADMIN", "MANAGER"].includes(m.role));
+  const reviewerCandidates = board.members.filter((m) => ["OWNER", "ADMIN", "MANAGER"].includes(m.role));
+  const [reviewerQuery, setReviewerQuery] = useState("");
+  const reviewers = reviewerCandidates.filter((m) => matchesPerson(m, reviewerQuery));
   return (
     <Section id="workflow" title="Board & review workflow">
       <div className="grid gap-4">
@@ -362,6 +369,7 @@ function Workflow({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
         <div>
           <p className="text-[13px] font-medium">Default reviewers</p>
           <p className="mb-2 text-[12px] text-fg-muted">Added to every new card. With no reviewer set, all managers are asked when work is submitted.</p>
+          {reviewerCandidates.length > 5 ? <PeopleSearch value={reviewerQuery} onChange={setReviewerQuery} autoFocus={false} className="mb-2 max-w-xs" /> : null}
           <div className="flex flex-wrap gap-1.5">
             {reviewers.map((m) => {
               const on = p.settings.defaultReviewerIds.includes(m.id);

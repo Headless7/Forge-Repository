@@ -13,6 +13,7 @@ import type { ProjectTemplatePreviewDTO } from "@/lib/types";
 import { projectNameSchema } from "@/lib/validation";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
+import { PeopleSearch } from "../domain/people-menu";
 import { BoardIcon } from "../domain/board-icon";
 import { Button } from "../ui/button";
 import { Checkbox, Select, Skeleton } from "../ui/controls";
@@ -26,6 +27,7 @@ type Start = "blank" | "template";
 /** What a template brings along — reviewed before the project is created. */
 function TemplatePreview({ preview, included, onToggle }: { preview: ProjectTemplatePreviewDTO; included: Set<string>; onToggle: (userId: string, on: boolean) => void }) {
   const copyable = preview.people.filter((p) => !p.excluded);
+  const [peopleQuery, setPeopleQuery] = useState("");
   const excluded = preview.people.filter((p) => p.excluded);
   return (
     <div className="grid gap-3 rounded-lg border border-border-strong p-3 text-[12.5px]">
@@ -63,8 +65,9 @@ function TemplatePreview({ preview, included, onToggle }: { preview: ProjectTemp
           Project members · {copyable.filter((p) => included.has(p.userId)).length} of {copyable.length}
         </p>
         {copyable.length === 0 ? <p className="text-fg-muted">The template has no explicit members to copy. Studio roles still apply.</p> : null}
+        {copyable.length > 5 ? <PeopleSearch value={peopleQuery} onChange={setPeopleQuery} autoFocus={false} className="mb-2 max-w-xs" /> : null}
         <ul className="grid gap-1">
-          {copyable.map((p) => (
+          {copyable.filter((p) => !peopleQuery.trim() || `${p.displayName} ${p.username}`.toLowerCase().includes(peopleQuery.trim().toLowerCase())).map((p) => (
             <li key={p.userId}>
               <label className="flex cursor-pointer items-start gap-2 rounded-md px-1 py-1 hover:bg-surface-3">
                 <Checkbox className="mt-1" checked={included.has(p.userId)} onCheckedChange={(v) => onToggle(p.userId, v === true)} aria-label={`Add ${p.displayName}`} />

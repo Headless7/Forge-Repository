@@ -1,127 +1,19 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, Plus, Search, Tag, Trash2, UserRound } from "lucide-react";
+import { Check, Plus, Tag, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { SUGGESTED_FORUM_TAGS } from "@/lib/forum-meta";
 import { LABEL_COLORS } from "@/lib/column-icons";
 import { qk, useRpcMutation } from "@/lib/queries";
-import type { ForumTagDTO, MemberDTO } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { UserAvatar } from "../domain/avatar";
-import { DiscordHandle } from "../domain/discord-icon";
-import { MemberPopover } from "../domain/member-popover";
+import type { ForumTagDTO } from "@/lib/types";
 import { LabelChip } from "../domain/state";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/menu";
 
-/** One person (the assignee or the reviewer of an item): a searchable popover, or just the person when read-only. */
-export function PersonPicker({
-  value,
-  members,
-  canEdit,
-  onChange,
-  emptyLabel = "Nobody",
-  label,
-  filter,
-  className,
-}: {
-  value: string | null;
-  members: MemberDTO[];
-  canEdit: boolean;
-  onChange: (userId: string | null) => void;
-  emptyLabel?: string;
-  /** Heading inside the popover ("Assignee"). */
-  label: string;
-  filter?: (m: MemberDTO) => boolean;
-  className?: string;
-}) {
-  const [query, setQuery] = useState("");
-  const person = value ? (members.find((m) => m.id === value) ?? null) : null;
-  const summary = value ? (
-    <span className="flex min-w-0 items-center gap-2">
-      {person ? <UserAvatar user={person} size="xs" online={person.online} /> : <UserRound className="size-4 shrink-0 text-fg-subtle" aria-hidden />}
-      <span className="truncate">{person?.displayName ?? "Former member"}</span>
-    </span>
-  ) : (
-    <span className="text-fg-subtle">{emptyLabel}</span>
-  );
-
-  if (!canEdit) {
-    return person ? (
-      <MemberPopover user={person} member={person} className={cn("touch-target max-w-full gap-2", className)}>
-        <UserAvatar user={person} size="xs" online={person.online} />
-        <span className="truncate">{person.displayName}</span>
-      </MemberPopover>
-    ) : (
-      <span className={className}>{summary}</span>
-    );
-  }
-
-  const q = query.trim().toLowerCase();
-  const candidates = members.filter((m) => (filter ? filter(m) : true)).filter((m) => !q || [m.displayName, m.title, m.username, m.discord?.username].some((v) => v?.toLowerCase().includes(q)));
-  const showNobody = !q || "nobody".includes(q);
-  const choose = (id: string | null) => id !== value && onChange(id);
-  return (
-    <Popover onOpenChange={(open) => !open && setQuery("")}>
-      <PopoverTrigger asChild>
-        <button type="button" aria-label={`${label}: ${person?.displayName ?? emptyLabel}`} className={cn("-mx-1.5 w-[calc(100%+12px)] rounded-md px-1.5 py-1 text-left hover:bg-surface-3", className)}>
-          {summary}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        className="flex max-h-[var(--radix-popover-content-available-height)] w-64 max-w-[calc(100vw-16px)] flex-col gap-1 overflow-y-auto p-2"
-        onOpenAutoFocus={(e) => window.matchMedia("(pointer: coarse)").matches && e.preventDefault()}
-      >
-        <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">{label}</p>
-        <div className="relative mb-1">
-          <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-fg-subtle" aria-hidden />
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && q && candidates[0]) {
-                e.preventDefault();
-                choose(candidates[0].id);
-              }
-            }}
-            placeholder="Search people…"
-            aria-label="Search people"
-            className="h-8 w-full rounded-md border border-border-strong bg-surface-3 pl-7 pr-2 text-[13px] outline-none focus:border-accent"
-          />
-        </div>
-        <ul className="scrollbar-thin max-h-64 overflow-y-auto overscroll-contain" aria-label="People">
-          {showNobody ? (
-            <li>
-              <button type="button" onClick={() => choose(null)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4">
-                <UserRound className="size-5 text-fg-subtle" aria-hidden />
-                <span className="flex-1">{emptyLabel}</span>
-                {!value ? <Check className="size-4 text-accent" aria-label="Selected" /> : null}
-              </button>
-            </li>
-          ) : null}
-          {candidates.map((m) => (
-            <li key={m.id}>
-              <button type="button" onClick={() => choose(m.id)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4">
-                <UserAvatar user={m} size="xs" online={m.online} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate">{m.displayName}</span>
-                  {m.title ? <span className="block truncate text-[11px] text-fg-subtle">{m.title}</span> : null}
-                  {m.discord ? <DiscordHandle username={m.discord.username} className="text-[11px]" /> : null}
-                </span>
-                {value === m.id ? <Check className="size-4 text-accent" aria-label="Selected" /> : null}
-              </button>
-            </li>
-          ))}
-          {q && !candidates.length && !showNobody ? <li className="px-2 py-1.5 text-[12.5px] text-fg-muted">No one matches “{query.trim()}”.</li> : null}
-        </ul>
-      </PopoverContent>
-    </Popover>
-  );
-}
+export { PersonPicker } from "../domain/people-menu";
 
 /** Creates a tag and tells the forum; `onCreated` gets the new tag (e.g. to select it). */
 function useCreateTag(projectId: string, onCreated?: (tag: ForumTagDTO) => void) {

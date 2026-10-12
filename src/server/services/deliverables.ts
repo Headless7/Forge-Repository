@@ -217,9 +217,9 @@ function addPeopleNotifications(
 ) {
   const { data, ...where } = base;
   const workersBefore = new Set([before.ownerId, ...before.contributorIds].filter(Boolean) as string[]);
-  if (next.ownerId && next.ownerId !== before.ownerId) batch.add({ ...where, recipientIds: [next.ownerId], type: "ASSIGNED", data: { ...data, role: "responsible" } });
+  if (next.ownerId && next.ownerId !== before.ownerId) batch.add({ ...where, recipientIds: [next.ownerId], type: "ASSIGNED", selfDm: true, data: { ...data, role: "responsible" } });
   const newContributors = next.contributorIds.filter((id) => !workersBefore.has(id) && id !== next.ownerId);
-  if (newContributors.length) batch.add({ ...where, recipientIds: newContributors, type: "ASSIGNED", data: { ...data, role: "contributor" } });
+  if (newContributors.length) batch.add({ ...where, recipientIds: newContributors, type: "ASSIGNED", selfDm: true, data: { ...data, role: "contributor" } });
   const stillOn = new Set([next.ownerId, ...next.contributorIds].filter(Boolean) as string[]);
   const takenOff = [...workersBefore].filter((id) => !stillOn.has(id));
   if (takenOff.length) batch.add({ ...where, recipientIds: takenOff, type: "UNASSIGNED", data });

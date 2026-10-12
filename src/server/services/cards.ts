@@ -189,6 +189,7 @@ export async function createCard(actor: Actor, input: CreateCardInput): Promise<
           recipientIds: validAssignees,
           actorId: actor.userId,
           type: "ASSIGNED",
+          selfDm: true,
           studioId: access.studioId,
           projectId: access.project.id,
           cardId: row!.id,
@@ -768,7 +769,7 @@ export async function setAssignees(actor: Actor, input: { cardId: string; add?: 
     const where = { actorId: actor.userId, studioId: access.studioId, projectId: card.projectId, cardId: card.id };
     fx.notify(
       await new NotificationBatch()
-        .add({ ...where, recipientIds: valid, type: "ASSIGNED", data: { ...cardNotificationData(access, card), role: "responsible" } })
+        .add({ ...where, recipientIds: valid, type: "ASSIGNED", selfDm: true, data: { ...cardNotificationData(access, card), role: "responsible" } })
         .add({ ...where, recipientIds: remove, type: "UNASSIGNED", data: cardNotificationData(access, card) })
         .send(tx),
     );

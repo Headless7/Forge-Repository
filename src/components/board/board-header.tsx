@@ -33,6 +33,7 @@ import { qk, useRpcMutation } from "@/lib/queries";
 import type { BoardDTO, BoardView, CardState } from "@/lib/types";
 import { cn, formatShortDate } from "@/lib/utils";
 import { useRealtimeStatus } from "../realtime";
+import { matchesPerson, PeopleSearch } from "../domain/people-menu";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
 import { Button } from "../ui/button";
 import { TipAnchor, useTutorial } from "../tutorial/tutorial";
@@ -101,6 +102,8 @@ function Toggle({
 
 function MembersPopover({ board, studioSlug }: { board: BoardDTO; studioSlug: string }) {
   const online = board.members.filter((m) => m.online);
+  const [query, setQuery] = useState("");
+  const shown = board.members.filter((m) => matchesPerson(m, query));
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -118,8 +121,14 @@ function MembersPopover({ board, studioSlug }: { board: BoardDTO; studioSlug: st
             Manage
           </Link>
         </div>
+        {board.members.length > 5 ? (
+          <div className="border-b border-border p-2">
+            <PeopleSearch value={query} onChange={setQuery} autoFocus={false} />
+          </div>
+        ) : null}
         <ul className="scrollbar-thin max-h-80 overflow-y-auto p-1">
-          {board.members.map((m) => (
+          {shown.length === 0 ? <li className="px-2 py-1.5 text-[12.5px] text-fg-muted">No one matches.</li> : null}
+          {shown.map((m) => (
             <li key={m.id} className="flex items-center gap-2.5 rounded-md px-2 py-1.5">
               <UserAvatar user={m} size="md" online={m.online} />
               <div className="min-w-0 flex-1">

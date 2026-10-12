@@ -3,11 +3,11 @@
  * show up (card counts, Home, schedules and the calendar feed). Every fixture is created here
  * (test database only).
  */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { canTickChecklistItem, checklistDueState, formatDueDay } from "@/lib/checklist";
 import { db } from "@/server/db";
-import { attachments } from "@/server/db/schema";
+import { attachments, notifications } from "@/server/db/schema";
 import { storage } from "@/server/storage";
 import { expectAppError, pngBuffer, setupStudio, type Fixture } from "@/test/helpers";
 import { listCardActivity } from "./activity";
@@ -49,6 +49,19 @@ describe("checklist item rules", () => {
     await expectAppError(checklists.updateChecklistItem(f.manager.actor, { itemId: item.id, dueOn: "1999-12-31" }), "VALIDATION");
     // Adding needs edit rights on the card.
     await expectAppError(checklists.addChecklistItem(f.member2.actor, { checklistId: listId, text: "Mine now", assigneeId: f.member2.id }), "FORBIDDEN");
+  });
+
+  it("tell the person an item is given to (inbox and Discord), and nobody when you give it to yourself", async () => {
+    const list = await checklists.createChecklist(f.manager.actor, { cardId: card.id, title: "Notify" });
+    const detail = await checklists.addChecklistItem(f.manager.actor, { checklistId: list.checklists.at(-1)!.id, text: "Export the lobby lamps", assigneeId: f.member.id, dueOn: "2030-01-05" });
+    const item = detail.checklists.at(-1)!.items.at(-1)!;
+    const rows = await db.select().from(notifications).where(and(eq(notifications.userId, f.member.id), eq(notifications.cardId, card.id)));
+    expect(rows.map((n) => [n.type, n.data.role, n.data.item])).toContainEqual(["ASSIGNED", "item", "Export the lobby lamps"]);
+    expect(rows.find((n) => n.data.item === "Export the lobby lamps")?.data.dueAt).toMatch(/^2030-01-05/);
+    // Giving it to yourself is never an inbox entry (at most a Discord DM, when that's connected).
+    await checklists.updateChecklistItem(f.manager.actor, { itemId: item.id, assigneeId: f.manager.id });
+    const own = await db.select().from(notifications).where(and(eq(notifications.userId, f.manager.id), eq(notifications.cardId, card.id)));
+    expect(own.filter((n) => n.data.item === "Export the lobby lamps")).toHaveLength(0);
   });
 
   it("let the item's person tick it off, but only editors change it", async () => {

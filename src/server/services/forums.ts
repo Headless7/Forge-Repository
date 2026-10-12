@@ -436,7 +436,7 @@ export async function createItem(actor: Actor, input: CreateItemInput): Promise<
       data: { priority: row!.priority, milestoneName: milestone?.name ?? null, noun: forum.itemLabel, forumName: forum.name },
     });
     const batch = new NotificationBatch();
-    if (assigneeId) batch.add(itemNotice(ctx, actor.userId, "ITEM_ASSIGNED", [assigneeId]));
+    if (assigneeId) batch.add({ ...itemNotice(ctx, actor.userId, "ITEM_ASSIGNED", [assigneeId]), selfDm: true });
     if (reviewerId) batch.add(itemNotice(ctx, actor.userId, "ITEM_REVIEWER_ASSIGNED", [reviewerId]));
     fx.notify(await batch.send(tx));
     fx.item(project.id, row!.id);
@@ -508,7 +508,7 @@ export async function updateItem(actor: Actor, input: UpdateItemInput): Promise<
       if (input.assigneeId && !assigneeId) throw invalid("That person can't open this project.");
       patch.assigneeId = assigneeId ?? null;
       await log("item.assignee_changed", { userId: assigneeId ?? null, from: item.assigneeId });
-      if (assigneeId) batch.add(itemNotice(ctx, actor.userId, "ITEM_ASSIGNED", [assigneeId]));
+      if (assigneeId) batch.add({ ...itemNotice(ctx, actor.userId, "ITEM_ASSIGNED", [assigneeId]), selfDm: true });
     }
     if (input.reviewerId !== undefined && input.reviewerId !== item.reviewerId) {
       const [reviewerId] = input.reviewerId ? await filterProjectMembers(access.project, [input.reviewerId], tx) : [];
@@ -603,6 +603,8 @@ export async function setItemStatus(actor: Actor, input: { itemId: string; statu
     });
     if (patch.assigneeId && patch.assigneeId !== item.assigneeId) {
       await logActivity(tx, { studioId: access.studioId, projectId: item.projectId, itemId: item.id, actorId: actor.userId, type: "item.assignee_changed", data: { userId: patch.assigneeId, from: item.assigneeId, noun: forum.itemLabel } });
+      // Taking it yourself: a Discord DM so it's in your pocket, like any other assignment.
+      batch.add({ ...itemNotice(ctx, actor.userId, "ITEM_ASSIGNED", [patch.assigneeId]), selfDm: true });
     }
     fx.notify(await batch.send(tx));
     fx.item(item.projectId, item.id);

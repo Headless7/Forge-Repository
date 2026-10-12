@@ -138,6 +138,10 @@ export const DM_STYLES: Record<string, { label: string; color: number; button: s
   BLOCKED: { label: "⛔ Waiting again", color: 0xf0524f, button: "Open card" },
   MENTIONED: { label: "💬 You were mentioned", color: 0x5b8def, button: "Open comment" },
   REPLY: { label: "↩️ New reply", color: 0x5b8def, button: "Open comment" },
+  ITEM_ASSIGNED: { label: "🐞 Given to you", color: 0x7c6cf2, button: "Open it" },
+  ITEM_REVIEWER_ASSIGNED: { label: "🔍 You verify this", color: 0x7c6cf2, button: "Open it" },
+  ITEM_FIXED: { label: "📥 Ready to verify", color: 0xf5a524, button: "Verify in Forge" },
+  ITEM_REOPENED: { label: "🔁 Sent back", color: 0xf0524f, button: "Open it" },
   DUE_SOON: { label: "⏰ Due soon", color: 0xf5a524, button: "Open card" },
   OVERDUE: { label: "🚨 Overdue", color: 0xf0524f, button: "Open card" },
 };
@@ -164,11 +168,24 @@ export function dmSentence(type: string, data: Record<string, unknown>, actor: s
     const relative = discordTime(text(data.dueAt), "R");
     return relative ? `${prefix} ${relative} (${discordTime(text(data.dueAt), "f")}).` : null;
   };
+  const noun = text(data.itemNoun) ?? "item";
   switch (type) {
     case "ASSIGNED": {
+      if (data.role === "item") {
+        const when = discordTime(text(data.dueAt), "R");
+        return `${who} gave you the checklist item **${escapeMarkdown(text(data.item) ?? "")}**${when ? `, due ${when}` : ""}.`;
+      }
       const role = data.role === "contributor" ? "a contributor to" : data.role === "reviewer" ? "the reviewer of" : "responsible for";
       return `${who} made you ${role} ${target}.`;
     }
+    case "ITEM_ASSIGNED":
+      return `${who} gave you this ${noun} to fix.`;
+    case "ITEM_REVIEWER_ASSIGNED":
+      return `${who} made you the reviewer of this ${noun}: you verify it once it's done.`;
+    case "ITEM_FIXED":
+      return `${who} marked this ${noun} done. Verify it in game, then confirm or send it back.`;
+    case "ITEM_REOPENED":
+      return `${who} sent this ${noun} back.`;
     case "REVIEWER_ASSIGNED":
       return `${who} made you the reviewer of ${target}.`;
     case "REVIEW_REQUESTED":

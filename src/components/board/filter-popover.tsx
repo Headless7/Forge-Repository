@@ -1,7 +1,7 @@
 "use client";
 
 import { ListFilter } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { CARD_STATE_META, CARD_STATE_ORDER, PRIORITY_META, PRIORITY_ORDER } from "@/lib/card-meta";
 import type { BoardDTO, CardState, Priority } from "@/lib/types";
 import { PRODUCTION_META } from "@/lib/deliverables";
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { ColumnIcon } from "../domain/column-icon";
 import { PRODUCTION_COLOR, PRODUCTION_ICONS, PRODUCTION_ORDER } from "../domain/production";
 import { UserAvatar } from "../domain/avatar";
+import { matchesPerson, PeopleSearch } from "../domain/people-menu";
 import { LabelChip, PriorityIcon, STATE_ICONS } from "../domain/state";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/controls";
@@ -68,6 +69,7 @@ export function FilterPopover({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const [personQuery, setPersonQuery] = useState("");
   const count = activeFilterCount(filters);
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
@@ -91,8 +93,9 @@ export function FilterPopover({
               <CheckRow checked={filters.mine} onChange={(v) => onChange({ ...filters, mine: v })}>
                 Assigned to me
               </CheckRow>
+              {board.members.length > 5 ? <PeopleSearch value={personQuery} onChange={setPersonQuery} autoFocus={false} className="mb-1 px-1" /> : null}
               <div className="scrollbar-thin max-h-40 overflow-y-auto">
-                {board.members.map((m) => (
+                {board.members.filter((m) => matchesPerson(m, personQuery)).map((m) => (
                   <CheckRow key={m.id} checked={filters.assignees.includes(m.id)} onChange={() => onChange({ ...filters, assignees: toggle(filters.assignees, m.id) })}>
                     <UserAvatar user={m} size="xs" online={m.online} />
                     <span className="truncate">{m.displayName}</span>

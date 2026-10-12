@@ -11,11 +11,11 @@ import { roleHas } from "@/lib/permissions";
 import { cn, formatShortDate } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/queries";
-import { UserAvatar } from "../domain/avatar";
+import { PersonPicker } from "../domain/people-menu";
 import { DeliverableProgress, KIND_ICONS } from "../domain/production";
 import { StatePill } from "../domain/state";
 import { Button } from "../ui/button";
-import { Checkbox, Select } from "../ui/controls";
+import { Checkbox } from "../ui/controls";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Input, Textarea } from "../ui/input";
 import { TipAnchor, useTutorial } from "../tutorial/tutorial";
@@ -136,24 +136,29 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
             </label>
             <div className="grid gap-1 text-[12px] font-medium text-fg-muted">
               Responsible
-              <Select
-                aria-label="Responsible"
-                value={ownerId}
-                onValueChange={setOwnerId}
-                options={[
-                  { value: "none", label: "Card assignees (inherited)" },
-                  ...members.filter((m) => roleHas(m.role, "attachment.upload") && (canAssign || m.id === viewerId)).map((m) => ({ value: m.id, label: m.displayName })),
-                ]}
+              <PersonPicker
+                label="Responsible"
+                variant="field"
+                className="h-8"
+                canEdit
+                value={ownerId === "none" ? null : ownerId}
+                emptyLabel="Card assignees (inherited)"
+                members={members.filter((m) => roleHas(m.role, "attachment.upload") && (canAssign || m.id === viewerId))}
+                onChange={(id) => setOwnerId(id ?? "none")}
               />
             </div>
             {canAssign ? (
               <div className="grid gap-1 text-[12px] font-medium text-fg-muted">
                 Reviewer
-                <Select
-                  aria-label="Reviewer"
-                  value={reviewerId}
-                  onValueChange={setReviewerId}
-                  options={[{ value: "none", label: "Card reviewers (inherited)" }, ...members.filter((m) => roleHas(m.role, "card.review")).map((m) => ({ value: m.id, label: m.displayName }))]}
+                <PersonPicker
+                  label="Reviewer"
+                  variant="field"
+                  className="h-8"
+                  canEdit
+                  value={reviewerId === "none" ? null : reviewerId}
+                  emptyLabel="Card reviewers (inherited)"
+                  members={members.filter((m) => roleHas(m.role, "card.review"))}
+                  onChange={(id) => setReviewerId(id ?? "none")}
                 />
               </div>
             ) : null}

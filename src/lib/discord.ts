@@ -43,6 +43,10 @@ export const DISCORD_DM_TYPES = [
   "BLOCKED",
   "MENTIONED",
   "REPLY",
+  "ITEM_ASSIGNED",
+  "ITEM_REVIEWER_ASSIGNED",
+  "ITEM_FIXED",
+  "ITEM_REOPENED",
 ] as const;
 
 export function isDiscordDmType(type: string): boolean {

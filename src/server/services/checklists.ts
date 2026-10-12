@@ -9,11 +9,12 @@ import { checklistItems, checklists } from "../db/schema";
 import { forbidden, invalid, notFound } from "../errors";
 import { logActivity } from "./activity";
 import { loadCardDetail } from "./card-dto";
-import { touchCard } from "./cards";
+import { cardNotificationData, touchCard } from "./cards";
 import type { Actor } from "./context";
 import { Effects } from "./effects";
 import { retireChecklistImages } from "./media";
 import { listProjectMembers } from "./members-query";
+import { notify } from "./notifications";
 
 async function editableCard(actor: Actor, cardId: string) {
   const ctx = await requireCard(actor.userId, cardId);
@@ -21,9 +22,23 @@ async function editableCard(actor: Actor, cardId: string) {
   return ctx;
 }
 
-async function finish(actor: Actor, ctx: CardAccess): Promise<CardDetailDTO> {
-  new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
+async function finish(actor: Actor, ctx: CardAccess, fx = new Effects()): Promise<CardDetailDTO> {
+  fx.card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
   return loadCardDetail(await requireCard(actor.userId, ctx.card.id));
+}
+
+/** Tells the person an item was given to (inbox, device, Discord), with the item's due day when it has one. */
+async function notifyItemGiven(tx: Executor, actor: Actor, ctx: CardAccess, assigneeId: string, item: string, dueOn: string | null): Promise<string[]> {
+  return notify(tx, {
+    recipientIds: [assigneeId],
+    actorId: actor.userId,
+    type: "ASSIGNED",
+    selfDm: true,
+    studioId: ctx.access.studioId,
+    projectId: ctx.card.projectId,
+    cardId: ctx.card.id,
+    data: { ...cardNotificationData(ctx.access, ctx.card), role: "item", item, dueAt: dueOn ? new Date(`${dueOn}T18:00:00`).toISOString() : null },
+  });
 }
 
 /** People a checklist item can be given to: project members who can work on cards (not Viewers). */
@@ -113,6 +128,7 @@ export async function addChecklistItems(
   if (texts.length > 50) throw invalid("Add at most 50 items at once.");
   const dueOn = normalizeDueOn(input.dueOn);
   await assertAssignee(ctx, input.assigneeId);
+  const fx = new Effects();
   const checklist = await db.transaction(async (tx) => {
     let list: { id: string; title: string } | undefined;
     if (input.checklistId) {
@@ -128,13 +144,16 @@ export async function addChecklistItems(
       position = positionBetween(position, null)!;
       await tx.insert(checklistItems).values({ checklistId: list!.id, cardId: ctx.card.id, text, position, assigneeId: input.assigneeId ?? null, dueOn });
       const base = { studioId: ctx.access.studioId, projectId: ctx.card.projectId, cardId: ctx.card.id, actorId: actor.userId };
-      if (input.assigneeId) await logActivity(tx, { ...base, type: "checklist.item_assigned", data: { item: text, userId: input.assigneeId } });
+      if (input.assigneeId) {
+        await logActivity(tx, { ...base, type: "checklist.item_assigned", data: { item: text, userId: input.assigneeId } });
+        fx.notify(await notifyItemGiven(tx, actor, ctx, input.assigneeId, text, dueOn));
+      }
       if (dueOn) await logActivity(tx, { ...base, type: "checklist.item_due", data: { item: text, to: dueOn } });
     }
     await touchCard(tx, ctx.card.id, actor.userId, false);
     return list!;
   });
-  new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
+  fx.card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
   return { ctx, checklist, added: texts.length };
 }
 
@@ -159,6 +178,7 @@ export async function updateChecklistItem(
   else if (input.isDone !== undefined && !canTickItem(ctx, item, actor.userId)) throw forbidden("You can tick off only items given to you, unless you can edit this card.");
   if (input.assigneeId !== undefined) await assertAssignee(ctx, input.assigneeId);
   const dueOn = input.dueOn !== undefined ? normalizeDueOn(input.dueOn) : undefined;
+  const fx = new Effects();
   await db.transaction(async (tx) => {
     const patch: Partial<typeof checklistItems.$inferInsert> = {};
     if (input.text !== undefined) {
@@ -176,7 +196,10 @@ export async function updateChecklistItem(
     await tx.update(checklistItems).set(patch).where(eq(checklistItems.id, item.id));
     const base = { studioId: ctx.access.studioId, projectId: ctx.card.projectId, cardId: ctx.card.id, actorId: actor.userId };
     const label = patch.text ?? item.text;
-    if (patch.assigneeId !== undefined) await logActivity(tx, { ...base, type: "checklist.item_assigned", data: { item: label, userId: patch.assigneeId } });
+    if (patch.assigneeId !== undefined) {
+      await logActivity(tx, { ...base, type: "checklist.item_assigned", data: { item: label, userId: patch.assigneeId } });
+      if (patch.assigneeId) fx.notify(await notifyItemGiven(tx, actor, ctx, patch.assigneeId, label, patch.dueOn ?? item.dueOn));
+    }
     if (patch.dueOn !== undefined) await logActivity(tx, { ...base, type: "checklist.item_due", data: { item: label, to: patch.dueOn } });
     // Ticking someone's item off is worth recording; other ticks only when a whole list is done.
     if (patch.isDone && item.assigneeId) await logActivity(tx, { ...base, type: "checklist.item_done", data: { item: label, userId: item.assigneeId } });
@@ -192,7 +215,7 @@ export async function updateChecklistItem(
     }
     await touchCard(tx, ctx.card.id, actor.userId, false);
   });
-  return finish(actor, ctx);
+  return finish(actor, ctx, fx);
 }
 
 export async function moveChecklistItem(actor: Actor, input: { itemId: string; index: number }) {

@@ -15,7 +15,8 @@ import { isDiscordDmType } from "@/lib/discord";
 import { notificationSubject } from "@/lib/notifications";
 import { now } from "../clock";
 import { db } from "../db";
-import { cards, deliverables, discordConnections, discordDmDeliveries, discordDmRecipients, oauthAccounts, studioMembers, studios, users } from "../db/schema";
+import { blockedBy } from "@/lib/deliverables";
+import { cards, deliverableLinks, deliverables, discordConnections, discordDmDeliveries, discordDmRecipients, oauthAccounts, studioMembers, studios, users } from "../db/schema";
 import { appOrigin } from "../env";
 import { invalid } from "../errors";
 import type { Actor } from "./context";
@@ -114,6 +115,31 @@ async function workDueAt(n: NotificationRecord): Promise<string | null> {
 }
 
 /**
+ * For an assignment: whether the work can start now. A deliverable waits on unapproved prerequisites;
+ * a card is ready when any of its active deliverables is (the owner picks what to start with).
+ */
+async function workReadiness(n: NotificationRecord): Promise<string | null> {
+  if (!n.cardId) return null;
+  const [rows, links] = await Promise.all([
+    db.select({ id: deliverables.id, name: deliverables.name, state: deliverables.state, archivedAt: deliverables.archivedAt }).from(deliverables).where(eq(deliverables.cardId, n.cardId)),
+    db.select({ fromId: deliverableLinks.fromId, toId: deliverableLinks.toId, type: deliverableLinks.type }).from(deliverableLinks).where(eq(deliverableLinks.cardId, n.cardId)),
+  ]);
+  const items = rows.map((d) => ({ id: d.id, state: d.state, archived: Boolean(d.archivedAt) }));
+  const waiting = blockedBy(items, links);
+  const names = new Map(rows.map((d) => [d.id, d.name]));
+  const describe = (ids: string[]) => `⏳ Waiting on ${ids.map((id) => escapeMarkdown(names.get(id) ?? "a prerequisite")).join(", ")}`;
+  if (n.deliverableId) {
+    const ids = waiting.get(n.deliverableId);
+    return ids?.length ? describe(ids) : "🟢 Ready to start";
+  }
+  const active = items.filter((d) => !d.archived && d.state !== "APPROVED");
+  if (!active.length) return null;
+  const ready = active.filter((d) => !waiting.get(d.id)?.length);
+  if (ready.length) return "🟢 Ready to start";
+  return describe([...new Set(active.flatMap((d) => waiting.get(d.id) ?? []))]);
+}
+
+/**
  * One notification: a label saying what kind it is, the card as the title link, one sentence that
  * doesn't repeat the card, the project and the work's deadline, and a button for the next step.
  */
@@ -121,18 +147,23 @@ async function notificationMessage(n: NotificationRecord, link: Awaited<ReturnTy
   const data = n.data as Record<string, unknown>;
   const style = DM_STYLES[n.type] ?? DM_DEFAULT_STYLE;
   const cardTitle = str(data.cardTitle);
+  const itemTitle = str(data.itemKey) && str(data.itemTitle) ? `${str(data.itemKey)} ${str(data.itemTitle)}` : null;
   const fields: Array<{ name: string; value: string; inline: boolean }> = [];
   if (link.projectName) fields.push({ name: "Project", value: escapeMarkdown(link.projectName), inline: true });
   if (n.type !== "DUE_SOON" && n.type !== "OVERDUE") {
     const due = discordTime(await workDueAt(n), "R");
     if (due) fields.push({ name: "Due", value: due, inline: true });
   }
+  if (n.type === "ASSIGNED" && data.role !== "item") {
+    const readiness = await workReadiness(n);
+    if (readiness) fields.push({ name: "Status", value: readiness, inline: true });
+  }
   const [studio] = await db.select({ name: studios.name }).from(studios).where(eq(studios.id, n.studioId));
   return buildDiscordMessage({
     type: "TEST",
     color: style.color,
     author: style.label,
-    title: link.cardKey && cardTitle ? `${link.cardKey} ${cardTitle}` : (cardTitle ?? link.projectName ?? "Forge"),
+    title: itemTitle ?? (link.cardKey && cardTitle ? `${link.cardKey} ${cardTitle}` : (cardTitle ?? link.projectName ?? "Forge")),
     url: `${appOrigin()}${link.path}`,
     description: dmSentence(n.type, data, actorName),
     fields,
@@ -178,7 +209,7 @@ function welcomeMessage(): DiscordMessage {
       "I'll message you here when:",
       "⏰ your work is due soon or overdue",
       "📥 there's something for you to review, or a decision on your work",
-      "👤 you're assigned to a card or made its reviewer",
+      "👤 you're assigned to a card, a deliverable, a checklist item or a bug, or made a reviewer",
       "💬 someone mentions you or replies to you",
       "",
       "You can also ask me, here or in your team's server (only you see the answers):",

@@ -104,7 +104,7 @@ export function notificationText(type: NotificationType, data: Data, actorName: 
   const noun = str(data.itemNoun) ?? "item";
   switch (type) {
     case "ASSIGNED":
-      return `${who} made you ${role} ${what}.`;
+      return data.role === "item" ? `${who} gave you the checklist item "${str(data.item) ?? ""}" on ${what}.` : `${who} made you ${role} ${what}.`;
     case "UNASSIGNED":
       return `${who} took you off ${what}.`;
     case "REVIEWER_ASSIGNED":

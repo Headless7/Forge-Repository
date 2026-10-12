@@ -716,7 +716,7 @@ function ConnectedAccounts({ profile }: { profile: Profile }) {
                 </div>
               ) : provider === "discord" && dms.available && linked ? (
                 <p className="mt-1 text-[12px] text-fg-muted">
-                  Forge sends you direct messages on Discord when your work is due soon or overdue, about reviews and assignments, and when someone mentions or replies to you. In Discord, <code className="font-mono">/mywork</code>, <code className="font-mono">/reviews</code>, <code className="font-mono">/card</code> and <code className="font-mono">/due</code> show your work and let you act on it, <code className="font-mono">/newcard</code> creates a card and <code className="font-mono">/additem</code> adds a checklist item — only you see the replies.
+                  Forge sends you direct messages on Discord when your work is due soon or overdue, when you're given a card, deliverable, checklist item or bug, about reviews, and when someone mentions or replies to you. In Discord, <code className="font-mono">/mywork</code>, <code className="font-mono">/reviews</code>, <code className="font-mono">/card</code> and <code className="font-mono">/due</code> show your work and let you act on it, <code className="font-mono">/newcard</code> creates a card and <code className="font-mono">/additem</code> adds a checklist item — only you see the replies.
                 </p>
               ) : provider === "discord" && dms.available && available ? (
                 <p className="mt-1 text-[12px] text-fg-muted">Connect it to also get direct messages from Forge about your deadlines, reviews and mentions, and to use Forge&apos;s commands in Discord (/mywork, /reviews, /card, /due, /newcard, /additem).</p>

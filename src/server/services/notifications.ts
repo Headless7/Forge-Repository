@@ -53,6 +53,11 @@ export interface NotifyInput {
   data?: Record<string, unknown>;
   /** Reach each person at most once with this key (reminders); repeats are ignored on every channel. */
   dedupeKey?: string;
+  /**
+   * Also tell the actor — by Discord DM only, never inbox, device or email. For assignments, so
+   * taking work yourself still lands in your Discord, where the deadline reminders will follow.
+   */
+  selfDm?: boolean;
 }
 
 /** Where a notification opens: the board the card is on, and within the card the deliverable, revision or comment. */
@@ -251,7 +256,8 @@ async function queueEmails(ex: Executor, input: NotifyInput, recipients: Array<{
  * in the transaction and sent only after it commits. Returns who was notified on any channel.
  */
 export async function notify(ex: Executor, input: NotifyInput): Promise<string[]> {
-  let candidates = [...new Set(input.recipientIds)].filter((id) => id && id !== input.actorId);
+  const self = input.selfDm && input.actorId && [...input.recipientIds].includes(input.actorId) ? input.actorId : null;
+  let candidates = [...new Set(input.recipientIds)].filter((id) => id && (id !== input.actorId || id === self));
   if (candidates.length === 0) return [];
 
   if (input.projectId) {
@@ -275,13 +281,17 @@ export async function notify(ex: Executor, input: NotifyInput): Promise<string[]
   const emailOn = emailDeliveryConfigured();
   const dms = isDiscordDmType(input.type) ? await discordDmUsers(ex, candidates) : new Set<string>();
   const plan = candidates
-    .map((userId) => ({
-      userId,
-      inbox: on(userId, "IN_APP"),
-      devices: on(userId, "PUSH") ? devices.filter((d) => d.userId === userId).map((d) => d.id) : [],
-      email: emailOn && on(userId, "EMAIL"),
-      discord: dms.has(userId),
-    }))
+    .map((userId) =>
+      userId === self
+        ? { userId, inbox: false, devices: [] as string[], email: false, discord: dms.has(userId) }
+        : {
+            userId,
+            inbox: on(userId, "IN_APP"),
+            devices: on(userId, "PUSH") ? devices.filter((d) => d.userId === userId).map((d) => d.id) : [],
+            email: emailOn && on(userId, "EMAIL"),
+            discord: dms.has(userId),
+          },
+    )
     .filter((p) => p.inbox || p.devices.length || p.email || p.discord);
   if (plan.length === 0) return [];
 

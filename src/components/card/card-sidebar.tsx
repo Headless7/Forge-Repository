@@ -12,8 +12,8 @@ import { cn, dueStatus, formatDateTime, timeAgo, toLocalInput } from "@/lib/util
 import { useQueryClient } from "@tanstack/react-query";
 import { useBoard } from "../board/board-context";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
-import { DiscordHandle } from "../domain/discord-icon";
 import { MemberPopover } from "../domain/member-popover";
+import { PeopleMenu } from "../domain/people-menu";
 import { DueChip, LabelChip, PriorityIcon, StatePill } from "../domain/state";
 import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
@@ -97,32 +97,16 @@ function PeoplePicker({
           {content}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-64 max-h-[min(20rem,var(--radix-popover-content-available-height))] p-1">
-        <ul>
-          {members.filter((m) => (filter ? filter(m) : true)).map((m) => {
-            const on = selected.includes(m.id);
-            return (
-              <li key={m.id}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    changed.current = true;
-                    onToggle(m.id, !on);
-                  }}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4"
-                >
-                  <UserAvatar user={m} size="xs" online={m.online} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{m.displayName}</span>
-                    {m.title ? <span className="block truncate text-[11px] text-fg-subtle">{m.title}</span> : null}
-                    {m.discord ? <DiscordHandle username={m.discord.username} className="text-[11px]" /> : null}
-                  </span>
-                  {on ? <Check className="size-4 text-accent" /> : null}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+      <PopoverContent className="flex max-h-[var(--radix-popover-content-available-height)] w-64 max-w-[calc(100vw-16px)] flex-col overflow-y-auto p-2" onOpenAutoFocus={(e) => window.matchMedia("(pointer: coarse)").matches && e.preventDefault()}>
+        <PeopleMenu
+          people={members.filter((m) => (filter ? filter(m) : true))}
+          selectedIds={selected}
+          label={emptyLabel === "Any manager" ? "Reviewers" : "Assignees"}
+          onToggle={(id, on) => {
+            changed.current = true;
+            onToggle(id, on);
+          }}
+        />
       </PopoverContent>
     </Popover>
   );

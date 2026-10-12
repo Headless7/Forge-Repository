@@ -92,6 +92,7 @@ export function describeNotification(n: NotificationDTO): { headline: ReactNode;
     status?: string;
     resolution?: string;
     itemNoun?: string;
+    item?: string;
   };
   const noun = d.itemNoun || "item";
   const cardTitle = <strong className="font-semibold text-fg">{n.card?.title ?? n.item?.title ?? "a card"}</strong>;
@@ -108,7 +109,9 @@ export function describeNotification(n: NotificationDTO): { headline: ReactNode;
   const role = d.role === "contributor" ? "a contributor to" : "responsible for";
   switch (n.type) {
     case "ASSIGNED":
-      return { headline: <>{actor} made you {role} {what}</>, detail: null };
+      return d.role === "item"
+        ? { headline: <>{actor} gave you a checklist item on {what}</>, detail: `${d.item ?? ""}${d.dueAt ? ` · due ${formatDue(d.dueAt)}` : ""}` }
+        : { headline: <>{actor} made you {role} {what}</>, detail: null };
     case "UNASSIGNED":
       return { headline: <>{actor} took you off {d.role === "reviewer" ? "reviewing " : ""}{what}</>, detail: null };
     case "REVIEWER_ASSIGNED":

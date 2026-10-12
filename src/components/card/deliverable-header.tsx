@@ -9,9 +9,10 @@ import { useCardMutation } from "@/lib/queries";
 import type { DeliverableDTO, MemberDTO } from "@/lib/types";
 import { cn, toLocalInput } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
+import { PeopleMenu, PersonPicker } from "../domain/people-menu";
 import { StatePill } from "../domain/state";
 import { Button } from "../ui/button";
-import { Checkbox, Select } from "../ui/controls";
+import { Checkbox } from "../ui/controls";
 import { ConfirmDialog } from "../ui/dialog";
 import { Input, Textarea } from "../ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip } from "../ui/menu";
@@ -103,22 +104,8 @@ function ContributorsPicker({ d, members, viewerId, canAssign, canSelfAssign, on
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 max-h-[min(20rem,var(--radix-popover-content-available-height))] p-1">
-        <p className="px-2 py-1.5 text-[11px] text-fg-subtle">They can upload, submit and resolve feedback on this deliverable only.</p>
-        <ul>
-          {workers.map((m) => {
-            const mayToggle = canAssign || m.id === viewerId;
-            return (
-              <li key={m.id}>
-                <label className={cn("flex min-h-9 items-center gap-2 rounded-md px-2 text-[13px]", mayToggle ? "cursor-pointer hover:bg-surface-4" : "opacity-50")}>
-                  <Checkbox checked={d.contributorIds.includes(m.id)} disabled={!mayToggle} onCheckedChange={() => toggle(m.id)} aria-label={m.displayName} />
-                  <UserAvatar user={m} size="xs" />
-                  <span className="truncate">{m.displayName}</span>
-                </label>
-              </li>
-            );
-          })}
-        </ul>
+      <PopoverContent align="start" className="flex max-h-[var(--radix-popover-content-available-height)] w-64 max-w-[calc(100vw-16px)] flex-col overflow-y-auto p-2" onOpenAutoFocus={(e) => window.matchMedia("(pointer: coarse)").matches && e.preventDefault()}>
+        <PeopleMenu people={workers} selectedIds={d.contributorIds} label="Contributors" hint="They can upload, submit and resolve feedback on this deliverable only." canToggle={(m) => canAssign || m.id === viewerId} onToggle={(id) => toggle(id)} />
       </PopoverContent>
     </Popover>
   );
@@ -240,18 +227,14 @@ export function DeliverableHeader() {
         </label>
         <div className="grid gap-0.5">
           <span className="text-[11px] text-fg-subtle">Responsible</span>
-          <Select
-            aria-label="Responsible"
-            value={d.ownerId ?? "none"}
-            disabled={!(canAssign || card.permissions.canSelfAssign)}
-            onValueChange={(v) => update.mutate({ deliverableId: d.id, ownerId: v === "none" ? null : v })}
-            options={[
-              { value: "none", label: inheritsPeople ? "Card assignees (inherited)" : "No one" },
-              ...members
-                .filter((m) => (roleHas(m.role, "attachment.upload") && (canAssign || m.id === viewerId)) || m.id === d.ownerId)
-                .map((m) => ({ value: m.id, label: m.displayName, icon: <UserAvatar user={m} size="xs" /> })),
-            ]}
-            className="h-7"
+          <PersonPicker
+            label="Responsible"
+            variant="field"
+            value={d.ownerId}
+            canEdit={canAssign || card.permissions.canSelfAssign}
+            emptyLabel={inheritsPeople ? "Card assignees (inherited)" : "No one"}
+            members={members.filter((m) => (roleHas(m.role, "attachment.upload") && (canAssign || m.id === viewerId)) || m.id === d.ownerId)}
+            onChange={(ownerId) => update.mutate({ deliverableId: d.id, ownerId })}
           />
         </div>
         <div className="grid gap-0.5">
@@ -267,16 +250,14 @@ export function DeliverableHeader() {
         </div>
         <div className="grid gap-0.5">
           <span className="text-[11px] text-fg-subtle">Reviewer</span>
-          <Select
-            aria-label="Reviewer"
-            value={d.reviewerId ?? "none"}
-            disabled={!canAssign}
-            onValueChange={(v) => update.mutate({ deliverableId: d.id, reviewerId: v === "none" ? null : v })}
-            options={[
-              { value: "none", label: "Card reviewers (inherited)" },
-              ...members.filter((m) => roleHas(m.role, "card.review") || m.id === d.reviewerId).map((m) => ({ value: m.id, label: m.displayName, icon: <UserAvatar user={m} size="xs" /> })),
-            ]}
-            className="h-7"
+          <PersonPicker
+            label="Reviewer"
+            variant="field"
+            value={d.reviewerId}
+            canEdit={canAssign}
+            emptyLabel="Card reviewers (inherited)"
+            members={members.filter((m) => roleHas(m.role, "card.review") || m.id === d.reviewerId)}
+            onChange={(reviewerId) => update.mutate({ deliverableId: d.id, reviewerId })}
           />
         </div>
         <div className="grid gap-0.5">
