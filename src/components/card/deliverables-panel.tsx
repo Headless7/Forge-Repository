@@ -12,6 +12,7 @@ import { cn, formatShortDate } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/queries";
 import { PersonPicker } from "../domain/people-menu";
+import { recentPeopleKey } from "@/lib/recent-people";
 import { DeliverableProgress, KIND_ICONS } from "../domain/production";
 import { StatePill } from "../domain/state";
 import { Button } from "../ui/button";
@@ -145,6 +146,7 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
                 emptyLabel="Card assignees (inherited)"
                 members={members.filter((m) => roleHas(m.role, "attachment.upload") && (canAssign || m.id === viewerId))}
                 onChange={(id) => setOwnerId(id ?? "none")}
+                recentKey={recentPeopleKey(card.projectId, `${card.columnId}:assignees`)}
               />
             </div>
             {canAssign ? (
@@ -159,6 +161,7 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
                   emptyLabel="Card reviewers (inherited)"
                   members={members.filter((m) => roleHas(m.role, "card.review"))}
                   onChange={(id) => setReviewerId(id ?? "none")}
+                  recentKey={recentPeopleKey(card.projectId, `${card.columnId}:reviewers`)}
                 />
               </div>
             ) : null}

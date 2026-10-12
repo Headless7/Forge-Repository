@@ -10,6 +10,7 @@ import type { DeliverableDTO, MemberDTO } from "@/lib/types";
 import { cn, toLocalInput } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { PeopleMenu, PersonPicker } from "../domain/people-menu";
+import { recentPeopleKey } from "@/lib/recent-people";
 import { StatePill } from "../domain/state";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/controls";
@@ -67,13 +68,14 @@ function formatDue(iso: string) {
  * People working on a deliverable alongside its responsible person. Managers pick anyone who can
  * work in the project; others can only add or remove themselves.
  */
-function ContributorsPicker({ d, members, viewerId, canAssign, canSelfAssign, onChange }: {
+function ContributorsPicker({ d, members, viewerId, canAssign, canSelfAssign, onChange, recentKey }: {
   d: DeliverableDTO;
   members: MemberDTO[];
   viewerId: string;
   canAssign: boolean;
   canSelfAssign: boolean;
   onChange: (ids: string[]) => void;
+  recentKey?: string;
 }) {
   const workers = members.filter((m) => roleHas(m.role, "attachment.upload") && m.id !== d.ownerId);
   const chosen = members.filter((m) => d.contributorIds.includes(m.id));
@@ -105,7 +107,7 @@ function ContributorsPicker({ d, members, viewerId, canAssign, canSelfAssign, on
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="flex max-h-[var(--radix-popover-content-available-height)] w-64 max-w-[calc(100vw-16px)] flex-col overflow-y-auto p-2" onOpenAutoFocus={(e) => window.matchMedia("(pointer: coarse)").matches && e.preventDefault()}>
-        <PeopleMenu people={workers} selectedIds={d.contributorIds} label="Contributors" hint="They can upload, submit and resolve feedback on this deliverable only." canToggle={(m) => canAssign || m.id === viewerId} onToggle={(id) => toggle(id)} />
+        <PeopleMenu people={workers} selectedIds={d.contributorIds} label="Contributors" hint="They can upload, submit and resolve feedback on this deliverable only." canToggle={(m) => canAssign || m.id === viewerId} onToggle={(id) => toggle(id)} recentKey={recentKey} />
       </PopoverContent>
     </Popover>
   );
@@ -235,6 +237,7 @@ export function DeliverableHeader() {
             emptyLabel={inheritsPeople ? "Card assignees (inherited)" : "No one"}
             members={members.filter((m) => (roleHas(m.role, "attachment.upload") && (canAssign || m.id === viewerId)) || m.id === d.ownerId)}
             onChange={(ownerId) => update.mutate({ deliverableId: d.id, ownerId })}
+            recentKey={recentPeopleKey(card.projectId, `${card.columnId}:assignees`)}
           />
         </div>
         <div className="grid gap-0.5">
@@ -246,6 +249,7 @@ export function DeliverableHeader() {
             canAssign={canAssign}
             canSelfAssign={card.permissions.canSelfAssign}
             onChange={(ids) => update.mutate({ deliverableId: d.id, contributorIds: ids })}
+            recentKey={recentPeopleKey(card.projectId, `${card.columnId}:assignees`)}
           />
         </div>
         <div className="grid gap-0.5">
@@ -258,6 +262,7 @@ export function DeliverableHeader() {
             emptyLabel="Card reviewers (inherited)"
             members={members.filter((m) => roleHas(m.role, "card.review") || m.id === d.reviewerId)}
             onChange={(reviewerId) => update.mutate({ deliverableId: d.id, reviewerId })}
+            recentKey={recentPeopleKey(card.projectId, `${card.columnId}:reviewers`)}
           />
         </div>
         <div className="grid gap-0.5">

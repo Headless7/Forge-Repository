@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { FORUM_KIND_META, ITEM_PRIORITY_META, ITEM_PRIORITY_ORDER, priorityLabel, withArticle } from "@/lib/forum-meta";
 import { qk, useRpcMutation } from "@/lib/queries";
+import { recentPeopleKey } from "@/lib/recent-people";
 import type { ForumItemDetailDTO, ForumViewDTO, ItemPriority, MemberDTO } from "@/lib/types";
 import { formatBytes } from "@/lib/utils";
 import { Button } from "../ui/button";
@@ -156,7 +157,7 @@ export function NewItemDialog({
             <div>
               <Label>Assign to</Label>
               <div className="rounded-md border border-border-strong/70 bg-surface-3/60 px-2.5 py-1 text-[13px]">
-                <PersonPicker label="Assignee" value={assigneeId} members={canAssign ? members : members.filter((m) => m.id === viewerId)} canEdit emptyLabel={canAssign ? "Nobody yet" : "Nobody yet (or me)"} onChange={setAssigneeId} />
+                <PersonPicker label="Assignee" value={assigneeId} members={canAssign ? members : members.filter((m) => m.id === viewerId)} canEdit emptyLabel={canAssign ? "Nobody yet" : "Nobody yet (or me)"} onChange={setAssigneeId} recentKey={recentPeopleKey(view.project.id, `forum:${forum.id}:assignee`)} />
               </div>
             </div>
             <div>

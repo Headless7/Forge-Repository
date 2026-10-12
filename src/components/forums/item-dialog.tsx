@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { FORUM_KIND_META, ITEM_PRIORITY_ORDER, ITEM_RESOLUTION_META, ITEM_RESOLUTION_ORDER, priorityLabel, statusLabel } from "@/lib/forum-meta";
 import { qk, useItemMutation, useRpcMutation } from "@/lib/queries";
+import { recentPeopleKey } from "@/lib/recent-people";
 import { rpc } from "@/lib/rpc-client";
 import type { ForumDTO, ForumItemDetailDTO, ForumViewDTO, ItemPriority, ItemResolution, MemberDTO } from "@/lib/types";
 import { cn, formatDateTime, timeAgo } from "@/lib/utils";
@@ -222,6 +223,7 @@ export function ItemDialog({
                         canEdit={canAssignOthers || (perms.canSelfAssign && !item.assigneeId) || (perms.canEdit && item.assigneeId === viewerId)}
                         emptyLabel="Nobody yet"
                         onChange={(assigneeId) => update.mutate({ itemId, assigneeId })}
+                        recentKey={recentPeopleKey(projectId, `forum:${forum.id}:assignee`)}
                       />
                     </Row>
                     <Row label="Reviewer">

@@ -2,6 +2,7 @@
 
 import { Check, Search, UserRound } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
+import { getRecentPeople, rememberPerson } from "@/lib/recent-people";
 import type { MemberDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "./avatar";
@@ -55,6 +56,7 @@ export function PeopleMenu({
   label,
   hint,
   emptyText = "No one matches.",
+  recentKey,
 }: {
   people: MemberDTO[];
   selectedIds: readonly string[];
@@ -70,15 +72,54 @@ export function PeopleMenu({
   /** A line under the heading explaining the choice. */
   hint?: ReactNode;
   emptyText?: string;
+  /** Where picks are remembered (lib/recent-people): the people picked last show first while nothing is typed. */
+  recentKey?: string;
 }) {
   const [query, setQuery] = useState("");
+  const [recentIds, setRecentIds] = useState(() => getRecentPeople(recentKey));
   const shown = useMemo(() => people.filter((m) => matchesPerson(m, query)), [people, query]);
   const q = query.trim().toLowerCase();
+  const recent = !q ? recentIds.map((id) => people.find((m) => m.id === id)).filter((m): m is MemberDTO => Boolean(m)) : [];
+  const rest = recent.length ? shown.filter((m) => !recent.includes(m)) : shown;
+  const pick = (userId: string, selected: boolean) => {
+    if (selected && recentKey) {
+      rememberPerson(recentKey, userId);
+      setRecentIds(getRecentPeople(recentKey));
+    }
+    onToggle(userId, selected);
+  };
   const showNobody = nobody && (!q || nobody.label.toLowerCase().includes(q));
   const enter = () => {
     const first = shown[0];
     if (!q || !first || (canToggle && !canToggle(first))) return;
-    onToggle(first.id, !selectedIds.includes(first.id));
+    pick(first.id, !selectedIds.includes(first.id));
+  };
+  const renderRow = (m: MemberDTO) => {
+    const on = selectedIds.includes(m.id);
+    const allowed = canToggle ? canToggle(m) : true;
+    const row = (
+      <>
+        {!single ? <Checkbox checked={on} disabled={!allowed} aria-label={m.displayName} onCheckedChange={() => allowed && pick(m.id, !on)} /> : null}
+        <UserAvatar user={m} size="xs" online={m.online} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{m.displayName}</span>
+          {m.title ? <span className="block truncate text-[11px] text-fg-subtle">{m.title}</span> : null}
+          {m.discord ? <DiscordHandle username={m.discord.username} className="text-[11px]" /> : null}
+        </span>
+        {single && on ? <Check className="size-4 text-accent" aria-label="Selected" /> : null}
+      </>
+    );
+    return (
+      <li key={m.id}>
+        {single ? (
+          <button type="button" disabled={!allowed} onClick={() => pick(m.id, !on)} className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]", allowed ? "hover:bg-surface-4" : "opacity-50")}>
+            {row}
+          </button>
+        ) : (
+          <label className={cn("flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13px]", allowed ? "cursor-pointer hover:bg-surface-4" : "opacity-50")}>{row}</label>
+        )}
+      </li>
+    );
   };
   return (
     <div className="flex min-h-0 flex-col gap-1">
@@ -95,33 +136,20 @@ export function PeopleMenu({
             </button>
           </li>
         ) : null}
-        {shown.map((m) => {
-          const on = selectedIds.includes(m.id);
-          const allowed = canToggle ? canToggle(m) : true;
-          const row = (
-            <>
-              {!single ? <Checkbox checked={on} disabled={!allowed} aria-label={m.displayName} onCheckedChange={() => allowed && onToggle(m.id, !on)} /> : null}
-              <UserAvatar user={m} size="xs" online={m.online} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate">{m.displayName}</span>
-                {m.title ? <span className="block truncate text-[11px] text-fg-subtle">{m.title}</span> : null}
-                {m.discord ? <DiscordHandle username={m.discord.username} className="text-[11px]" /> : null}
-              </span>
-              {single && on ? <Check className="size-4 text-accent" aria-label="Selected" /> : null}
-            </>
-          );
-          return (
-            <li key={m.id}>
-              {single ? (
-                <button type="button" disabled={!allowed} onClick={() => onToggle(m.id, !on)} className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]", allowed ? "hover:bg-surface-4" : "opacity-50")}>
-                  {row}
-                </button>
-              ) : (
-                <label className={cn("flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13px]", allowed ? "cursor-pointer hover:bg-surface-4" : "opacity-50")}>{row}</label>
-              )}
+        {recent.length ? (
+          <>
+            <li className="px-2 pb-0.5 pt-1 text-[10.5px] font-semibold uppercase tracking-wide text-fg-subtle" aria-hidden>
+              Recent
             </li>
-          );
-        })}
+            {recent.map(renderRow)}
+            {rest.length ? (
+              <li className="px-2 pb-0.5 pt-2 text-[10.5px] font-semibold uppercase tracking-wide text-fg-subtle" aria-hidden>
+                Everyone else
+              </li>
+            ) : null}
+          </>
+        ) : null}
+        {rest.map(renderRow)}
         {q && !shown.length && !showNobody ? <li className="px-2 py-1.5 text-[12.5px] text-fg-muted">{emptyText}</li> : null}
       </ul>
     </div>
@@ -140,6 +168,7 @@ export function PersonPicker({
   className,
   variant = "inline",
   disabled,
+  recentKey,
 }: {
   value: string | null;
   members: MemberDTO[];
@@ -153,6 +182,8 @@ export function PersonPicker({
   /** "inline": a text row that highlights on hover (sidebars). "field": a bordered control like a select (forms). */
   variant?: "inline" | "field";
   disabled?: boolean;
+  /** Where picks are remembered, so the people picked last show first (lib/recent-people). */
+  recentKey?: string;
 }) {
   const person = value ? (members.find((m) => m.id === value) ?? null) : null;
   const summary = value ? (
@@ -196,6 +227,7 @@ export function PersonPicker({
           label={label}
           nobody={{ label: emptyLabel, selected: !value, onSelect: () => value !== null && onChange(null) }}
           onToggle={(id, on) => on && id !== value && onChange(id)}
+          recentKey={recentKey}
         />
       </PopoverContent>
     </Popover>

@@ -14,6 +14,7 @@ import { useBoard } from "../board/board-context";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
 import { MemberPopover } from "../domain/member-popover";
 import { PeopleMenu } from "../domain/people-menu";
+import { recentPeopleKey } from "@/lib/recent-people";
 import { DueChip, LabelChip, PriorityIcon, StatePill } from "../domain/state";
 import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
@@ -43,6 +44,7 @@ function PeoplePicker({
   emptyLabel,
   filter,
   onClosed,
+  recentKey,
 }: {
   selected: string[];
   members: MemberDTO[];
@@ -52,6 +54,8 @@ function PeoplePicker({
   filter?: (m: MemberDTO) => boolean;
   /** The picker closed; `changed` says whether anyone was added or removed. */
   onClosed?: (changed: boolean) => void;
+  /** Where picks are remembered: the people assigned last in this category show first. */
+  recentKey?: string;
 }) {
   const { membersById } = useWorkspace();
   const changed = useRef(false);
@@ -102,6 +106,7 @@ function PeoplePicker({
           people={members.filter((m) => (filter ? filter(m) : true))}
           selectedIds={selected}
           label={emptyLabel === "Any manager" ? "Reviewers" : "Assignees"}
+          recentKey={recentKey}
           onToggle={(id, on) => {
             changed.current = true;
             onToggle(id, on);
@@ -240,6 +245,7 @@ export function CardSidebar({ onApprove, onRequestChanges, onSubmit, onUploadVer
                 members={perms.canAssign ? members : members.filter((m) => m.id === viewerId)}
                 canEdit={perms.canAssign || perms.canSelfAssign}
                 emptyLabel={perms.canSelfAssign ? "Assign yourself" : "Nobody"}
+                recentKey={recentPeopleKey(card.projectId, `${card.columnId}:assignees`)}
                 onToggle={(userId, add) => assignees.mutate({ cardId: card.id, ...(add ? { add: [userId] } : { remove: [userId] }) })}
                 // After assigning (picker closed): who's responsible for what.
                 onClosed={(changedAny) => changedAny && tutorial.trigger("card.assignment")}
@@ -254,6 +260,7 @@ export function CardSidebar({ onApprove, onRequestChanges, onSubmit, onUploadVer
             filter={reviewCapable}
             canEdit={perms.canAssign}
             emptyLabel="Any manager"
+            recentKey={recentPeopleKey(card.projectId, `${card.columnId}:reviewers`)}
             onToggle={(userId, add) => reviewers.mutate({ cardId: card.id, ...(add ? { add: [userId] } : { remove: [userId] }) })}
           />
         </Row>
