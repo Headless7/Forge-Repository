@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, Download, Loader2, RefreshCw } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { toast } from "sonner";
 import { qk } from "@/lib/queries";
 import { errorMessage, rpc, RpcError } from "@/lib/rpc-client";
@@ -88,6 +88,11 @@ export function RobloxPreview({
   onTimelineActive,
   onPlayingChange,
   onTimeChange,
+  demo,
+  demoActive,
+  onDemoActiveChange,
+  onAddDemo,
+  onRemoveDemo,
 }: {
   attachment: AttachmentDTO;
   timelineRef: RefObject<TimelineHandle | null>;
@@ -97,6 +102,12 @@ export function RobloxPreview({
   onTimelineActive: (active: boolean) => void;
   onPlayingChange?: (playing: boolean) => void;
   onTimeChange?: (ms: number) => void;
+  /** A demonstration clip of this file, wired for feedback (see MediaSection). */
+  demo?: ReactNode;
+  demoActive?: boolean;
+  onDemoActiveChange?: (active: boolean) => void;
+  onAddDemo?: () => void;
+  onRemoveDemo?: () => void;
 }) {
   const { card, scope } = useScope();
   const queryClient = useQueryClient();
@@ -453,6 +464,11 @@ export function RobloxPreview({
       onPlayingChange={onPlayingChange}
       onTimeChange={onTimeChange}
       onClipChange={setClipNode}
+      demo={demo}
+      demoActive={demoActive}
+      onDemoActiveChange={onDemoActiveChange}
+      onAddDemo={onAddDemo}
+      onRemoveDemo={onRemoveDemo}
     />
   );
 }

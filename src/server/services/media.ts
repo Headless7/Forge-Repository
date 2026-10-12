@@ -29,7 +29,7 @@ import { Effects } from "./effects";
 import { notify } from "./notifications";
 import { ABANDONED_UPLOAD_MS, reserveStudioStorage } from "./storage-quota";
 
-export type UploadPurpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "item";
+export type UploadPurpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "item" | "demo";
 
 /** Forum items (bug reports, QA checks) take pictures and clips only (the kinds the list and lightbox show). */
 const ITEM_KINDS = ["IMAGE", "VIDEO"] as const;
@@ -116,12 +116,12 @@ export async function updateVersionNotes(actor: Actor, input: { versionId: strin
 
 /** A card upload (`ctx`) or a forum-item upload (`item`): exactly one is set. */
 type UploadScope =
-  | { ctx: CardAccess; item: null; deliverableId: string | null; checklistItemId?: string | null }
-  | { ctx: null; item: ItemAccess; deliverableId: null; checklistItemId?: null };
+  | { ctx: CardAccess; item: null; deliverableId: string | null; checklistItemId?: string | null; versionId?: string | null; demoOfId?: string | null }
+  | { ctx: null; item: ItemAccess; deliverableId: null; checklistItemId?: null; versionId?: null; demoOfId?: null };
 
 async function assertUploadAllowed(
   actor: Actor,
-  input: { cardId?: string | null; itemId?: string | null; purpose: UploadPurpose; versionId?: string | null; deliverableId?: string | null; checklistItemId?: string | null },
+  input: { cardId?: string | null; itemId?: string | null; purpose: UploadPurpose; versionId?: string | null; deliverableId?: string | null; checklistItemId?: string | null; demoOfId?: string | null },
   ex: Executor,
 ): Promise<UploadScope> {
   if (input.purpose === "item") {
@@ -136,6 +136,25 @@ async function assertUploadAllowed(
   if (input.purpose === "comment") {
     assertCard(ctx.perms, "canComment");
     return { ctx, item: null, deliverableId: null };
+  }
+  if (input.purpose === "demo") {
+    // A demonstration clip of a Roblox file in a revision: lands in that revision, shown inside that file's preview.
+    if (!input.demoOfId) throw invalid("Choose the file the clip demonstrates.");
+    const [target] = await ex
+      .select({ id: attachments.id, versionId: attachments.versionId, deliverableId: attachments.deliverableId, kind: attachments.kind, archivedAt: attachments.archivedAt })
+      .from(attachments)
+      .where(and(eq(attachments.id, input.demoOfId), eq(attachments.cardId, ctx.card.id)));
+    if (!target || target.archivedAt || !target.versionId) throw notFound("File");
+    if (target.kind !== "ROBLOX") throw invalid("Demonstration clips go with Roblox files.");
+    if (target.deliverableId) {
+      const [d] = await ex.select().from(deliverables).where(eq(deliverables.id, target.deliverableId));
+      if (!d) throw notFound("Deliverable");
+      const contributors = (await loadContributors(ex, [d.id])).get(d.id) ?? [];
+      if (!computeDeliverablePermissions(ctx, d, contributors).canUpload) throw forbidden("You don't have permission to upload files to this deliverable.");
+    } else {
+      assertCard(ctx.perms, "canUpload", "You don't have permission to upload files to this card.");
+    }
+    return { ctx, item: null, deliverableId: target.deliverableId, versionId: target.versionId, demoOfId: target.id };
   }
   if (input.purpose === "checklist") {
     // A checklist item's reference image: editing the item, like its text.
@@ -194,6 +213,7 @@ export async function createUpload(
     versionId?: string | null;
     deliverableId?: string | null;
     checklistItemId?: string | null;
+    demoOfId?: string | null;
   },
 ): Promise<{ attachmentId: string; upload: UploadTarget; maxBytes: number }> {
   enforceRateLimit(`upload:${actor.userId}`, 200, 10 * 60 * 1000);
@@ -206,6 +226,7 @@ export async function createUpload(
   if (input.purpose === "cover" && !(COVER_KINDS as readonly string[]).includes(classification.kind)) throw invalid("A cover must be an image or a video.");
   if (input.purpose === "checklist" && classification.kind !== "IMAGE") throw invalid("A checklist item's picture must be an image.");
   if (input.purpose === "item" && !(ITEM_KINDS as readonly string[]).includes(classification.kind)) throw invalid("Forum items take images and videos.");
+  if (input.purpose === "demo" && classification.kind !== "VIDEO") throw invalid("A demonstration clip must be a video.");
   const maxBytes = maxBytesFor(classification.kind);
   if (input.size > maxBytes) {
     throw new AppError("PAYLOAD_TOO_LARGE", `${filename} is larger than the ${Math.round(maxBytes / 1024 / 1024)} MB limit for this file type.`);
@@ -219,7 +240,7 @@ export async function createUpload(
   const key = ctx
     ? attachmentKey({ studioId, projectId, cardId: ctx.card.id, attachmentId: id, name })
     : itemAttachmentKey({ studioId, projectId, itemId: item.item.id, attachmentId: id, name });
-  const purpose = input.purpose === "version" ? "VERSION" : input.purpose === "comment" ? "COMMENT" : input.purpose === "resource" ? "RESOURCE" : input.purpose === "cover" ? "COVER" : input.purpose === "checklist" ? "CHECKLIST" : input.purpose === "item" ? "ITEM" : "CARD";
+  const purpose = input.purpose === "version" || input.purpose === "demo" ? "VERSION" : input.purpose === "comment" ? "COMMENT" : input.purpose === "resource" ? "RESOURCE" : input.purpose === "cover" ? "COVER" : input.purpose === "checklist" ? "CHECKLIST" : input.purpose === "item" ? "ITEM" : "CARD";
   await db.transaction(async (tx) => {
     // Counts against the studio's storage limit from now on (until finished or abandoned).
     await reserveStudioStorage(tx, studioId, input.size);
@@ -228,9 +249,10 @@ export async function createUpload(
       cardId: ctx?.card.id ?? null,
       itemId: item?.item.id ?? null,
       projectId,
-      versionId: input.purpose === "version" ? input.versionId! : null,
+      versionId: input.purpose === "version" ? input.versionId! : (scope.versionId ?? null),
       deliverableId,
       checklistItemId,
+      demoOfId: scope.demoOfId ?? null,
       purpose,
       kind: classification.kind,
       status: "PENDING",
@@ -425,7 +447,17 @@ export async function completeUpload(
 
     if (row!.purpose === "VERSION" || row!.purpose === "CARD") await recomputeCovers(tx, row!);
 
-    if (attachment.purpose === "VERSION" && attachment.versionId) {
+    if (attachment.purpose === "VERSION" && attachment.versionId && attachment.demoOfId) {
+      // A demonstration clip: part of the revision, but not a new upload of the work itself.
+      await logActivity(tx, {
+        studioId: ctx.access.studioId,
+        projectId: ctx.card.projectId,
+        cardId: ctx.card.id,
+        actorId: actor.userId,
+        type: "attachment.added",
+        data: { filename: attachment.filename, kind: analysis.kind, demo: true },
+      });
+    } else if (attachment.purpose === "VERSION" && attachment.versionId) {
       const [readyCount] = await tx
         .select({ value: sql<number>`count(*)`.mapWith(Number) })
         .from(attachments)
@@ -534,8 +566,8 @@ export async function archiveAttachment(actor: Actor, input: { attachmentId: str
   const { attachment, ctx } = await loadAttachmentForWrite(actor, input.attachmentId);
   const own = attachment.uploadedById === actor.userId;
   if (!(ctx.perms.canEdit || (own && ctx.perms.canComment))) throw forbidden("You can't remove this attachment.");
-  if (attachment.versionId && attachment.kind !== "FILE") {
-    // Work under review is part of the revision history and is never removed.
+  if (attachment.versionId && attachment.kind !== "FILE" && !attachment.demoOfId) {
+    // Work under review is part of the revision history and is never removed (demonstration clips can be swapped).
     const [version] = await db.select().from(assetVersions).where(eq(assetVersions.id, attachment.versionId));
     if (version && version.status !== "DRAFT") {
       throw conflict("Files on a submitted revision are kept for review history. Upload a new revision instead.");

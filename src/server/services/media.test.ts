@@ -89,3 +89,37 @@ describe("uploading versions", () => {
     await expectAppError(media.completeUpload(f.member.actor, { attachmentId: intent.attachmentId }), "VALIDATION");
   });
 });
+
+describe("demonstration clips", () => {
+  it("go with a Roblox file in its revision, stay out of the file list and covers, and can be swapped after review", async () => {
+    const { R, writeBinaryModel } = await import("@/server/roblox/writer");
+    const card = await newCard("Shop UI");
+    const version = await media.createVersion(f.member.actor, { cardId: card.id, notes: "v1" });
+    const ui = writeBinaryModel([
+      { className: "ScreenGui", props: { Name: R.str("Shop") }, children: [{ className: "Frame", props: { Name: R.str("Panel"), Size: R.udim2(0, 400, 0, 300) } }] },
+    ]);
+    const roblox = await upload(f.member.actor, card.id, { name: "shop.rbxm", type: "application/octet-stream", buffer: Buffer.from(ui) }, "version", version.id);
+    expect(roblox.kind).toBe("ROBLOX");
+    // Only videos, only for Roblox files, only by people who may upload to the deliverable.
+    await expectAppError(media.createUpload(f.member.actor, { cardId: card.id, filename: "demo.png", size: 10, contentType: "image/png", purpose: "demo", demoOfId: roblox.id }), "VALIDATION");
+    await expectAppError(media.createUpload(f.member.actor, { cardId: card.id, filename: "demo.mp4", size: 10, contentType: "video/mp4", purpose: "demo" }), "VALIDATION");
+    await expectAppError(media.createUpload(f.viewer.actor, { cardId: card.id, filename: "demo.mp4", size: 10, contentType: "video/mp4", purpose: "demo", demoOfId: roblox.id }), "FORBIDDEN");
+    const intent = await media.createUpload(f.member.actor, { cardId: card.id, filename: "demo.mp4", size: mp4Buffer(1).length, contentType: "video/mp4", purpose: "demo", demoOfId: roblox.id });
+    const [row] = await db.select().from(attachments).where(eq(attachments.id, intent.attachmentId));
+    await storage().put(row!.storageKey, mp4Buffer(1), "video/mp4");
+    const demo = await media.completeUpload(f.member.actor, { attachmentId: intent.attachmentId });
+    expect(demo).toMatchObject({ kind: "VIDEO", purpose: "VERSION", versionId: version.id, demoOfId: roblox.id });
+    await expectAppError(media.createUpload(f.member.actor, { cardId: card.id, filename: "demo2.mp4", size: 10, contentType: "video/mp4", purpose: "demo", demoOfId: demo.id }), "VALIDATION");
+    const detail = await cardService.getCardDetail(f.member.actor, card.id);
+    const v1 = detail.versions.find((v) => v.id === version.id)!;
+    expect(v1.attachmentIds).toEqual(expect.arrayContaining([roblox.id, demo.id]));
+    expect(detail.attachments.find((a) => a.id === demo.id)?.demoOfId).toBe(roblox.id);
+    const [cardRow] = await db.select().from(cards).where(eq(cards.id, card.id));
+    expect(cardRow?.coverAttachmentId).not.toBe(demo.id);
+    // Submitted work keeps its files, but the clip can still be replaced.
+    await reviews.submitForReview(f.member.actor, { deliverableId: await primaryDeliverable(card.id) });
+    await expectAppError(media.archiveAttachment(f.member.actor, { attachmentId: roblox.id }), "CONFLICT");
+    await media.archiveAttachment(f.member.actor, { attachmentId: demo.id });
+    expect((await cardService.getCardDetail(f.member.actor, card.id)).attachments.some((a) => a.id === demo.id)).toBe(false);
+  });
+});

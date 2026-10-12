@@ -1,17 +1,21 @@
 "use client";
 
 import {
+  Bone,
   Box,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  Clapperboard,
   Download,
   Expand,
   Grid3x3,
   Home,
+  LayoutTemplate,
   Loader2,
-  Pause,
   PanelRight,
+  Pause,
+  PersonStanding,
   Play,
   Repeat,
   RotateCcw,
@@ -19,9 +23,7 @@ import {
   Shrink,
   Sparkles,
   Sun,
-  PersonStanding,
-  LayoutTemplate,
-  Bone,
+  Trash2,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
@@ -44,7 +46,7 @@ import { buildScene, matrixFromCFrame, type BuiltScene } from "./scene";
 // The 2D UI renderer (and its bundled fonts) only loads for files that have UI.
 const UiStage = dynamic(() => import("./ui-stage"), { ssr: false });
 
-export type ViewerMode = "model" | "animation" | "effects" | "ui";
+export type ViewerMode = "model" | "animation" | "effects" | "ui" | "demo";
 
 export interface RigChoice {
   manifest: RobloxManifest;
@@ -79,6 +81,15 @@ export interface ViewerProps {
   onTimeChange?: (ms: number) => void;
   /** The KeyframeSequence node of the animation now selected (lets the container pick a matching rig). */
   onClipChange?: (animationNode: number) => void;
+  /** A demonstration clip of this file (a video player wired for feedback): adds a "Demo" tab. */
+  demo?: ReactNode;
+  /** The Demo tab is open (the container drives this so feedback and deep links follow it). */
+  demoActive?: boolean;
+  onDemoActiveChange?: (active: boolean) => void;
+  /** Offered when there is no clip yet and the viewer may add one. */
+  onAddDemo?: () => void;
+  /** Offered on the Demo tab when the viewer may replace or remove the clip. */
+  onRemoveDemo?: () => void;
 }
 
 type Background = "dark" | "light" | "black" | "checker" | "sky";
@@ -184,12 +195,28 @@ export default function RobloxViewer(props: ViewerProps) {
       if (manifest.capabilities.effects) list.push("effects");
     }
     if (manifest.capabilities.ui) list.push("ui");
-    return list.length ? list : (["model"] as ViewerMode[]);
-  }, [manifest, webglError]);
-  const [mode, setMode] = useState<ViewerMode>(modes.includes(initialMode) ? initialMode : modes[0]!);
+    if (!list.length) list.push("model");
+    if (props.demo) list.push("demo");
+    return list;
+  }, [manifest, webglError, props.demo]);
+  const [mode, setModeState] = useState<ViewerMode>(props.demoActive && props.demo ? "demo" : modes.includes(initialMode) ? initialMode : modes[0]!);
+  const setMode = useCallback(
+    (m: ViewerMode) => {
+      setModeState(m);
+      props.onDemoActiveChange?.(m === "demo");
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.onDemoActiveChange],
+  );
   useEffect(() => {
     if (!modes.includes(mode)) setMode(modes[0]!);
-  }, [modes, mode]);
+  }, [modes, mode, setMode]);
+  // The container opens the Demo tab (a feedback deep link) or closes it (the clip was removed).
+  useEffect(() => {
+    if (props.demoActive && props.demo && mode !== "demo") setModeState("demo");
+    if (!props.demoActive && mode === "demo") setModeState(modes.find((m) => m !== "demo") ?? "model");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.demoActive, props.demo]);
   const [uiNotes, setUiNotes] = useState<string[]>([]);
   const [panel, setPanel] = useState<Panel | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
@@ -344,7 +371,7 @@ export default function RobloxViewer(props: ViewerProps) {
     renderer.setAnimationLoop(() => {
       const dt = Math.min(0.1, state.clock.getDelta());
       // The 2D UI view covers the canvas: don't spend the GPU on a scene nobody sees.
-      if (!state.visible || document.hidden || live.current.mode === "ui") return;
+      if (!state.visible || document.hidden || live.current.mode === "ui" || live.current.mode === "demo") return;
       const l = live.current;
       const built = state.built;
       // Animation
@@ -751,15 +778,17 @@ export default function RobloxViewer(props: ViewerProps) {
       onTimelineActive(false);
       return;
     }
-    timelineRef.current = {
+    const handle: TimelineHandle = {
       seek,
       play: () => setPlay(true),
       pause: () => setPlay(false),
       currentTimeMs: () => Math.round(live.current.time * 1000),
     };
+    timelineRef.current = handle;
     onTimelineActive(true);
     return () => {
-      timelineRef.current = null;
+      // Only let go of our own handle: a demo clip's player may have taken the timeline over meanwhile.
+      if (timelineRef.current === handle) timelineRef.current = null;
       onTimelineActive(false);
     };
   }, [animationActive, seek, setPlay, timelineRef, onTimelineActive]);
@@ -879,6 +908,7 @@ export default function RobloxViewer(props: ViewerProps) {
         <div className="relative min-w-0 flex-1">
           <div ref={canvasHost} className="absolute inset-0" />
           {mode === "ui" ? <UiStage manifest={manifest} resources={resources} selected={selected} onSelect={setSelected} onNotes={setUiNotes} /> : null}
+          {mode === "demo" && props.demo ? <div className="absolute inset-0 z-[5] bg-black">{props.demo}</div> : null}
 
           {/* Mode tabs */}
           <div className="absolute left-2 top-2 z-10 flex items-center gap-1 rounded-lg bg-black/55 p-1 backdrop-blur" role="tablist" aria-label="Preview mode">
@@ -891,10 +921,17 @@ export default function RobloxViewer(props: ViewerProps) {
                 onClick={() => setMode(m)}
                 className={cn("inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] font-medium [&_svg]:size-3.5", mode === m ? "bg-white/15 text-white" : "text-white/70 hover:text-white")}
               >
-                {m === "model" ? <Box /> : m === "animation" ? <PersonStanding /> : m === "ui" ? <LayoutTemplate /> : <Sparkles />}
-                {m === "model" ? "Model" : m === "animation" ? "Animation" : m === "ui" ? "UI" : "Effects"}
+                {m === "model" ? <Box /> : m === "animation" ? <PersonStanding /> : m === "ui" ? <LayoutTemplate /> : m === "demo" ? <Clapperboard /> : <Sparkles />}
+                {m === "model" ? "Model" : m === "animation" ? "Animation" : m === "ui" ? "UI" : m === "demo" ? "Demo" : "Effects"}
               </button>
             ))}
+            {!props.demo && props.onAddDemo ? (
+              <Tooltip content="Add a clip showing how it behaves in game">
+                <button type="button" onClick={props.onAddDemo} className="inline-flex h-7 items-center gap-1.5 rounded-md border border-dashed border-white/30 px-2 text-[12px] font-medium text-white/70 hover:border-white/60 hover:text-white [&_svg]:size-3.5">
+                  <Clapperboard /> Demo clip
+                </button>
+              </Tooltip>
+            ) : null}
           </div>
 
           {/* Status chips */}
@@ -919,7 +956,12 @@ export default function RobloxViewer(props: ViewerProps) {
           {/* Camera & scene toolbar */}
           <TipAnchor tip="roblox.preview" facts={{}}>
           <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg bg-black/55 p-1 backdrop-blur">
-            {mode !== "ui" ? (
+            {mode === "demo" && props.onRemoveDemo ? (
+              <IconButton label="Remove this demonstration clip" onClick={props.onRemoveDemo}>
+                <Trash2 />
+              </IconButton>
+            ) : null}
+            {mode !== "ui" && mode !== "demo" ? (
               <>
                 <IconButton label={selected !== null ? "Frame selection" : "Frame model"} shortcut="F" onClick={frameSelection}>
                   <Scan />

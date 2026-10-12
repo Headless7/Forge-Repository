@@ -431,6 +431,8 @@ export interface AttachmentDTO {
   cardId: string | null;
   /** The forum item (bug report, QA check) an ITEM file belongs to. */
   itemId: string | null;
+  /** A demonstration clip of this other file in the same revision (shown inside its preview). */
+  demoOfId: string | null;
   versionId: string | null;
   deliverableId: string | null;
   commentId: string | null;

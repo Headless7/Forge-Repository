@@ -10,7 +10,7 @@ import type { AttachmentDTO } from "@/lib/types";
 import { cn, formatBytes } from "@/lib/utils";
 import { Button } from "../ui/button";
 
-type Purpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "item";
+type Purpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "item" | "demo";
 
 export interface UploadItem {
   id: string;
@@ -23,6 +23,8 @@ export interface UploadItem {
   versionId: string | null;
   deliverableId: string | null;
   checklistItemId: string | null;
+  /** "demo": the Roblox file the clip demonstrates. */
+  demoOfId: string | null;
   progress: number;
   status: "queued" | "uploading" | "processing" | "done" | "error";
   error?: string;
@@ -40,6 +42,8 @@ export interface UploadTarget {
   deliverableId?: string | null;
   /** The checklist item a "checklist" upload is the picture of. */
   checklistItemId?: string | null;
+  /** The Roblox file a "demo" upload demonstrates. */
+  demoOfId?: string | null;
   /** Shown in the tray, e.g. the deliverable's name. */
   label?: string;
 }
@@ -157,6 +161,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
                 versionId: item.versionId,
                 deliverableId: item.purpose === "version" ? null : item.deliverableId,
                 checklistItemId: item.checklistItemId,
+                demoOfId: item.demoOfId,
               },
         );
         await putWithProgress(intent.upload.url, item.file, intent.upload.headers, (p) => patch(item.id, { progress: p }));
@@ -188,6 +193,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         versionId,
         deliverableId: card.deliverableId ?? null,
         checklistItemId: card.checklistItemId ?? null,
+        demoOfId: card.demoOfId ?? null,
         progress: 0,
         status: "queued",
       }));

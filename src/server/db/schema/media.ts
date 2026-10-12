@@ -63,6 +63,8 @@ export const attachments = pgTable(
     commentId: uuid().references((): AnyPgColumn => comments.id, { onDelete: "set null" }),
     /** CHECKLIST: the item this image illustrates (its latest unarchived one is shown). */
     checklistItemId: uuid().references((): AnyPgColumn => checklistItems.id, { onDelete: "set null" }),
+    /** A demonstration clip of another file in the same revision (a Roblox UI): shown inside that file's preview, not as a file of its own. */
+    demoOfId: uuid().references((): AnyPgColumn => attachments.id, { onDelete: "set null" }),
     kind: text({ enum: ATTACHMENT_KINDS }).notNull(),
     /** VERSION: work under review · CARD: reference files · COMMENT: on a comment · RESOURCE: stands in for a Roblox asset · CHECKLIST: on a checklist item. */
     purpose: text({ enum: ATTACHMENT_PURPOSES }).notNull().default("CARD"),
@@ -98,6 +100,7 @@ export const attachments = pgTable(
     index("attachments_comment_idx").on(t.commentId),
     index("attachments_checklist_item_idx").on(t.checklistItemId),
     index("attachments_item_idx").on(t.itemId),
+    index("attachments_demo_of_idx").on(t.demoOfId),
   ],
 );
 

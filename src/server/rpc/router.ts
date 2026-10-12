@@ -455,10 +455,12 @@ export const appRouter = {
         filename: z.string().min(1).max(255),
         size: z.number().int().positive(),
         contentType: z.string().max(200),
-        purpose: z.enum(["version", "attachment", "comment", "resource", "cover", "checklist", "item"]),
+        purpose: z.enum(["version", "attachment", "comment", "resource", "cover", "checklist", "item", "demo"]),
         versionId: idSchema.nullable().optional(),
         deliverableId: idSchema.nullable().optional(),
         checklistItemId: idSchema.nullable().optional(),
+        /** "demo": the Roblox file (in a revision) the clip demonstrates. */
+        demoOfId: idSchema.nullable().optional(),
       })
       .refine((i) => (i.purpose === "item" ? Boolean(i.itemId) : Boolean(i.cardId)), { message: "Choose where the file goes." }),
     handler: ({ actor }, i) => media.createUpload(actor, i),

@@ -3,12 +3,14 @@
 import {
   ChevronLeft,
   ChevronRight,
+  Clapperboard,
   Columns2,
   Download,
   FileText,
   Film,
   ImagePlus,
   Link2,
+  Loader2,
   MapPin,
   Timer,
   Upload,
@@ -29,7 +31,7 @@ import { StatePill } from "../domain/state";
 import { AudioPlayer, type AudioMarker } from "../media/audio-player";
 import { CompareView } from "../media/compare-view";
 import { ImageViewer, type ImageMarker } from "../media/image-viewer";
-import { VideoPlayer, type VideoMarker } from "../media/video-player";
+import { VideoPlayer, type VideoMarker, type VideoPlayerHandle } from "../media/video-player";
 import { Button } from "../ui/button";
 import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Checkbox, EmptyState } from "../ui/controls";
@@ -88,7 +90,10 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
   const [submit, setSubmit] = useState(false);
   const [url, setUrl] = useState("");
   const [over, setOver] = useState(false);
+  const [demoFile, setDemoFile] = useState<File | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const demoInput = useRef<HTMLInputElement>(null);
+  const hasRoblox = files.some((f) => /\.rbx[ml]x?$/i.test(f.name));
   const importUrl = useCardMutation("upload.importUrl", card.id, card.projectId);
   const createVersion = useCardMutation("version.create", card.id, card.projectId, { silent: true });
   const nextNumber = (scope.versions.at(-1)?.number ?? 0) + 1;
@@ -96,7 +101,12 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
   const start = async () => {
     if (files.length) {
       onOpenChange(false);
-      void uploads.uploadVersion(uploadTarget, files, { notes, submit });
+      const demo = hasRoblox ? demoFile : null;
+      void uploads.uploadVersion(uploadTarget, files, { notes, submit }).then((results) => {
+        // The clip goes with the Roblox file it demonstrates, once that file exists.
+        const roblox = results.find((a) => a.kind === "ROBLOX");
+        if (demo && roblox) void uploads.uploadFiles({ ...uploadTarget, demoOfId: roblox.id, label: "Demo clip" }, [demo], "demo");
+      });
     } else if (url.trim()) {
       try {
         const version = await createVersion.mutateAsync({ deliverableId: scope.deliverable.id, notes });
@@ -110,6 +120,7 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
     setFiles([]);
     setNotes("");
     setUrl("");
+    setDemoFile(null);
   };
 
   const onDrop = (e: DragEvent) => {
@@ -169,6 +180,25 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
             />
           </div>
         )}
+        {hasRoblox ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-3/40 px-2.5 py-2 text-[12.5px]">
+            <Clapperboard className="size-4 shrink-0 text-fg-subtle" />
+            <span className="min-w-0 flex-1">
+              <span className="block font-medium">Demonstration clip (optional)</span>
+              <span className="block text-fg-muted">{demoFile ? `${demoFile.name} · ${formatBytes(demoFile.size)}` : "A short video showing how the UI behaves in game — opens as a Demo tab in the preview."}</span>
+            </span>
+            {demoFile ? (
+              <button type="button" aria-label="Remove the demonstration clip" onClick={() => setDemoFile(null)} className="text-fg-subtle hover:text-fg">
+                <X className="size-3.5" />
+              </button>
+            ) : (
+              <Button size="xs" variant="secondary" onClick={() => demoInput.current?.click()}>
+                Choose video
+              </Button>
+            )}
+            <input ref={demoInput} type="file" accept="video/*" hidden onChange={(e) => { setDemoFile(e.target.files?.[0] ?? null); e.target.value = ""; }} />
+          </div>
+        ) : null}
         <Textarea className="mt-3" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Version notes — what changed?" />
         {scope.permissions.canSubmit ? (
           <label className="mt-3 flex items-center gap-2 text-[13px]">
@@ -197,10 +227,13 @@ export function FeedbackPanel({
   className,
   pausedAt = null,
   timedRoblox = false,
+  alsoMediaIds = [],
 }: {
   media: AttachmentDTO | null;
   version: VersionDTO | null;
   className?: string;
+  /** Files whose feedback is listed with this one's (a Roblox file's demonstration clip), so it isn't missed while its tab is closed. */
+  alsoMediaIds?: string[];
   /** Playhead while paused — new feedback is stamped here. */
   pausedAt?: number | null;
   /** A Roblox file whose animation timeline is active. */
@@ -217,7 +250,7 @@ export function FeedbackPanel({
   const roots = scope.comments.filter((c) => !c.parentId && !c.deletedAt);
   const inScope = (c: CommentDTO) => {
     if (!version) return c.kind === "FEEDBACK" || Boolean(c.annotation);
-    if (c.annotation) return media ? c.annotation.attachmentId === media.id : c.versionId === version.id;
+    if (c.annotation) return media ? c.annotation.attachmentId === media.id || alsoMediaIds.includes(c.annotation.attachmentId) : c.versionId === version.id;
     return c.kind === "FEEDBACK" && c.versionId === version.id;
   };
   const scoped = roots.filter(inScope);
@@ -401,22 +434,44 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
   const versions = scope.versions;
   const perms = scope.permissions;
   const version = versions.find((v) => v.id === versionId) ?? versions.find((v) => v.id === scope.currentVersionId) ?? versions.at(-1);
-  const media = mediaOf(version, card.attachments);
+  const allMedia = mediaOf(version, card.attachments);
+  // Demonstration clips aren't files of their own: they open as a Demo tab inside the Roblox file they belong to.
+  const demos = allMedia.filter((a) => a.demoOfId);
+  const media = allMedia.filter((a) => !a.demoOfId);
   const visualMedia = media.filter((a) => a.kind !== "FILE");
-  const current = media.find((a) => a.id === attachmentId) ?? visualMedia[0] ?? media[0] ?? null;
+  const requestedDemo = demos.find((a) => a.id === attachmentId) ?? null;
+  const current = (requestedDemo ? media.find((a) => a.id === requestedDemo.demoOfId) : media.find((a) => a.id === attachmentId)) ?? visualMedia[0] ?? media[0] ?? null;
+  const demo = current ? (demos.find((a) => a.demoOfId === current.id && a.status !== "FAILED") ?? null) : null;
+  const [demoActive, setDemoActive] = useState(false);
+  useEffect(() => {
+    if (requestedDemo) setDemoActive(true);
+  }, [requestedDemo?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!demo) setDemoActive(false);
+  }, [demo?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** What feedback and the timeline refer to: the clip while the Demo tab is open, else the file. */
+  const feedbackMedia = demoActive && demo ? demo : current;
+  const demoInput = useRef<HTMLInputElement>(null);
+  const demoHandle = useRef<VideoPlayerHandle | null>(null);
+  const uploads = useUploads();
+  const removeDemo = useCardMutation("attachment.archive", card.id, card.projectId, { onSuccess: () => setDemoActive(false) });
+  const addDemo = (file: File) => {
+    if (!current) return;
+    void uploads.uploadFiles({ ...scope.uploadTarget, demoOfId: current.id, label: "Demo clip" }, [file], "demo").then((done) => done.length && setDemoActive(true));
+  };
   const numbers = useMemo(() => pinNumbers(scope.comments), [scope.comments]);
-  const versionsWithMedia = versions.filter((v) => mediaOf(v, card.attachments).some((a) => a.kind === "IMAGE" || a.kind === "VIDEO"));
+  const versionsWithMedia = versions.filter((v) => mediaOf(v, card.attachments).some((a) => (a.kind === "IMAGE" || a.kind === "VIDEO") && !a.demoOfId));
   const idx = version ? versions.findIndex((v) => v.id === version.id) : -1;
 
   // Switching files or revisions resets the playhead used for stamping.
   useEffect(() => {
     setPausedAt(null);
     playing.current = false;
-  }, [current?.id]);
+  }, [feedbackMedia?.id]);
 
   const commentsOnMedia = useMemo(
-    () => (current ? scope.comments.filter((c) => !c.parentId && !c.deletedAt && c.annotation?.attachmentId === current.id) : []),
-    [scope.comments, current],
+    () => (feedbackMedia ? scope.comments.filter((c) => !c.parentId && !c.deletedAt && c.annotation?.attachmentId === feedbackMedia.id) : []),
+    [scope.comments, feedbackMedia],
   );
   const imageMarkers: ImageMarker[] = commentsOnMedia
     .filter((c) => c.annotation && c.annotation.type !== "TIMESTAMP" && c.annotation.x != null && c.annotation.y != null)
@@ -675,16 +730,79 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
               meta={current.meta}
             />
           ) : current.kind === "ROBLOX" ? (
-            <RobloxPreview
-              key={current.id}
-              attachment={current}
-              timelineRef={timeline}
-              markers={timeMarkers}
-              activeMarkerId={activeCommentId}
-              onMarkerClick={(id) => setActiveCommentId(id)}
-              onTimelineActive={setRobloxTimed}
-              {...trackPlayhead}
-            />
+            <>
+              <RobloxPreview
+                key={current.id}
+                attachment={current}
+                timelineRef={timeline}
+                markers={demoActive ? [] : timeMarkers}
+                activeMarkerId={activeCommentId}
+                onMarkerClick={(id) => setActiveCommentId(id)}
+                onTimelineActive={setRobloxTimed}
+                {...trackPlayhead}
+                demoActive={demoActive}
+                onDemoActiveChange={setDemoActive}
+                onAddDemo={perms.canUpload ? () => demoInput.current?.click() : undefined}
+                onRemoveDemo={perms.canUpload && demo ? () => removeDemo.mutate({ attachmentId: demo.id }) : undefined}
+                demo={
+                  demo?.url ? (
+                    <VideoPlayer
+                      ref={(h) => {
+                        // Mounted only while the Demo tab is open: take the timeline over, and hand it back on unmount.
+                        if (h) {
+                          demoHandle.current = h;
+                          player.current = h;
+                          timeline.current = h;
+                        } else {
+                          if (timeline.current === demoHandle.current) timeline.current = null;
+                          if (player.current === demoHandle.current) player.current = null;
+                          demoHandle.current = null;
+                        }
+                      }}
+                      key={demo.id}
+                      src={demo.url}
+                      poster={demo.thumbUrl}
+                      fps={demo.fps}
+                      durationMs={demo.durationMs}
+                      markers={videoMarkers}
+                      activeMarkerId={activeCommentId}
+                      onMarkerClick={(id) => setActiveCommentId(id)}
+                      {...trackPlayhead}
+                      pendingPoint={pending && pending.attachmentId === demo.id && pending.x != null ? { x: pending.x, y: pending.y! } : null}
+                      onPlacePoint={
+                        card.permissions.canComment
+                          ? (x, y, t) => {
+                              setPending({ attachmentId: demo.id, type: "TIMESTAMP", x, y, timestampMs: t });
+                              focusFeedbackComposer();
+                            }
+                          : undefined
+                      }
+                      label={`Demo · ${demo.filename}`}
+                      className="h-full"
+                    />
+                  ) : demo ? (
+                    <div className="flex h-full flex-col items-center justify-center gap-2 text-white/70">
+                      <Loader2 className="size-5 animate-spin" />
+                      <span className="text-[12.5px]">Preparing the demonstration clip…</span>
+                    </div>
+                  ) : null
+                }
+              />
+              {perms.canUpload ? (
+                <input
+                  ref={demoInput}
+                  type="file"
+                  accept="video/*"
+                  hidden
+                  aria-label="Add a demonstration clip"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) addDemo(file);
+                    e.target.value = "";
+                  }}
+                />
+              ) : null}
+            </>
           ) : current.kind === "IMAGE" && current.url ? (
             <ImageViewer
               key={current.id}
@@ -722,10 +840,11 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
           ) : null}
         </div>
         <FeedbackPanel
-          media={compare ? null : current}
+          media={compare ? null : feedbackMedia}
           version={version}
-          pausedAt={current?.kind === "VIDEO" || current?.kind === "AUDIO" || (current?.kind === "ROBLOX" && robloxTimed) ? pausedAt : null}
+          pausedAt={feedbackMedia?.kind === "VIDEO" || feedbackMedia?.kind === "AUDIO" || (feedbackMedia?.kind === "ROBLOX" && robloxTimed) ? pausedAt : null}
           timedRoblox={robloxTimed}
+          alsoMediaIds={demo && !demoActive ? [demo.id] : []}
           className={cn(current?.kind === "ROBLOX" ? "max-h-[min(72vh,760px)]" : "max-h-[64vh]", "2xl:h-auto")}
         />
       </div>

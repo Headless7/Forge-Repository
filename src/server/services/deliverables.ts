@@ -61,6 +61,7 @@ export async function recomputeDeliverableCover(tx: Executor, deliverableId: str
   const base = and(
     eq(attachments.deliverableId, deliverableId),
     eq(attachments.purpose, "VERSION"),
+    isNull(attachments.demoOfId),
     isNull(attachments.archivedAt),
     inArray(attachments.kind, [...VISUAL_KINDS]),
     inArray(attachments.status, ["READY", "PROCESSING"]),
