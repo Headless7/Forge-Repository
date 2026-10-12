@@ -13,6 +13,7 @@ import { closeDb, db, rawSql } from "@/server/db";
 import { attachments, cardViews, deliverables, notifications, studioMembers, users } from "@/server/db/schema";
 import { mediaQueue } from "@/server/jobs/queue";
 import * as board from "@/server/services/board";
+import * as bugs from "@/server/services/bugs";
 import * as cards from "@/server/services/cards";
 import * as checklists from "@/server/services/checklists";
 import * as comments from "@/server/services/comments";
@@ -495,6 +496,78 @@ export async function seed({ reset = false }: { reset?: boolean } = {}) {
   await as("giorgos", T(0, 8, 50), (a) => production.moveProduction(a, { cardId: bp.id, status: "PUBLISHED", note: "Season 6 pass is live." }));
   // A revision after publication: the published record (V2) stays; V3 shows as a pending change.
   await newVersion("sofia", T(0, 9, 40), bp.id, "battlepass_v3.png", "Premium banner glow tweak for the mid-season refresh.");
+
+  // ── Bugs: the tracker beside the boards (per update, with a global open list) ─
+  const bugTag: Record<string, string> = {};
+  for (const [name, color] of [
+    ["Lobby", "#60a5fa"],
+    ["Play Area", "#34d399"],
+    ["UI", "#a78bfa"],
+  ] as const) {
+    bugTag[name] = (await as("giorgos", T(26), (a) => bugs.createBugTag(a, { projectId: utd.id, name, color }))).id;
+  }
+  await as("giorgos", T(26), (a) => projects.updateProject(a, { projectId: utd.id, settings: { defaultBugReviewerId: u.kenji!.id } }));
+  const bugUpload = async (username: string, when: Date, bugId: string, name: string) => {
+    const source = file(name);
+    const size = fs.statSync(source).size;
+    const contentType = MIME[path.extname(name)] ?? "application/octet-stream";
+    const intent = await as(username, when, (a) => media.createUpload(a, { bugId, filename: name, size, contentType, purpose: "bug" }));
+    const [row] = await db.select().from(attachments).where(eq(attachments.id, intent.attachmentId));
+    await storage().putFile(row!.storageKey, source, contentType);
+    return as(username, when, (a) => media.completeUpload(a, { attachmentId: intent.attachmentId }));
+  };
+  const bug = (username: string, when: Date, input: Omit<bugs.CreateBugInput, "projectId">) => as(username, when, (a) => bugs.createBug(a, { projectId: utd.id, ...input }));
+
+  const lamps = await bug("lena", T(6, 11), {
+    title: "Non-upgraded lamps circle sits further forward than upgraded ones",
+    description: "In the lobby, the placement circle of a non-upgraded lamp is offset forward. Upgrade it and the circle snaps back.\n\nReport: https://discord.com/channels/.../1557992955208531978",
+    priority: "MEDIUM",
+    milestoneId: u60.id,
+    assigneeId: u.kenji!.id,
+    tagIds: [bugTag.Lobby!],
+  });
+  await bugUpload("lena", T(6, 11, 5), lamps.id, "shop_v1.png");
+  await as("kenji", T(5, 10), (a) => bugs.setBugStatus(a, { bugId: lamps.id, status: "IN_PROGRESS" }));
+  await as("kenji", T(2, 16), (a) => bugs.addBugComment(a, { bugId: lamps.id, body: "Found it — the circle used the pre-upgrade model's pivot. Fix is in the next build." }));
+  await as("kenji", T(2, 16, 5), (a) => bugs.setBugStatus(a, { bugId: lamps.id, status: "FIXED" }));
+
+  const autoroll = await bug("lena", T(5, 9), {
+    title: "Auto roll stops after 10 and ignores the selected % on curses",
+    description: "Curse rerolls: auto roll halts after exactly 10 rolls, and it doesn't stop when the chosen % is hit.\n\n- Repro: set 25%, press auto roll\n- Expected: stops on the first roll ≥ 25%",
+    priority: "GAME_BREAKING",
+    milestoneId: u60.id,
+    assigneeId: u.kenji!.id,
+    tagIds: [bugTag["Play Area"]!, bugTag.UI!],
+  });
+  await bugUpload("lena", T(5, 9, 3), autoroll.id, "hp_v1.mp4");
+  await as("kenji", T(4, 14), (a) => bugs.setBugStatus(a, { bugId: autoroll.id, status: "IN_PROGRESS" }));
+
+  const traitIndex = await bug("sofia", T(4, 15), {
+    title: "Trait index says \"skip\" instead of \"keep\"",
+    priority: "LOW",
+    milestoneId: u60.id,
+    tagIds: [bugTag.UI!],
+  });
+  await as("giorgos", T(4, 15, 30), (a) => bugs.updateBug(a, { bugId: traitIndex.id, assigneeId: u.sofia!.id }));
+  await as("sofia", T(3, 10), (a) => bugs.setBugStatus(a, { bugId: traitIndex.id, status: "FIXED" }));
+  await as("kenji", T(2, 11), (a) => bugs.setBugStatus(a, { bugId: traitIndex.id, status: "VERIFIED" }));
+
+  await bug("lena", T(3, 12), {
+    title: "Curses don't drop in the Summerween game mode",
+    description: "No curse drops across 6 full Summerween runs. Normal mode drops fine.",
+    priority: "HIGH",
+    milestoneId: halloween.id,
+    tagIds: [bugTag["Play Area"]!],
+  });
+  const portal = await bug("alex", T(2, 9), {
+    title: "Inconsistent ground placement on the Alucard portal map",
+    description: "Towers sometimes sink into the ground near the portal — looks like the raycast hits the portal collision. https://discord.com/channels/.../1541806252500197466",
+    priority: "MEDIUM",
+    tagIds: [bugTag["Play Area"]!],
+  });
+  await as("giorgos", T(1, 10), (a) => bugs.addBugComment(a, { bugId: portal.id, body: `@${"kenji"} is this the same raycast as the lamp circle?` }));
+  const dup = await bug("mike", T(1, 13), { title: "Lamps placement circle offset (lobby)", priority: "MEDIUM", milestoneId: u60.id, tagIds: [bugTag.Lobby!] });
+  await as("giorgos", T(1, 14), (a) => bugs.setBugStatus(a, { bugId: dup.id, status: "CLOSED", resolution: "DUPLICATE" }));
 
   // ── One Piece RPG ─────────────────────────────────────────────────────────
   const opr = await as("giorgos", T(20), (a) =>

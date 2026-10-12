@@ -235,6 +235,13 @@ export async function updateProject(actor: Actor, input: UpdateProjectInput): Pr
           .where(and(eq(studioMembers.studioId, project.studioId), inArray(studioMembers.userId, input.settings.defaultReviewerIds.length ? input.settings.defaultReviewerIds : ["00000000-0000-0000-0000-000000000000"])));
         settings.defaultReviewerIds = valid.map((v) => v.userId);
       }
+      if (input.settings.defaultBugReviewerId) {
+        const [member] = await tx
+          .select({ userId: studioMembers.userId })
+          .from(studioMembers)
+          .where(and(eq(studioMembers.studioId, project.studioId), eq(studioMembers.userId, input.settings.defaultBugReviewerId)));
+        if (!member) throw invalid("The default bug reviewer must be a member of this studio.");
+      }
       patch.settings = settings;
     }
     const [row] = await tx.update(projects).set(patch).where(eq(projects.id, project.id)).returning();

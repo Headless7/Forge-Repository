@@ -110,6 +110,10 @@ export function ProjectActivity({
                         <Link href={`/${studioSlug}/${projectSlug}?card=${encodeURIComponent(e.card.key)}`} className="inline-flex min-h-6 shrink-0 items-center rounded-md border border-border px-1.5 font-mono text-[11px] text-fg-muted hover:border-border-strong hover:text-fg">
                           {e.card.key}
                         </Link>
+                      ) : e.bug ? (
+                        <Link href={`/${studioSlug}/${projectSlug}/bugs?bug=${e.bug.number}`} className="inline-flex min-h-6 shrink-0 items-center rounded-md border border-border px-1.5 font-mono text-[11px] text-fg-muted hover:border-border-strong hover:text-fg">
+                          {e.bug.key}
+                        </Link>
                       ) : null}
                     </li>
                   ))}

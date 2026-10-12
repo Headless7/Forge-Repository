@@ -44,7 +44,7 @@ export interface PurgeTarget {
 
 type AttachmentFiles = { id: string; storageKey: string; thumbnailKey: string | null; previewKey: string | null; playbackKey: string | null; sizeBytes: number };
 
-const FOLDER = /^(studios\/[0-9a-f-]{36}\/projects\/[0-9a-f-]{36}\/cards\/[0-9a-f-]{36}\/[0-9a-f-]{36}\/)[^/]+$/i;
+const FOLDER = /^(studios\/[0-9a-f-]{36}\/projects\/[0-9a-f-]{36}\/(?:cards|bugs)\/[0-9a-f-]{36}\/[0-9a-f-]{36}\/)[^/]+$/i;
 
 /** The storage units an attachment occupies: its folder, or (for older layouts) its individual keys. */
 export function storageUnits(file: Pick<AttachmentFiles, "storageKey" | "thumbnailKey" | "previewKey" | "playbackKey">): string[] {
@@ -223,13 +223,13 @@ export async function resolveScope(actor: Actor, target: PurgeTarget, ex: Execut
       if (!a) return missing(target);
       const { access, denied } = await contentAccess(actor, a.projectId, ex);
       if (!access) return missing(target);
-      const [card] = await ex.select({ number: cards.number, columnId: cards.columnId, boardId: cards.boardId }).from(cards).where(eq(cards.id, a.cardId));
+      const [card] = a.cardId ? await ex.select({ number: cards.number, columnId: cards.columnId, boardId: cards.boardId }).from(cards).where(eq(cards.id, a.cardId)) : [];
       const files = [{ id: a.id, storageKey: a.storageKey, thumbnailKey: a.thumbnailKey, previewKey: a.previewKey, playbackKey: a.playbackKey, sizeBytes: a.sizeBytes }];
       const base = {
         target,
         label: `${access.project.key}-${card?.number ?? "?"} · ${a.filename}`,
         projectId: a.projectId,
-        parents: { project: a.projectId, board: card?.boardId, column: card?.columnId, card: a.cardId, ...(a.deliverableId ? { deliverable: a.deliverableId } : {}) },
+        parents: { project: a.projectId, board: card?.boardId, column: card?.columnId, ...(a.cardId ? { card: a.cardId } : {}), ...(a.deliverableId ? { deliverable: a.deliverableId } : {}) },
         files,
         counts: { ...NONE, files: 1 },
       };
@@ -423,7 +423,7 @@ async function deleteTarget(tx: Executor, actor: Actor, scope: PurgeScope, bytes
     case "attachment": {
       const [row] = await tx.delete(attachments).where(eq(attachments.id, t.id)).returning({ cardId: attachments.cardId, deliverableId: attachments.deliverableId });
       if (row?.deliverableId) await recomputeDeliverableCover(tx, row.deliverableId);
-      if (row) {
+      if (row?.cardId) {
         await recomputeCardRollup(tx, row.cardId);
         fx.card(projectId, row.cardId);
       }

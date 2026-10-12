@@ -390,6 +390,37 @@ function Workflow({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
   );
 }
 
+function Bugs({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
+  const queryClient = useQueryClient();
+  const p = board.project;
+  const update = useRpcMutation("project.update", {
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.board(p.id) });
+      toast.success("Saved.");
+    },
+  });
+  const current = p.settings.defaultBugReviewerId ?? "";
+  return (
+    <Section id="bugs" title="Bugs" description="Bug reports live beside the boards, grouped by update. Tags (Lobby, Play Area, UI…) are managed on the Bugs page.">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="text-[13px] font-medium">Default bug reviewer</p>
+          <p className="text-[12px] text-fg-muted">Verifies fixes on every new bug — the lead scripter, typically. Reporters with assign rights can pick someone else.</p>
+        </div>
+        <div className="w-56 max-w-full">
+          <Select
+            aria-label="Default bug reviewer"
+            disabled={!canEdit}
+            value={current}
+            onValueChange={(v) => update.mutate({ projectId: p.id, settings: { defaultBugReviewerId: v || null } })}
+            options={[{ value: "", label: "Nobody (any manager)" }, ...board.members.map((m) => ({ value: m.id, label: m.displayName, icon: <UserAvatar user={m} size="xs" /> }))]}
+          />
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 function Labels({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
   const queryClient = useQueryClient();
   const refresh = () => void queryClient.invalidateQueries({ queryKey: qk.board(board.project.id) });
@@ -610,6 +641,7 @@ export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: Bo
     ["workflow", "Board & workflow"],
     ["labels", "Labels"],
     ["milestones", "Milestones"],
+    ["bugs", "Bugs"],
     ...(showDiscord ? [["discord", "Discord feeds"]] : []),
     ["archived", "Archived items"],
     ...(perms.has("project.delete") ? [["danger", "Danger zone"]] : []),
@@ -640,6 +672,7 @@ export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: Bo
           <Workflow board={board} canEdit={canEdit} />
           <Labels board={board} canEdit={perms.has("label.manage")} />
           <Milestones board={board} canEdit={perms.has("milestone.manage")} />
+          <Bugs board={board} canEdit={canEdit} />
           {showDiscord && discordStatus.data ? <ProjectDiscordFeeds board={board} status={discordStatus.data} studioSlug={studioSlug} canManage={!board.project.archived} /> : null}
           <Section id="archived" title="Archived items" description="Restore anything that was archived — boards, columns, cards, deliverables and files.">
             <ArchivedItems projectId={board.project.id} canDelete={perms.has("card.delete")} canRestoreColumns={perms.has("column.manage")} />

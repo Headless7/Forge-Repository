@@ -52,6 +52,8 @@ export interface TipFacts {
   "access.scope": { place: "studio" | "project"; canManage: boolean };
   /** Account settings, once someone uses the Discord profile controls. */
   "account.discord-profile": { connected: boolean };
+  /** Beside a bug's actions the first time someone opens one. */
+  "bugs.workflow": { canFix: boolean; canVerify: boolean };
 }
 
 export type TipId = keyof TipFacts;
@@ -255,6 +257,19 @@ export const TIPS: { [K in TipId]: TipDefinition<TipFacts[K]> } = {
     title: () => "Your Discord picture, your studio name",
     body: () => "Your Discord picture can stay synced while your studio name stays under your control. Changes you make on Discord show up here after the next refresh.",
     eligible: (f) => f.connected,
+    side: "bottom",
+    align: "start",
+  },
+  "bugs.workflow": {
+    version: 1,
+    title: () => "How a bug gets resolved",
+    body: (f) =>
+      f.canVerify
+        ? "The assignee marks a bug Fixed; you then verify the fix in game and confirm it, or send it back. Until it's verified or closed, a bug stays in the Open list whichever update it belongs to."
+        : f.canFix
+          ? "Start work to take a bug, then mark it Fixed; its reviewer verifies the fix in game before it counts as resolved. Until then it stays in the Open list whichever update it belongs to."
+          : "The assignee marks a bug Fixed and its reviewer verifies the fix in game before it counts as resolved. Until then it stays in the Open list whichever update it belongs to.",
+    eligible: always,
     side: "bottom",
     align: "start",
   },

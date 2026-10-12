@@ -4,4 +4,5 @@ export * from "./cards";
 export * from "./media";
 export * from "./deliverables";
 export * from "./feedback";
+export * from "./bugs";
 export * from "./system";

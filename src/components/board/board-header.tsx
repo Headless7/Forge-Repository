@@ -3,6 +3,7 @@
 import {
   Activity,
   Archive,
+  Bug,
   CalendarDays,
   ChartGantt,
   ChevronDown,
@@ -427,6 +428,11 @@ export function BoardHeader({
             <DropdownMenuItem asChild>
               <Link href={`/${studioSlug}/${project.slug}/settings`}>
                 <Settings /> Project settings
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href={`/${studioSlug}/${project.slug}/bugs`}>
+                <Bug /> Bugs
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>

@@ -1,0 +1,298 @@
+"use client";
+
+import { useQueryClient } from "@tanstack/react-query";
+import { Check, Plus, Search, Tag, Trash2, UserRound } from "lucide-react";
+import { useState } from "react";
+import { SUGGESTED_BUG_TAGS } from "@/lib/bug-meta";
+import { LABEL_COLORS } from "@/lib/column-icons";
+import { qk, useRpcMutation } from "@/lib/queries";
+import type { BugTagDTO, MemberDTO } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import { UserAvatar } from "../domain/avatar";
+import { DiscordHandle } from "../domain/discord-icon";
+import { MemberPopover } from "../domain/member-popover";
+import { LabelChip } from "../domain/state";
+import { Button } from "../ui/button";
+import { Dialog, DialogContent } from "../ui/dialog";
+import { Input } from "../ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/menu";
+
+/** One person (the assignee or the reviewer of a bug): a searchable popover, or just the person when read-only. */
+export function PersonPicker({
+  value,
+  members,
+  canEdit,
+  onChange,
+  emptyLabel = "Nobody",
+  label,
+  filter,
+  className,
+}: {
+  value: string | null;
+  members: MemberDTO[];
+  canEdit: boolean;
+  onChange: (userId: string | null) => void;
+  emptyLabel?: string;
+  /** Heading inside the popover ("Assignee"). */
+  label: string;
+  filter?: (m: MemberDTO) => boolean;
+  className?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const person = value ? (members.find((m) => m.id === value) ?? null) : null;
+  const summary = value ? (
+    <span className="flex min-w-0 items-center gap-2">
+      {person ? <UserAvatar user={person} size="xs" online={person.online} /> : <UserRound className="size-4 shrink-0 text-fg-subtle" aria-hidden />}
+      <span className="truncate">{person?.displayName ?? "Former member"}</span>
+    </span>
+  ) : (
+    <span className="text-fg-subtle">{emptyLabel}</span>
+  );
+
+  if (!canEdit) {
+    return person ? (
+      <MemberPopover user={person} member={person} className={cn("touch-target max-w-full gap-2", className)}>
+        <UserAvatar user={person} size="xs" online={person.online} />
+        <span className="truncate">{person.displayName}</span>
+      </MemberPopover>
+    ) : (
+      <span className={className}>{summary}</span>
+    );
+  }
+
+  const q = query.trim().toLowerCase();
+  const candidates = members.filter((m) => (filter ? filter(m) : true)).filter((m) => !q || [m.displayName, m.title, m.username, m.discord?.username].some((v) => v?.toLowerCase().includes(q)));
+  const showNobody = !q || "nobody".includes(q);
+  const choose = (id: string | null) => id !== value && onChange(id);
+  return (
+    <Popover onOpenChange={(open) => !open && setQuery("")}>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label={`${label}: ${person?.displayName ?? emptyLabel}`} className={cn("-mx-1.5 w-[calc(100%+12px)] rounded-md px-1.5 py-1 text-left hover:bg-surface-3", className)}>
+          {summary}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="flex max-h-[var(--radix-popover-content-available-height)] w-64 max-w-[calc(100vw-16px)] flex-col gap-1 overflow-y-auto p-2"
+        onOpenAutoFocus={(e) => window.matchMedia("(pointer: coarse)").matches && e.preventDefault()}
+      >
+        <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">{label}</p>
+        <div className="relative mb-1">
+          <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-fg-subtle" aria-hidden />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && q && candidates[0]) {
+                e.preventDefault();
+                choose(candidates[0].id);
+              }
+            }}
+            placeholder="Search people…"
+            aria-label="Search people"
+            className="h-8 w-full rounded-md border border-border-strong bg-surface-3 pl-7 pr-2 text-[13px] outline-none focus:border-accent"
+          />
+        </div>
+        <ul className="scrollbar-thin max-h-64 overflow-y-auto overscroll-contain" aria-label="People">
+          {showNobody ? (
+            <li>
+              <button type="button" onClick={() => choose(null)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4">
+                <UserRound className="size-5 text-fg-subtle" aria-hidden />
+                <span className="flex-1">{emptyLabel}</span>
+                {!value ? <Check className="size-4 text-accent" aria-label="Selected" /> : null}
+              </button>
+            </li>
+          ) : null}
+          {candidates.map((m) => (
+            <li key={m.id}>
+              <button type="button" onClick={() => choose(m.id)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4">
+                <UserAvatar user={m} size="xs" online={m.online} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{m.displayName}</span>
+                  {m.title ? <span className="block truncate text-[11px] text-fg-subtle">{m.title}</span> : null}
+                  {m.discord ? <DiscordHandle username={m.discord.username} className="text-[11px]" /> : null}
+                </span>
+                {value === m.id ? <Check className="size-4 text-accent" aria-label="Selected" /> : null}
+              </button>
+            </li>
+          ))}
+          {q && !candidates.length && !showNobody ? <li className="px-2 py-1.5 text-[12.5px] text-fg-muted">No one matches “{query.trim()}”.</li> : null}
+        </ul>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Creates a tag and tells the tracker; `onCreated` gets the new tag (e.g. to select it). */
+function useCreateTag(projectId: string, onCreated?: (tag: BugTagDTO) => void) {
+  const queryClient = useQueryClient();
+  return useRpcMutation("bugTag.create", {
+    onSuccess: (tag) => {
+      void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
+      onCreated?.(tag);
+    },
+  });
+}
+
+/** Where a bug happens: chips plus a popover to toggle tags (and, for managers, make new ones). */
+export function TagPicker({
+  selected,
+  tags,
+  projectId,
+  canEdit,
+  canManage,
+  onChange,
+}: {
+  selected: string[];
+  tags: BugTagDTO[];
+  projectId: string;
+  canEdit: boolean;
+  canManage: boolean;
+  onChange: (tagIds: string[]) => void;
+}) {
+  const [name, setName] = useState("");
+  const [color, setColor] = useState<string>(LABEL_COLORS[0]!);
+  const create = useCreateTag(projectId, (tag) => {
+    onChange([...selected, tag.id]);
+    setName("");
+  });
+  const chosen = selected.map((id) => tags.find((t) => t.id === id)).filter((t): t is BugTagDTO => Boolean(t));
+  const toggle = (id: string) => onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  const chips = chosen.map((t) => <LabelChip key={t.id} label={t} />);
+  if (!canEdit) return <span className="flex flex-wrap gap-1">{chips.length ? chips : <span className="text-fg-subtle">None</span>}</span>;
+  return (
+    <Popover>
+      <span className="flex flex-wrap items-center gap-1">
+        {chips}
+        <PopoverTrigger asChild>
+          <button type="button" aria-label="Choose tags" className="touch-target inline-flex h-[18px] items-center gap-1 rounded border border-dashed border-border-strong px-1.5 text-[10.5px] font-medium text-fg-subtle hover:border-fg-subtle hover:text-fg">
+            <Plus className="size-3" /> {chips.length ? null : "Tag"}
+          </button>
+        </PopoverTrigger>
+      </span>
+      <PopoverContent className="flex w-64 max-w-[calc(100vw-16px)] flex-col gap-2 p-2">
+        <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">Tags</p>
+        {tags.length ? (
+          <ul className="scrollbar-thin max-h-56 overflow-y-auto overscroll-contain">
+            {tags.map((t) => {
+              const on = selected.includes(t.id);
+              return (
+                <li key={t.id}>
+                  <button type="button" onClick={() => toggle(t.id)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4" aria-pressed={on}>
+                    <LabelChip label={t} />
+                    <span className="flex-1" />
+                    {on ? <Check className="size-4 text-accent" aria-label="Selected" /> : null}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="px-1 text-[12.5px] text-fg-muted">No tags yet.{canManage ? " Make some: where in the game a bug happens." : ""}</p>
+        )}
+        {canManage ? (
+          <div className="border-t border-border pt-2">
+            {!tags.length ? (
+              <div className="mb-2 flex flex-wrap gap-1">
+                {SUGGESTED_BUG_TAGS.map((s) => (
+                  <Button key={s.name} size="xs" variant="secondary" loading={create.isPending && create.variables?.name === s.name} onClick={() => create.mutate({ projectId, name: s.name, color: s.color })}>
+                    <Plus /> {s.name}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+            <form
+              className="flex items-center gap-1.5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (name.trim()) create.mutate({ projectId, name: name.trim(), color });
+              }}
+            >
+              <ColorDot color={color} onChange={setColor} />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New tag…" aria-label="New tag name" className="h-7 text-[12.5px]" maxLength={40} />
+              <Button type="submit" size="xs" variant="secondary" disabled={!name.trim()} loading={create.isPending}>
+                Add
+              </Button>
+            </form>
+          </div>
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Cycles through the label palette on each press. */
+function ColorDot({ color, onChange }: { color: string; onChange: (color: string) => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="Tag colour (press to change)"
+      title="Change colour"
+      onClick={() => onChange(LABEL_COLORS[((LABEL_COLORS as readonly string[]).indexOf(color) + 1) % LABEL_COLORS.length]!)}
+      className="touch-target size-5 shrink-0 rounded-full border border-border-strong"
+      style={{ backgroundColor: color }}
+    />
+  );
+}
+
+/** Rename, recolour and delete the project's bug tags (managers). */
+export function TagManagerDialog({ open, onOpenChange, tags, projectId }: { open: boolean; onOpenChange: (open: boolean) => void; tags: BugTagDTO[]; projectId: string }) {
+  const queryClient = useQueryClient();
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
+  const update = useRpcMutation("bugTag.update", { onSuccess: refresh });
+  const remove = useRpcMutation("bugTag.delete", { onSuccess: refresh });
+  const [name, setName] = useState("");
+  const [color, setColor] = useState<string>(LABEL_COLORS[0]!);
+  const create = useCreateTag(projectId, () => setName(""));
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent title="Bug tags" description="Where in the game a bug happens — Lobby, Play Area, UI… Every bug can carry several.">
+        {tags.length ? (
+          <ul className="divide-y divide-border rounded-lg border border-border">
+            {tags.map((t) => (
+              <li key={t.id} className="flex items-center gap-2 px-2 py-1.5">
+                <ColorDot color={t.color} onChange={(c) => update.mutate({ tagId: t.id, color: c })} />
+                <input
+                  key={t.name}
+                  defaultValue={t.name}
+                  aria-label="Tag name"
+                  maxLength={40}
+                  onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== t.name && update.mutate({ tagId: t.id, name: e.target.value.trim() })}
+                  className="h-7 min-w-0 flex-1 rounded-md bg-transparent px-1.5 text-[13px] font-medium outline-none focus:bg-surface-3"
+                />
+                <LabelChip label={t} />
+                <Button size="icon-xs" variant="ghost" aria-label={`Delete tag ${t.name}`} onClick={() => remove.mutate({ tagId: t.id })} className="touch-target text-fg-subtle hover:text-danger">
+                  <Trash2 />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-[13px] text-fg-muted">No tags yet.</p>
+        )}
+        {!tags.length ? (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {SUGGESTED_BUG_TAGS.map((s) => (
+              <Button key={s.name} size="sm" variant="secondary" onClick={() => create.mutate({ projectId, name: s.name, color: s.color })}>
+                <Plus /> {s.name}
+              </Button>
+            ))}
+          </div>
+        ) : null}
+        <form
+          className="mt-3 flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) create.mutate({ projectId, name: name.trim(), color });
+          }}
+        >
+          <ColorDot color={color} onChange={setColor} />
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New tag…" aria-label="New tag name" maxLength={40} />
+          <Button type="submit" variant="secondary" disabled={!name.trim()} loading={create.isPending}>
+            <Tag /> Add
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}

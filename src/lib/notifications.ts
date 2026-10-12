@@ -23,6 +23,12 @@ export const NOTIFICATION_TYPES = [
   "DUE_CHANGED",
   "WORK_ARCHIVED",
   "WATCHED_CARD",
+  "BUG_ASSIGNED",
+  "BUG_REVIEWER_ASSIGNED",
+  "BUG_FIXED",
+  "BUG_RESOLVED",
+  "BUG_REOPENED",
+  "BUG_COMMENT",
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
@@ -30,7 +36,7 @@ export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 type Meta = {
   label: string;
   description: string;
-  group: "Work" | "Review" | "Dependencies" | "Deadlines" | "Conversation" | "Following";
+  group: "Work" | "Review" | "Dependencies" | "Deadlines" | "Conversation" | "Following" | "Bugs";
   /** Sent to subscribed devices unless switched off (the routine/noisy types are opt-in). */
   push: boolean;
 };
@@ -54,6 +60,12 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, Meta> = {
   REPLY: { group: "Conversation", push: true, label: "Replies", description: "Someone replies to your comment or feedback." },
   COMMENT: { group: "Conversation", push: false, label: "Comments on your work", description: "New comments and feedback on work you're responsible for." },
   WATCHED_CARD: { group: "Following", push: false, label: "Watched cards", description: "Significant updates on cards you watch (new revisions, status changes)." },
+  BUG_ASSIGNED: { group: "Bugs", push: true, label: "Bugs assigned to you", description: "A bug is given to you to fix." },
+  BUG_REVIEWER_ASSIGNED: { group: "Bugs", push: true, label: "Bugs to verify", description: "You're made the reviewer of a bug: you verify its fix." },
+  BUG_FIXED: { group: "Bugs", push: true, label: "Fixes to verify", description: "A bug you review (or reported) is marked fixed and waits for verification." },
+  BUG_RESOLVED: { group: "Bugs", push: false, label: "Bugs resolved", description: "A bug you reported or fixed is verified or closed." },
+  BUG_REOPENED: { group: "Bugs", push: true, label: "Bugs reopened", description: "A bug you're fixing is sent back: the fix didn't hold." },
+  BUG_COMMENT: { group: "Bugs", push: false, label: "Bug comments", description: "New comments on bugs you reported, fix or verify." },
 };
 
 /** In-app: the inbox and its unread count. Push: the person's subscribed devices. Email: when the server can send it. */
@@ -70,8 +82,10 @@ export function channelDefault(type: NotificationType, channel: NotificationChan
 type Data = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === "string" && v ? v : null);
 
-/** What the notification is about: "D2 Rig" on "UTD-4 Sword", or just the card. */
+/** What the notification is about: "D2 Rig" on "UTD-4 Sword", just the card, or a bug ("UTD-B3 Lamps float"). */
 export function notificationSubject(data: Data): string {
+  const bug = [str(data.bugKey), str(data.bugTitle)].filter(Boolean).join(" ");
+  if (bug) return bug;
   const card = [str(data.cardKey), str(data.cardTitle)].filter(Boolean).join(" ");
   const deliverable = str(data.deliverable);
   return deliverable ? `${deliverable} on ${card}` : card;
@@ -124,5 +138,17 @@ export function notificationText(type: NotificationType, data: Data, actorName: 
       return `${who} ${data.restored ? "restored" : "archived"} ${what}.`;
     case "WATCHED_CARD":
       return `${who} ${str(data.change) ?? "updated"} ${what}.`;
+    case "BUG_ASSIGNED":
+      return `${who} gave you the bug ${what} to fix.`;
+    case "BUG_REVIEWER_ASSIGNED":
+      return `${who} made you the reviewer of the bug ${what}.`;
+    case "BUG_FIXED":
+      return `${who} marked the bug ${what} as fixed. It waits for verification.`;
+    case "BUG_RESOLVED":
+      return data.status === "CLOSED" ? `${who} closed the bug ${what}${str(data.resolution) ? ` (${str(data.resolution)})` : ""}.` : `${who} verified the fix for the bug ${what}.`;
+    case "BUG_REOPENED":
+      return `${who} reopened the bug ${what}.`;
+    case "BUG_COMMENT":
+      return `${who} commented on the bug ${what}.`;
   }
 }

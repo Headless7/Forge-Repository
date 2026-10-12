@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
+import { BUG_PRIORITY_META, BUG_RESOLUTION_META, BUG_STATUS_META } from "@/lib/bug-meta";
 import { CARD_STATE_META, PRIORITY_META } from "@/lib/card-meta";
 import { formatDueDay } from "@/lib/checklist";
-import type { ActivityDTO, CardState, Priority } from "@/lib/types";
+import type { ActivityDTO, BugPriority, BugResolution, BugStatus, CardState, Priority } from "@/lib/types";
 import { formatShortDate } from "@/lib/utils";
 
 type D = Record<string, unknown>;
@@ -16,6 +17,7 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
   const d = event.data as D;
   const card = withCard && event.card ? <strong className="font-medium text-fg">{event.card.title}</strong> : null;
   const it = card ?? "this card";
+  const bug = withCard ? <strong className="font-medium text-fg">{event.bug ? `${event.bug.key} ${event.bug.title}` : "a bug"}</strong> : "this bug";
   switch (event.type) {
     case "card.created":
       return <>created {card ?? "this card"}{d.columnName ? <> in <strong className="font-medium text-fg">{s(d.columnName)}</strong></> : null}</>;
@@ -107,6 +109,39 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
       return <>restored the board {s(d.boardName)}</>;
     case "project.created":
       return d.template ? <>created the project from {s(d.template)}</> : <>created the project</>;
+    case "bug.created":
+      return <>reported {bug}{d.milestoneName ? <> for <strong className="font-medium text-fg">{s(d.milestoneName)}</strong></> : null}</>;
+    case "bug.renamed":
+      return <>renamed {withCard ? "a bug" : "this bug"} from “{s(d.from)}” to “{s(d.to)}”</>;
+    case "bug.description_changed":
+      return <>updated the description{withCard ? <> of {bug}</> : null}</>;
+    case "bug.status_changed": {
+      const to = s(d.to) as BugStatus;
+      const reason = to === "CLOSED" && d.resolution ? <> ({BUG_RESOLUTION_META[s(d.resolution) as BugResolution]?.label ?? s(d.resolution)})</> : null;
+      if (to === "IN_PROGRESS" && (d.from === "FIXED" || d.from === "VERIFIED" || d.from === "CLOSED")) return <>sent {bug} back: not fixed yet</>;
+      if (to === "IN_PROGRESS") return <>started on {bug}</>;
+      if (to === "FIXED") return <>marked {bug} fixed — waiting for verification</>;
+      if (to === "VERIFIED") return <>verified the fix for {bug}</>;
+      if (to === "CLOSED") return <>closed {bug}{reason}</>;
+      if (to === "OPEN") return <>reopened {bug}</>;
+      return <>set {bug} to {(BUG_STATUS_META as Record<string, { label: string } | undefined>)[s(d.to)]?.label ?? s(d.to)}</>;
+    }
+    case "bug.priority_changed":
+      return <>set the priority{withCard ? <> of {bug}</> : null} to {BUG_PRIORITY_META[s(d.to) as BugPriority]?.label ?? s(d.to)}</>;
+    case "bug.milestone_changed":
+      return d.to ? <>moved {bug} into <strong className="font-medium text-fg">{s(d.to)}</strong></> : <>took {bug} out of its update</>;
+    case "bug.assignee_changed":
+      return d.userId ? <>gave {bug} to <strong className="font-medium text-fg">{resolveUser(s(d.userId))}</strong> to fix</> : <>unassigned {bug}</>;
+    case "bug.reviewer_changed":
+      return d.userId ? <>made <strong className="font-medium text-fg">{resolveUser(s(d.userId))}</strong> the reviewer{withCard ? <> of {bug}</> : null}</> : <>removed the reviewer{withCard ? <> of {bug}</> : null}</>;
+    case "bug.tags_changed":
+      return <>updated the tags{withCard ? <> of {bug}</> : null}</>;
+    case "bug.attachment_added":
+      return <>added {s(d.kind) === "VIDEO" ? "a clip" : "a picture"}{withCard ? <> to {bug}</> : null} ({s(d.filename)})</>;
+    case "bug.attachment_removed":
+      return <>removed {s(d.filename)}{withCard ? <> from {bug}</> : null}</>;
+    case "bug.commented":
+      return <>commented{withCard ? <> on {bug}</> : null}{d.excerpt ? <>: “{s(d.excerpt)}”</> : null}</>;
     default:
       return <>{event.type.replace(/[._]/g, " ")}</>;
   }

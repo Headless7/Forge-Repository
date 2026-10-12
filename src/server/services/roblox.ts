@@ -235,6 +235,7 @@ export async function resolveResource(
   if (file.status !== "READY") throw conflict("That file hasn't finished uploading yet.");
   if (file.uploadedById !== actor.userId && file.purpose === "RESOURCE") {
     // Anyone may reuse an existing project resource, but only through files they can see.
+    if (!file.cardId) throw notFound("File");
     await requireCard(actor.userId, file.cardId);
   }
   const { format, convertedKey } = await validateResourceFile(file, input.kind);
@@ -652,7 +653,7 @@ export async function listRigCandidates(actor: Actor, input: { cardId: string })
     out.push({
       attachmentId: a.id,
       filename: a.filename,
-      cardId: a.cardId,
+      cardId: a.cardId!,
       cardKey: `${ctx.access.project.key}-${cardNumber}`,
       cardTitle,
       deliverableName,
@@ -670,7 +671,7 @@ export async function setPreviewConfig(
   input: { attachmentId: string; rigAttachmentId?: string | null; rigNode?: number | null },
 ) {
   const [file] = await db.select().from(attachments).where(eq(attachments.id, input.attachmentId));
-  if (!file || file.kind !== "ROBLOX") throw notFound("File");
+  if (!file || file.kind !== "ROBLOX" || !file.cardId) throw notFound("File");
   const ctx = await requireCard(actor.userId, file.cardId).catch(() => {
     throw notFound("File");
   });
@@ -685,7 +686,7 @@ export async function setPreviewConfig(
       .select()
       .from(attachments)
       .where(and(eq(attachments.id, input.rigAttachmentId), eq(attachments.projectId, file.projectId), eq(attachments.kind, "ROBLOX")));
-    if (!rig) throw notFound("Rig file");
+    if (!rig || !rig.cardId) throw notFound("Rig file");
     await requireCard(actor.userId, rig.cardId);
   }
   const previewConfig = {
@@ -702,7 +703,7 @@ export async function setPreviewConfig(
 /** Re-derives the preview (after a parser upgrade or a failed attempt). The original upload is untouched. */
 export async function rebuildPreview(actor: Actor, input: { attachmentId: string }) {
   const [file] = await db.select().from(attachments).where(eq(attachments.id, input.attachmentId));
-  if (!file || file.kind !== "ROBLOX") throw notFound("File");
+  if (!file || file.kind !== "ROBLOX" || !file.cardId) throw notFound("File");
   const ctx = await requireCard(actor.userId, file.cardId).catch(() => {
     throw notFound("File");
   });

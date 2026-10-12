@@ -110,6 +110,17 @@ export const PERMISSIONS = [
   "attachment.upload",
   "comment.create",
   "comment.moderate",
+  /** Report bugs (and take unassigned ones). */
+  "bug.create",
+  /** Change any bug: fields, assignee, status. */
+  "bug.edit",
+  /** Change bugs you reported, are fixing or are verifying. */
+  "bug.editOwn",
+  "bug.assign",
+  /** Verify fixes (the bug's own reviewer can always verify). */
+  "bug.verify",
+  "bug.delete",
+  "bugtag.manage",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -124,6 +135,8 @@ const WORKER: Permission[] = [
   "card.submit",
   "attachment.upload",
   "comment.create",
+  "bug.create",
+  "bug.editOwn",
 ];
 
 const MANAGER: Permission[] = [
@@ -140,6 +153,10 @@ const MANAGER: Permission[] = [
   "milestone.manage",
   "comment.moderate",
   "reports.view",
+  "bug.edit",
+  "bug.assign",
+  "bug.verify",
+  "bugtag.manage",
 ];
 
 const ADMIN: Permission[] = [
@@ -151,6 +168,7 @@ const ADMIN: Permission[] = [
   "project.create",
   "project.update",
   "card.delete",
+  "bug.delete",
 ];
 
 /** Only the owner archives, restores or deletes projects (and the studio). */
@@ -242,4 +260,55 @@ export function cardPermissions({ role, userId, card, allowSelfApproval }: CardP
     canModerate: has("comment.moderate"),
     canPublish: has("card.publish"),
   };
+}
+
+export interface BugPermissionInput {
+  role: string;
+  userId: string;
+  bug: { reportedById: string | null; assigneeId: string | null; reviewerId: string | null };
+  allowSelfApproval: boolean;
+  /** The project is archived: everything is read-only. */
+  readOnly?: boolean;
+}
+
+export interface BugPermissions {
+  canView: boolean;
+  /** Title, description, priority, update, tags; also the fix workflow (start, mark fixed). */
+  canEdit: boolean;
+  /** Pick the assignee and the reviewer. */
+  canAssign: boolean;
+  /** Take an unassigned bug (become its assignee). */
+  canSelfAssign: boolean;
+  /** Confirm a fix (or send it back): the bug's reviewer or anyone with bug.verify — not the person fixing it (unless self-approval is allowed). */
+  canVerify: boolean;
+  /** Close without a fix (won't fix, can't reproduce…). */
+  canClose: boolean;
+  canComment: boolean;
+  canUpload: boolean;
+  canDelete: boolean;
+  canManageTags: boolean;
+}
+
+/** Bug-level rules. Used verbatim by server-side enforcement and by the UI. */
+export function bugPermissions({ role, userId, bug, allowSelfApproval, readOnly }: BugPermissionInput): BugPermissions {
+  const has = (p: Permission) => roleHas(role, p);
+  const isReporter = bug.reportedById === userId;
+  const isAssignee = bug.assigneeId === userId;
+  const isReviewer = bug.reviewerId === userId;
+  const canEdit = has("bug.edit") || (has("bug.editOwn") && (isReporter || isAssignee || isReviewer));
+  const base: BugPermissions = {
+    canView: has("project.view"),
+    canEdit,
+    canAssign: has("bug.assign"),
+    canSelfAssign: has("bug.create"),
+    // The named reviewer, or any manager — but never the person fixing it, unless the project allows self-approval.
+    canVerify: (isReviewer || has("bug.verify")) && (allowSelfApproval || !isAssignee),
+    canClose: has("bug.edit") || (has("bug.editOwn") && isReporter),
+    canComment: has("comment.create"),
+    canUpload: has("attachment.upload") && canEdit,
+    canDelete: has("bug.delete"),
+    canManageTags: has("bugtag.manage"),
+  };
+  if (!readOnly) return base;
+  return { ...base, canEdit: false, canAssign: false, canSelfAssign: false, canVerify: false, canClose: false, canComment: false, canUpload: false, canManageTags: false };
 }

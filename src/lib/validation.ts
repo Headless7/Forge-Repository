@@ -29,6 +29,11 @@ export const cardStateSchema = z.enum(["NOT_SUBMITTED", "IN_PROGRESS", "NEEDS_RE
 export const prioritySchema = z.enum(["LOW", "NORMAL", "HIGH", "URGENT"]);
 export const displayModeSchema = z.enum(["VISUAL", "COMPACT"]);
 export const notificationTypeSchema = z.enum(NOTIFICATION_TYPES);
+export const bugStatusSchema = z.enum(["OPEN", "IN_PROGRESS", "FIXED", "VERIFIED", "CLOSED"]);
+export const bugPrioritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "GAME_BREAKING"]);
+export const bugResolutionSchema = z.enum(["WONT_FIX", "CANNOT_REPRODUCE", "DUPLICATE", "NOT_A_BUG"]);
+export const bugTitleSchema = z.string().trim().min(1, "Describe the bug in a line.").max(200, "Titles are limited to 200 characters.");
+export const bugTagNameSchema = z.string().trim().min(1, "Name the tag.").max(40, "Tag names are limited to 40 characters.");
 
 export const signUpSchema = z.object({
   email: emailSchema,

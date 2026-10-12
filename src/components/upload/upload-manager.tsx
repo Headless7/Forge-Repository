@@ -10,11 +10,13 @@ import type { AttachmentDTO } from "@/lib/types";
 import { cn, formatBytes } from "@/lib/utils";
 import { Button } from "../ui/button";
 
-type Purpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist";
+type Purpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "bug";
 
 export interface UploadItem {
   id: string;
+  /** The card — or, for a "bug" upload, the bug — the file goes to. */
   cardId: string;
+  target: "card" | "bug";
   cardTitle: string;
   file: File;
   purpose: Purpose;
@@ -28,7 +30,10 @@ export interface UploadItem {
 }
 
 export interface UploadTarget {
+  /** A card id, or a bug id when `kind` is "bug". */
   id: string;
+  /** What `id` names. Bug uploads use the "bug" purpose and refresh the bug instead of a card. */
+  kind?: "card" | "bug";
   projectId: string;
   title: string;
   /** The deliverable new revisions/files belong to. Omitted for simple (single-deliverable) cards. */
@@ -114,15 +119,22 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [items, setItems] = useState<UploadItem[]>([]);
   const projects = useRef(new Map<string, string>());
+  const kinds = useRef(new Map<string, "card" | "bug">());
 
   const patch = useCallback((id: string, update: Partial<UploadItem>) => {
     setItems((list) => list.map((i) => (i.id === id ? { ...i, ...update } : i)));
   }, []);
 
   const refresh = useCallback(
-    (cardId: string) => {
-      void queryClient.invalidateQueries({ queryKey: qk.card(cardId) });
-      const projectId = projects.current.get(cardId);
+    (targetId: string) => {
+      const projectId = projects.current.get(targetId);
+      if (kinds.current.get(targetId) === "bug") {
+        void queryClient.invalidateQueries({ queryKey: qk.bug(targetId) });
+        void queryClient.invalidateQueries({ queryKey: qk.bugActivity(targetId) });
+        if (projectId) void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
+        return;
+      }
+      void queryClient.invalidateQueries({ queryKey: qk.card(targetId) });
       if (projectId) void queryClient.invalidateQueries({ queryKey: qk.board(projectId) });
     },
     [queryClient],
@@ -132,16 +144,21 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     async (item: UploadItem): Promise<AttachmentDTO> => {
       patch(item.id, { status: "uploading", progress: 0, error: undefined });
       try {
-        const intent = await rpc("upload.create", {
-          cardId: item.cardId,
-          filename: item.file.name || "pasted-image.png",
-          size: item.file.size,
-          contentType: item.file.type || "application/octet-stream",
-          purpose: item.purpose,
-          versionId: item.versionId,
-          deliverableId: item.purpose === "version" ? null : item.deliverableId,
-          checklistItemId: item.checklistItemId,
-        });
+        const intent = await rpc(
+          "upload.create",
+          item.target === "bug"
+            ? { bugId: item.cardId, filename: item.file.name || "pasted-image.png", size: item.file.size, contentType: item.file.type || "application/octet-stream", purpose: "bug" }
+            : {
+                cardId: item.cardId,
+                filename: item.file.name || "pasted-image.png",
+                size: item.file.size,
+                contentType: item.file.type || "application/octet-stream",
+                purpose: item.purpose,
+                versionId: item.versionId,
+                deliverableId: item.purpose === "version" ? null : item.deliverableId,
+                checklistItemId: item.checklistItemId,
+              },
+        );
         await putWithProgress(intent.upload.url, item.file, intent.upload.headers, (p) => patch(item.id, { progress: p }));
         patch(item.id, { status: "processing", progress: 1 });
         const attachment = await rpc("upload.complete", { attachmentId: intent.attachmentId, clientMeta: await clientMeta(item.file) });
@@ -160,9 +177,11 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const enqueue = useCallback(
     async (card: UploadTarget, files: File[], purpose: Purpose, versionId: string | null) => {
       projects.current.set(card.id, card.projectId);
+      kinds.current.set(card.id, card.kind ?? "card");
       const created: UploadItem[] = files.map((file) => ({
         id: crypto.randomUUID(),
         cardId: card.id,
+        target: card.kind ?? "card",
         cardTitle: card.label ? `${card.title} › ${card.label}` : card.title,
         file,
         purpose,

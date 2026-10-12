@@ -134,6 +134,13 @@
       "when": 1791809872058,
       "tag": "0018_checklist_item_images",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791821685031,
+      "tag": "0019_bugs",
+      "breakpoints": true
     }
   ]
 }

@@ -1,9 +1,9 @@
 import { and, eq, inArray, isNull, lt, max, ne, sql } from "drizzle-orm";
 import type { AttachmentDTO } from "@/lib/types";
-import { assertCard, computeDeliverablePermissions, loadContributors, requireCard, requireDeliverable, type CardAccess, type DeliverableAccess } from "../access";
+import { assertBug, assertCard, computeDeliverablePermissions, loadContributors, requireBug, requireCard, requireDeliverable, type BugAccess, type CardAccess, type DeliverableAccess } from "../access";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
-import { assetVersions, attachments, cards, checklistItems, deliverables, reviews } from "../db/schema";
+import { assetVersions, attachments, bugs, cards, checklistItems, deliverables, reviews } from "../db/schema";
 import { AppError, conflict, forbidden, invalid, notFound } from "../errors";
 import { mediaQueue } from "../jobs/queue";
 import { classifyUpload, maxBytesFor, sanitizeFilename, storageName } from "../media/formats";
@@ -18,7 +18,7 @@ import {
 } from "../media/process";
 import { enforceRateLimit } from "../rate-limit";
 import { safeFetch } from "../security/safe-fetch";
-import { attachmentKey, storage } from "../storage";
+import { attachmentKey, bugAttachmentKey, storage } from "../storage";
 import type { UploadTarget } from "../storage/types";
 import { logActivity } from "./activity";
 import { attachmentToDTO, type AttachmentRow } from "./card-dto";
@@ -29,7 +29,10 @@ import { Effects } from "./effects";
 import { notify } from "./notifications";
 import { ABANDONED_UPLOAD_MS, reserveStudioStorage } from "./storage-quota";
 
-export type UploadPurpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist";
+export type UploadPurpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "bug";
+
+/** Bug reports take pictures and clips only (the kinds the list and lightbox show). */
+const BUG_KINDS = ["IMAGE", "VIDEO"] as const;
 
 /** A card with exactly one active deliverable can be addressed by the card alone (board drops, pastes). */
 async function resolveDeliverable(actor: Actor, input: { deliverableId?: string | null; cardId?: string | null }): Promise<DeliverableAccess> {
@@ -111,21 +114,28 @@ export async function updateVersionNotes(actor: Actor, input: { versionId: strin
 
 // ── Upload lifecycle: create intent → browser PUT → complete ────────────────
 
-interface UploadScope {
-  ctx: CardAccess;
-  deliverableId: string | null;
-  checklistItemId?: string | null;
-}
+/** A card upload (`ctx`) or a bug-report upload (`bug`): exactly one is set. */
+type UploadScope =
+  | { ctx: CardAccess; bug: null; deliverableId: string | null; checklistItemId?: string | null }
+  | { ctx: null; bug: BugAccess; deliverableId: null; checklistItemId?: null };
 
 async function assertUploadAllowed(
   actor: Actor,
-  input: { cardId: string; purpose: UploadPurpose; versionId?: string | null; deliverableId?: string | null; checklistItemId?: string | null },
+  input: { cardId?: string | null; bugId?: string | null; purpose: UploadPurpose; versionId?: string | null; deliverableId?: string | null; checklistItemId?: string | null },
   ex: Executor,
 ): Promise<UploadScope> {
+  if (input.purpose === "bug") {
+    // A screenshot or clip on a bug report: editing the report.
+    if (!input.bugId) throw invalid("A bug is required.");
+    const bug = await requireBug(actor.userId, input.bugId, ex);
+    assertBug(bug.perms, "canUpload", "You don't have permission to add files to this bug.");
+    return { ctx: null, bug, deliverableId: null };
+  }
+  if (!input.cardId) throw invalid("A card is required.");
   const ctx = await requireCard(actor.userId, input.cardId, ex);
   if (input.purpose === "comment") {
     assertCard(ctx.perms, "canComment");
-    return { ctx, deliverableId: null };
+    return { ctx, bug: null, deliverableId: null };
   }
   if (input.purpose === "checklist") {
     // A checklist item's reference image: editing the item, like its text.
@@ -136,20 +146,20 @@ async function assertUploadAllowed(
       .from(checklistItems)
       .where(and(eq(checklistItems.id, input.checklistItemId), eq(checklistItems.cardId, ctx.card.id)));
     if (!item) throw notFound("Checklist item");
-    return { ctx, deliverableId: null, checklistItemId: item.id };
+    return { ctx, bug: null, deliverableId: null, checklistItemId: item.id };
   }
   if (input.purpose === "cover") {
     // Changing a cover is a card edit; the file belongs to no revision — and to the deliverable
     // whose cover it is, if any (else it's the card's).
     assertCard(ctx.perms, "canEdit", "You don't have permission to change this card's cover.");
-    if (!input.deliverableId) return { ctx, deliverableId: null };
+    if (!input.deliverableId) return { ctx, bug: null, deliverableId: null };
     const [d] = await ex
       .select({ id: deliverables.id, archivedAt: deliverables.archivedAt })
       .from(deliverables)
       .where(and(eq(deliverables.id, input.deliverableId), eq(deliverables.cardId, ctx.card.id)));
     if (!d) throw notFound("Deliverable");
     if (d.archivedAt) throw conflict("This deliverable is archived. Restore it to change its cover.");
-    return { ctx, deliverableId: d.id };
+    return { ctx, bug: null, deliverableId: d.id };
   }
   let deliverableId = input.deliverableId ?? null;
   if (input.purpose === "version") {
@@ -169,13 +179,14 @@ async function assertUploadAllowed(
   } else {
     assertCard(ctx.perms, "canUpload", "You don't have permission to upload files to this card.");
   }
-  return { ctx, deliverableId };
+  return { ctx, bug: null, deliverableId };
 }
 
 export async function createUpload(
   actor: Actor,
   input: {
-    cardId: string;
+    cardId?: string | null;
+    bugId?: string | null;
     filename: string;
     size: number;
     contentType: string;
@@ -186,13 +197,15 @@ export async function createUpload(
   },
 ): Promise<{ attachmentId: string; upload: UploadTarget; maxBytes: number }> {
   enforceRateLimit(`upload:${actor.userId}`, 200, 10 * 60 * 1000);
-  const { ctx, deliverableId, checklistItemId = null } = await assertUploadAllowed(actor, input, db);
+  const scope = await assertUploadAllowed(actor, input, db);
+  const { ctx, bug, deliverableId, checklistItemId = null } = scope;
 
   const filename = sanitizeFilename(input.filename);
   const classification = classifyUpload(filename, input.contentType);
   if ("error" in classification) throw invalid(classification.error);
   if (input.purpose === "cover" && !(COVER_KINDS as readonly string[]).includes(classification.kind)) throw invalid("A cover must be an image or a video.");
   if (input.purpose === "checklist" && classification.kind !== "IMAGE") throw invalid("A checklist item's picture must be an image.");
+  if (input.purpose === "bug" && !(BUG_KINDS as readonly string[]).includes(classification.kind)) throw invalid("Bug reports take images and videos.");
   const maxBytes = maxBytesFor(classification.kind);
   if (input.size > maxBytes) {
     throw new AppError("PAYLOAD_TOO_LARGE", `${filename} is larger than the ${Math.round(maxBytes / 1024 / 1024)} MB limit for this file type.`);
@@ -200,21 +213,21 @@ export async function createUpload(
   if (input.size <= 0) throw invalid(`${filename} is empty.`);
 
   const id = crypto.randomUUID();
-  const key = attachmentKey({
-    studioId: ctx.access.studioId,
-    projectId: ctx.card.projectId,
-    cardId: ctx.card.id,
-    attachmentId: id,
-    name: `original-${storageName(filename)}`,
-  });
-  const purpose = input.purpose === "version" ? "VERSION" : input.purpose === "comment" ? "COMMENT" : input.purpose === "resource" ? "RESOURCE" : input.purpose === "cover" ? "COVER" : input.purpose === "checklist" ? "CHECKLIST" : "CARD";
+  const studioId = ctx ? ctx.access.studioId : bug.access.studioId;
+  const projectId = ctx ? ctx.card.projectId : bug.bug.projectId;
+  const name = `original-${storageName(filename)}`;
+  const key = ctx
+    ? attachmentKey({ studioId, projectId, cardId: ctx.card.id, attachmentId: id, name })
+    : bugAttachmentKey({ studioId, projectId, bugId: bug.bug.id, attachmentId: id, name });
+  const purpose = input.purpose === "version" ? "VERSION" : input.purpose === "comment" ? "COMMENT" : input.purpose === "resource" ? "RESOURCE" : input.purpose === "cover" ? "COVER" : input.purpose === "checklist" ? "CHECKLIST" : input.purpose === "bug" ? "BUG" : "CARD";
   await db.transaction(async (tx) => {
     // Counts against the studio's storage limit from now on (until finished or abandoned).
-    await reserveStudioStorage(tx, ctx.access.studioId, input.size);
+    await reserveStudioStorage(tx, studioId, input.size);
     await tx.insert(attachments).values({
       id,
-      cardId: ctx.card.id,
-      projectId: ctx.card.projectId,
+      cardId: ctx?.card.id ?? null,
+      bugId: bug?.bug.id ?? null,
+      projectId,
       versionId: input.purpose === "version" ? input.versionId! : null,
       deliverableId,
       checklistItemId,
@@ -233,20 +246,28 @@ export async function createUpload(
   return { attachmentId: id, upload, maxBytes };
 }
 
-async function loadAttachmentForWrite(actor: Actor, attachmentId: string) {
+async function loadAttachment(attachmentId: string) {
   const [attachment] = await db.select().from(attachments).where(eq(attachments.id, attachmentId));
   if (!attachment) throw notFound("Attachment");
+  return attachment;
+}
+
+/** A card's attachment with the caller's card access. Files on bug reports are managed through the bug (services/bugs). */
+async function loadAttachmentForWrite(actor: Actor, attachmentId: string) {
+  const attachment = await loadAttachment(attachmentId);
+  if (!attachment.cardId) throw notFound("Attachment");
   const ctx = await requireCard(actor.userId, attachment.cardId);
   return { attachment, ctx };
 }
 
-/** Re-derives covers for the deliverable an attachment belongs to, then the card. */
+/** Re-derives covers for the deliverable an attachment belongs to, then the card (bug files have no covers). */
 async function recomputeCovers(tx: Executor, attachment: Pick<AttachmentRow, "cardId" | "deliverableId">) {
+  if (!attachment.cardId) return;
   if (attachment.deliverableId) await recomputeDeliverableCover(tx, attachment.deliverableId);
   await recomputeCardRollup(tx, attachment.cardId);
 }
 
-function finishBackground(attachmentId: string, projectId: string, cardId: string, patch: Partial<AttachmentRow>) {
+function finishBackground(attachmentId: string, projectId: string, cardId: string | null, patch: Partial<AttachmentRow>) {
   return db.transaction(async (tx) => {
     const [row] = await tx
       .update(attachments)
@@ -254,11 +275,14 @@ function finishBackground(attachmentId: string, projectId: string, cardId: strin
       .where(eq(attachments.id, attachmentId))
       .returning();
     if (row) await recomputeCovers(tx, row);
-    new Effects().card(projectId, cardId).flush();
+    const fx = new Effects();
+    if (cardId) fx.card(projectId, cardId);
+    else fx.bug(projectId, row?.bugId);
+    fx.flush();
   });
 }
 
-function scheduleVideoWork(attachment: AttachmentRow, projectId: string, cardId: string, work: { preview: boolean; transcode: boolean }) {
+function scheduleVideoWork(attachment: AttachmentRow, projectId: string, cardId: string | null, work: { preview: boolean; transcode: boolean }) {
   if (!work.preview && !work.transcode) return;
   mediaQueue.enqueue(`video:${attachment.id}`, async () => {
     const patch: Partial<AttachmentRow> = {};
@@ -272,7 +296,7 @@ function scheduleVideoWork(attachment: AttachmentRow, projectId: string, cardId:
   });
 }
 
-function scheduleAudioWork(attachment: AttachmentRow, projectId: string, cardId: string) {
+function scheduleAudioWork(attachment: AttachmentRow, projectId: string, cardId: string | null) {
   mediaQueue.enqueue(`audio:${attachment.id}`, async () => {
     const result = await buildAudioDerivatives(attachment.storageKey, attachment.mimeType);
     if (result.error) console.error("[forge] audio processing failed", result.error);
@@ -286,21 +310,15 @@ function scheduleAudioWork(attachment: AttachmentRow, projectId: string, cardId:
   });
 }
 
-export function scheduleRobloxWork(attachment: Pick<AttachmentRow, "id" | "storageKey" | "meta">, projectId: string, cardId: string) {
+export function scheduleRobloxWork(attachment: Pick<AttachmentRow, "id" | "storageKey" | "meta">, projectId: string, cardId: string | null) {
   mediaQueue.enqueue(`roblox:${attachment.id}`, async () => {
     const derived = await buildRobloxManifest(attachment.storageKey);
     await finishBackground(attachment.id, projectId, cardId, { meta: { format: attachment.meta?.format, ...derived } });
   });
 }
 
-export async function completeUpload(
-  actor: Actor,
-  input: { attachmentId: string; clientMeta?: ClientMediaMeta },
-): Promise<AttachmentDTO> {
-  const { attachment, ctx } = await loadAttachmentForWrite(actor, input.attachmentId);
-  if (attachment.uploadedById !== actor.userId) throw forbidden("Only the uploader can finish this upload.");
-  if (attachment.status !== "PENDING") return attachmentToDTO(attachment);
-
+/** The stored object is there and within limits, and what it turned out to be (dimensions, thumbnail…). */
+async function inspectStoredUpload(attachment: AttachmentRow, clientMeta: ClientMediaMeta | undefined) {
   const store = storage();
   const stat = await store.stat(attachment.storageKey);
   if (!stat) throw invalid("The upload didn't reach storage. Please retry.");
@@ -313,13 +331,74 @@ export async function completeUpload(
 
   let analysis;
   try {
-    analysis = await analyzeUpload(attachment, input.clientMeta);
+    analysis = await analyzeUpload(attachment, clientMeta);
   } catch (error) {
     const message = error instanceof AppError ? error.message : "We couldn't process this file.";
     await db.update(attachments).set({ status: "FAILED", error: message }).where(eq(attachments.id, attachment.id));
     if (!(error instanceof AppError)) console.error("[forge] media analysis failed", error);
     throw error instanceof AppError ? error : invalid(message);
   }
+  return { stat, analysis };
+}
+
+/** A finished upload on a bug report: becomes one of its pictures or clips (no revisions, no covers). */
+async function completeBugUpload(actor: Actor, attachment: AttachmentRow, clientMeta: ClientMediaMeta | undefined): Promise<AttachmentDTO> {
+  const { bug, access } = await requireBug(actor.userId, attachment.bugId!);
+  if (attachment.uploadedById !== actor.userId) throw forbidden("Only the uploader can finish this upload.");
+  if (attachment.status !== "PENDING") return attachmentToDTO(attachment);
+  const { stat, analysis } = await inspectStoredUpload(attachment, clientMeta);
+  if (!(BUG_KINDS as readonly string[]).includes(analysis.kind)) {
+    await db.update(attachments).set({ status: "FAILED", error: "Bug reports take images and videos." }).where(eq(attachments.id, attachment.id));
+    throw invalid("Bug reports take images and videos.");
+  }
+  const background = { preview: analysis.wantsPreview, transcode: analysis.needsTranscode };
+  const fx = new Effects();
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(attachments)
+      .set({
+        kind: analysis.kind,
+        mimeType: analysis.mimeType,
+        sizeBytes: stat.size,
+        width: analysis.width,
+        height: analysis.height,
+        durationMs: analysis.durationMs,
+        fps: analysis.fps,
+        thumbnailKey: analysis.thumbnailKey,
+        meta: analysis.meta,
+        status: background.transcode ? "PROCESSING" : "READY",
+        processedAt: now(),
+        error: null,
+      })
+      .where(eq(attachments.id, attachment.id))
+      .returning();
+    await logActivity(tx, {
+      studioId: access.studioId,
+      projectId: bug.projectId,
+      bugId: bug.id,
+      actorId: actor.userId,
+      type: "bug.attachment_added",
+      data: { filename: attachment.filename, kind: analysis.kind },
+    });
+    await tx.update(bugs).set({ lastActivityAt: now() }).where(eq(bugs.id, bug.id));
+    fx.bug(bug.projectId, bug.id);
+    return row!;
+  });
+  fx.flush(actor.clientId);
+  if (updated.kind === "VIDEO") scheduleVideoWork(updated, bug.projectId, null, background);
+  return attachmentToDTO(updated);
+}
+
+export async function completeUpload(
+  actor: Actor,
+  input: { attachmentId: string; clientMeta?: ClientMediaMeta },
+): Promise<AttachmentDTO> {
+  const pending = await loadAttachment(input.attachmentId);
+  if (pending.bugId && !pending.cardId) return completeBugUpload(actor, pending, input.clientMeta);
+  const { attachment, ctx } = await loadAttachmentForWrite(actor, input.attachmentId);
+  if (attachment.uploadedById !== actor.userId) throw forbidden("Only the uploader can finish this upload.");
+  if (attachment.status !== "PENDING") return attachmentToDTO(attachment);
+  const { stat, analysis } = await inspectStoredUpload(attachment, input.clientMeta);
 
   const background = { preview: analysis.wantsPreview, transcode: analysis.needsTranscode };
   const processing = background.transcode || analysis.derive !== null;
@@ -670,9 +749,8 @@ const PLAYABLE_VIDEO = new Set(["video/mp4", "video/webm", "video/x-m4v"]);
  */
 export async function recoverMediaJobs(at: Date = now()) {
   const pending = await db
-    .select({ a: attachments, projectId: cards.projectId })
+    .select({ a: attachments, projectId: attachments.projectId })
     .from(attachments)
-    .innerJoin(cards, eq(cards.id, attachments.cardId))
     .where(and(eq(attachments.status, "PROCESSING"), isNull(attachments.archivedAt)));
   for (const { a, projectId } of pending) {
     if (a.kind === "ROBLOX") scheduleRobloxWork(a, projectId, a.cardId);
@@ -682,9 +760,8 @@ export async function recoverMediaJobs(at: Date = now()) {
   }
 
   const stale = await db
-    .select({ a: attachments, projectId: cards.projectId })
+    .select({ a: attachments, projectId: attachments.projectId })
     .from(attachments)
-    .innerJoin(cards, eq(cards.id, attachments.cardId))
     .where(
       and(
         eq(attachments.kind, "ROBLOX"),

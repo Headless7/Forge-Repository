@@ -1,5 +1,6 @@
 import { bigint, index, integer, jsonb, pgTable, real, text, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { users } from "./auth";
+import { bugs } from "./bugs";
 import { cards, checklistItems } from "./cards";
 import { createdAt, pk, tsz, updatedAt } from "./columns";
 import { deliverables } from "./deliverables";
@@ -37,21 +38,22 @@ export const assetVersions = pgTable(
 );
 
 export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO", "AUDIO", "ROBLOX", "FILE"] as const;
-/** COVER: uploaded only to be the card's board cover (no revision, no review). CHECKLIST: a checklist item's reference image. */
-export const ATTACHMENT_PURPOSES = ["VERSION", "CARD", "COMMENT", "RESOURCE", "COVER", "CHECKLIST"] as const;
+/** COVER: uploaded only to be the card's board cover (no revision, no review). CHECKLIST: a checklist item's reference image. BUG: a screenshot or clip on a bug report. */
+export const ATTACHMENT_PURPOSES = ["VERSION", "CARD", "COMMENT", "RESOURCE", "COVER", "CHECKLIST", "BUG"] as const;
 export const ATTACHMENT_STATUSES = ["PENDING", "PROCESSING", "READY", "FAILED"] as const;
 
 /**
  * Metadata for a stored object. Binaries live in object storage (never in the database).
- * An attachment belongs to a card and optionally to a version (media under review) or a comment.
+ * An attachment belongs to a card (and optionally to a version — media under review — or a comment),
+ * or to a bug report (BUG purpose): exactly one of cardId / bugId is set.
  */
 export const attachments = pgTable(
   "attachments",
   {
     id: pk(),
-    cardId: uuid()
-      .notNull()
-      .references((): AnyPgColumn => cards.id, { onDelete: "cascade" }),
+    cardId: uuid().references((): AnyPgColumn => cards.id, { onDelete: "cascade" }),
+    /** BUG: the bug report this screenshot or clip belongs to. */
+    bugId: uuid().references((): AnyPgColumn => bugs.id, { onDelete: "cascade" }),
     projectId: uuid()
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
@@ -95,6 +97,7 @@ export const attachments = pgTable(
     index("attachments_deliverable_idx").on(t.deliverableId),
     index("attachments_comment_idx").on(t.commentId),
     index("attachments_checklist_item_idx").on(t.checklistItemId),
+    index("attachments_bug_idx").on(t.bugId),
   ],
 );
 

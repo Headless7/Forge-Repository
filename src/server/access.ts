@@ -7,23 +7,26 @@ import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { deliverablePermissions } from "@/lib/deliverables";
 import type { DeliverablePermissions } from "@/lib/types";
 import {
+  bugPermissions,
   cardPermissions,
   memberCanOpenProject,
   normalizeRole,
   PRIVATE_ACCESS_ROLES,
   roleHas,
+  type BugPermissions,
   type CardPermissions,
   type MemberAccess,
   type Permission,
   type Role,
 } from "@/lib/permissions";
 import { db, type Executor } from "./db";
-import { boards, cardAssignees, cards, deliverableContributors, deliverables, projectMembers, projects, studioMembers, studios } from "./db/schema";
+import { boards, bugs, cardAssignees, cards, deliverableContributors, deliverables, projectMembers, projects, studioMembers, studios } from "./db/schema";
 import { forbidden, notFound } from "./errors";
 
 export type ProjectRow = typeof projects.$inferSelect;
 export type CardRow = typeof cards.$inferSelect;
 export type DeliverableRow = typeof deliverables.$inferSelect;
+export type BugRow = typeof bugs.$inferSelect;
 
 export interface StudioAccess {
   userId: string;
@@ -312,4 +315,35 @@ export async function requireDeliverable(userId: string, deliverableId: string, 
 
 export function assertDeliverable(perms: DeliverablePermissions, key: keyof DeliverablePermissions, message?: string) {
   if (!perms[key]) throw forbidden(message ?? "You don't have permission to change this deliverable.");
+}
+
+// ── Bugs ────────────────────────────────────────────────────────────────────
+
+export interface BugAccess {
+  access: ProjectAccess;
+  bug: BugRow;
+  perms: BugPermissions;
+}
+
+export function computeBugPermissions(access: ProjectAccess, bug: Pick<BugRow, "reportedById" | "assigneeId" | "reviewerId">): BugPermissions {
+  return bugPermissions({
+    role: access.role,
+    userId: access.userId,
+    bug,
+    allowSelfApproval: access.project.settings.allowSelfApproval,
+    readOnly: Boolean(access.project.archivedAt),
+  });
+}
+
+/** Resolves a bug through the caller's project access (NOT_FOUND outside it). */
+export async function requireBug(userId: string, bugId: string, ex: Executor = db): Promise<BugAccess> {
+  const [bug] = await ex.select().from(bugs).where(eq(bugs.id, bugId)).limit(1);
+  if (!bug) throw notFound("Bug");
+  const access = await getProjectAccess(userId, bug.projectId, ex);
+  if (!access) throw notFound("Bug");
+  return { access, bug, perms: computeBugPermissions(access, bug) };
+}
+
+export function assertBug(perms: BugPermissions, key: keyof BugPermissions, message?: string) {
+  if (!perms[key]) throw forbidden(message ?? "You don't have permission to change this bug.");
 }

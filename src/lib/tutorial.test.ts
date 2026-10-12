@@ -24,6 +24,7 @@ const full: { [K in TipId]: TipFacts[K] } = {
   "roblox.preview": {},
   "access.scope": { place: "studio", canManage: true },
   "account.discord-profile": { connected: true },
+  "bugs.workflow": { canFix: true, canVerify: true },
 };
 
 const sentences = (text: string) => text.split(/(?<=[.!?])\s+(?=[A-Z])/).filter(Boolean).length;

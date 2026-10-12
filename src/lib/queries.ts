@@ -3,7 +3,7 @@
 import { useMutation, useQueryClient, type UseMutationOptions } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { errorMessage, rpc, RpcError, type RpcInput, type RpcName, type RpcOutput } from "./rpc-client";
-import type { CardDetailDTO } from "./types";
+import type { BugDetailDTO, CardDetailDTO } from "./types";
 
 export const qk = {
   /** Every board of a project (a prefix: invalidating it refreshes whichever board is open). */
@@ -26,6 +26,10 @@ export const qk = {
   sessions: () => ["sessions"] as const,
   notificationPrefs: () => ["notification-prefs"] as const,
   search: (studioId: string, projectId: string | null, q: string) => ["search", studioId, projectId, q] as const,
+  /** A project's bug tracker (list, tags, updates). */
+  bugs: (projectId: string) => ["bugs", projectId] as const,
+  bug: (bugId: string) => ["bug", bugId] as const,
+  bugActivity: (bugId: string) => ["bug-activity", bugId] as const,
 };
 
 export function isNetworkError(error: unknown) {
@@ -69,6 +73,25 @@ export function useCardMutation<K extends RpcName>(name: K, cardId: string, proj
       }
       void queryClient.invalidateQueries({ queryKey: qk.board(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.cardActivity(cardId) });
+      options.onSuccess?.(data, variables, context, mutationContext);
+    },
+  });
+}
+
+/** Mutations that return a full bug: write it straight into the cache and refresh the list. */
+export function useBugMutation<K extends RpcName>(name: K, bugId: string, projectId: string, options: Options<K, unknown> = {}) {
+  const queryClient = useQueryClient();
+  return useRpcMutation(name, {
+    ...options,
+    onSuccess: (data, variables, context, mutationContext) => {
+      const maybeBug = data as unknown as BugDetailDTO | undefined;
+      if (maybeBug && typeof maybeBug === "object" && "permissions" in maybeBug && maybeBug.id === bugId) {
+        queryClient.setQueryData(qk.bug(bugId), maybeBug);
+      } else {
+        void queryClient.invalidateQueries({ queryKey: qk.bug(bugId) });
+      }
+      void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.bugActivity(bugId) });
       options.onSuccess?.(data, variables, context, mutationContext);
     },
   });

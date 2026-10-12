@@ -62,6 +62,7 @@ export async function attachmentToDTO(row: AttachmentRow): Promise<AttachmentDTO
   return {
     id: row.id,
     cardId: row.cardId,
+    bugId: row.bugId,
     versionId: row.versionId,
     deliverableId: row.deliverableId,
     commentId: row.commentId,

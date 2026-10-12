@@ -32,6 +32,8 @@ interface ProjectEvent {
   projectId: string;
   cardIds: string[];
   board: boolean;
+  bugIds?: string[];
+  bugs?: boolean;
   clientId?: string | null;
 }
 
@@ -44,9 +46,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [projectId, setProjectId] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
-  const pending = useRef<{ boards: Set<string>; cards: Set<string>; notifications: boolean; timer: ReturnType<typeof setTimeout> | null }>({
+  const pending = useRef<{ boards: Set<string>; cards: Set<string>; bugLists: Set<string>; bugs: Set<string>; notifications: boolean; timer: ReturnType<typeof setTimeout> | null }>({
     boards: new Set(),
     cards: new Set(),
+    bugLists: new Set(),
+    bugs: new Set(),
     notifications: false,
     timer: null,
   });
@@ -68,9 +72,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         void queryClient.invalidateQueries({ queryKey: qk.card(id) });
         void queryClient.invalidateQueries({ queryKey: qk.cardActivity(id) });
       }
+      for (const id of p.bugLists) void queryClient.invalidateQueries({ queryKey: qk.bugs(id) });
+      for (const id of p.bugs) {
+        void queryClient.invalidateQueries({ queryKey: qk.bug(id) });
+        void queryClient.invalidateQueries({ queryKey: qk.bugActivity(id) });
+      }
       if (p.notifications) void queryClient.invalidateQueries({ queryKey: qk.notifications() });
       p.boards.clear();
       p.cards.clear();
+      p.bugLists.clear();
+      p.bugs.clear();
       p.notifications = false;
     };
     const schedule = () => {
@@ -86,7 +97,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         setStatus("live");
         // Catch up on changes made before the stream was open: between the server rendering the
         // page and this connection (first load), or while disconnected (reconnects).
-        if (projectId) void queryClient.invalidateQueries({ queryKey: qk.board(projectId) });
+        if (projectId) {
+          void queryClient.invalidateQueries({ queryKey: qk.board(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
+        }
         void queryClient.invalidateQueries({ queryKey: ["projects"] });
         if (hadConnection) {
           void queryClient.invalidateQueries({ queryKey: ["card"] });
@@ -99,8 +113,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         const own = event.clientId === getClientId();
         if (event.board && !own) pending.current.boards.add(event.projectId);
         for (const id of event.cardIds) if (!own) pending.current.cards.add(id);
+        if (event.bugs && !own) pending.current.bugLists.add(event.projectId);
+        for (const id of event.bugIds ?? []) if (!own) pending.current.bugs.add(id);
         // Our own writes still change other people's views of shared data (e.g. activity); refresh lightly.
-        if (own) for (const id of event.cardIds) void queryClient.invalidateQueries({ queryKey: qk.cardActivity(id) });
+        if (own) {
+          for (const id of event.cardIds) void queryClient.invalidateQueries({ queryKey: qk.cardActivity(id) });
+          for (const id of event.bugIds ?? []) void queryClient.invalidateQueries({ queryKey: qk.bugActivity(id) });
+        }
         schedule();
       });
       source.addEventListener("notification", () => {

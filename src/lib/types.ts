@@ -3,13 +3,16 @@
  * Dates are ISO strings so every DTO is JSON-serialisable.
  */
 import type { NotificationType } from "./notifications";
-import type { CardPermissions, MemberAccess, Permission, Role } from "./permissions";
+import type { BugPermissions, CardPermissions, MemberAccess, Permission, Role } from "./permissions";
 
 export type CardState = "NOT_SUBMITTED" | "IN_PROGRESS" | "NEEDS_REVIEW" | "CHANGES_REQUESTED" | "APPROVED";
 export type Priority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
 export type CardDisplayMode = "VISUAL" | "COMPACT";
 export type AttachmentKind = "IMAGE" | "VIDEO" | "AUDIO" | "ROBLOX" | "FILE";
-export type AttachmentPurpose = "VERSION" | "CARD" | "COMMENT" | "RESOURCE" | "COVER" | "CHECKLIST";
+export type AttachmentPurpose = "VERSION" | "CARD" | "COMMENT" | "RESOURCE" | "COVER" | "CHECKLIST" | "BUG";
+export type BugStatus = "OPEN" | "IN_PROGRESS" | "FIXED" | "VERIFIED" | "CLOSED";
+export type BugPriority = "LOW" | "MEDIUM" | "HIGH" | "GAME_BREAKING";
+export type BugResolution = "WONT_FIX" | "CANNOT_REPRODUCE" | "DUPLICATE" | "NOT_A_BUG";
 export type ProductionStatus = "TODO" | "COMPLETED" | "PUBLISHED";
 export type BoardView = "CATEGORY" | "PRODUCTION" | "TIMELINE" | "CALENDAR";
 export type DeliverableLinkType = "DEPENDENCY" | "ASSOCIATION";
@@ -27,6 +30,8 @@ export interface ProjectSettings {
   requireFeedbackForChanges: boolean;
   /** Added as reviewers on every new card. */
   defaultReviewerIds: string[];
+  /** Verifies fixes on every new bug report unless the reporter picks someone else (the lead scripter, typically). */
+  defaultBugReviewerId?: string | null;
 }
 
 export interface CardLink {
@@ -416,7 +421,10 @@ export interface BoardDTO {
 
 export interface AttachmentDTO {
   id: string;
-  cardId: string;
+  /** Null for files on a bug report. */
+  cardId: string | null;
+  /** The bug report a BUG file belongs to. */
+  bugId: string | null;
   versionId: string | null;
   deliverableId: string | null;
   commentId: string | null;
@@ -541,6 +549,8 @@ export interface ActivityDTO {
   actor: UserDTO | null;
   cardId: string | null;
   card: { id: string; key: string; title: string } | null;
+  /** The bug report a bug.* event is about. */
+  bug: { id: string; number: number; key: string; title: string } | null;
   project: { id: string; name: string; slug: string; icon: string } | null;
   data: Record<string, unknown>;
   createdAt: string;
@@ -669,6 +679,8 @@ export interface NotificationDTO {
   /** The board the card is on. */
   board: { number: number; name: string } | null;
   card: { id: string; key: string; title: string } | null;
+  /** The bug report it's about (bug notifications). */
+  bug: { id: string; number: number; key: string; title: string } | null;
   /** The deliverable (and revision) it's about, when it's about one. */
   deliverable: { id: string; number: number; name: string } | null;
   versionNumber: number | null;
@@ -712,4 +724,69 @@ export interface SearchResultDTO {
   columnName: string;
   matchedIn: Array<"title" | "description" | "comment" | "label" | "assignee" | "column" | "key">;
   snippet: string | null;
+}
+
+// ── Bugs ────────────────────────────────────────────────────────────────────
+
+export interface BugTagDTO {
+  id: string;
+  name: string;
+  color: string;
+}
+
+/** A bug on the list: everything the rows, filters and counts need; no description or files. */
+export interface BugSummaryDTO {
+  id: string;
+  projectId: string;
+  number: number;
+  /** "UTD-B12". */
+  key: string;
+  title: string;
+  status: BugStatus;
+  priority: BugPriority;
+  resolution: BugResolution | null;
+  /** The update it belongs to (null: none). */
+  milestoneId: string | null;
+  assigneeId: string | null;
+  reviewerId: string | null;
+  reportedById: string | null;
+  tagIds: string[];
+  counts: { attachments: number; comments: number };
+  /** The first picture or clip, for the list. */
+  cover: MediaRefDTO | null;
+  fixedAt: string | null;
+  verifiedAt: string | null;
+  closedAt: string | null;
+  lastActivityAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BugCommentDTO {
+  id: string;
+  authorId: string | null;
+  body: string;
+  editedAt: string | null;
+  deletedAt: string | null;
+  createdAt: string;
+}
+
+export interface BugDetailDTO extends BugSummaryDTO {
+  description: string;
+  fixedById: string | null;
+  verifiedById: string | null;
+  closedById: string | null;
+  attachments: AttachmentDTO[];
+  comments: BugCommentDTO[];
+  permissions: BugPermissions;
+}
+
+/** The project's bug tracker in one call; the list filters client-side. */
+export interface BugListDTO {
+  project: { id: string; name: string; slug: string; key: string; icon: string; archived: boolean };
+  bugs: BugSummaryDTO[];
+  tags: BugTagDTO[];
+  milestones: MilestoneDTO[];
+  viewer: ViewerDTO;
+  settings: { defaultBugReviewerId: string | null };
 }

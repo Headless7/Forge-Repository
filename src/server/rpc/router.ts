@@ -8,6 +8,11 @@ import { BACKGROUND_IDS } from "@/lib/column-icons";
 import type { DashboardListKey } from "@/lib/types";
 import {
   annotationSchema,
+  bugPrioritySchema,
+  bugResolutionSchema,
+  bugStatusSchema,
+  bugTagNameSchema,
+  bugTitleSchema,
   cardLinkSchema,
   cardStateSchema,
   cardTitleSchema,
@@ -34,8 +39,9 @@ import { DISCORD_EVENTS } from "@/lib/discord";
 import { COLUMN_ICONS } from "@/lib/column-icons";
 import * as accounts from "../services/accounts";
 import * as archive from "../services/archive";
-import { listAuditLog, listCardActivity, listProjectActivity } from "../services/activity";
+import { listAuditLog, listBugActivity, listCardActivity, listProjectActivity } from "../services/activity";
 import * as board from "../services/board";
+import * as bugs from "../services/bugs";
 import * as cards from "../services/cards";
 import * as checklists from "../services/checklists";
 import * as comments from "../services/comments";
@@ -61,7 +67,7 @@ import * as platform from "../services/platform";
 import { searchCards } from "../services/search";
 import { getStudioStorage } from "../services/storage-quota";
 import * as studios from "../services/studios";
-import { requireCard, requireProject, requireStudio, getProjectAccess } from "../access";
+import { requireBug, requireCard, requireProject, requireStudio, getProjectAccess } from "../access";
 import { proc } from "./procedure";
 
 const columnIcon = z.enum(COLUMN_ICONS).nullable().optional();
@@ -438,16 +444,20 @@ export const appRouter = {
     handler: ({ actor }, i) => media.updateVersionNotes(actor, i),
   }),
   "upload.create": proc({
-    input: z.object({
-      cardId: idSchema,
-      filename: z.string().min(1).max(255),
-      size: z.number().int().positive(),
-      contentType: z.string().max(200),
-      purpose: z.enum(["version", "attachment", "comment", "resource", "cover", "checklist"]),
-      versionId: idSchema.nullable().optional(),
-      deliverableId: idSchema.nullable().optional(),
-      checklistItemId: idSchema.nullable().optional(),
-    }),
+    input: z
+      .object({
+        /** The card the file belongs to — or, for a "bug" upload, the bug (bugId). */
+        cardId: idSchema.optional(),
+        bugId: idSchema.optional(),
+        filename: z.string().min(1).max(255),
+        size: z.number().int().positive(),
+        contentType: z.string().max(200),
+        purpose: z.enum(["version", "attachment", "comment", "resource", "cover", "checklist", "bug"]),
+        versionId: idSchema.nullable().optional(),
+        deliverableId: idSchema.nullable().optional(),
+        checklistItemId: idSchema.nullable().optional(),
+      })
+      .refine((i) => (i.purpose === "bug" ? Boolean(i.bugId) : Boolean(i.cardId)), { message: "Choose where the file goes." }),
     handler: ({ actor }, i) => media.createUpload(actor, i),
   }),
   "upload.complete": proc({
@@ -670,6 +680,7 @@ export const appRouter = {
           allowSelfApproval: z.boolean().optional(),
           requireFeedbackForChanges: z.boolean().optional(),
           defaultReviewerIds: z.array(idSchema).max(20).optional(),
+          defaultBugReviewerId: idSchema.nullable().optional(),
         })
         .optional(),
     }),
@@ -1038,6 +1049,87 @@ export const appRouter = {
   "account.removeAvatar": proc({
     input: z.object({}),
     handler: ({ actor }) => accounts.setAvatar(actor, null),
+  }),
+
+  // ── Bugs ────────────────────────────────────────────────────────────────────
+  "bug.list": proc({
+    input: z.object({ projectId: idSchema }),
+    handler: ({ actor }, i) => bugs.listBugs(actor, i.projectId),
+  }),
+  "bug.get": proc({
+    input: z.union([z.object({ bugId: idSchema }), z.object({ projectId: idSchema, number: z.number().int().positive() })]),
+    handler: async ({ actor }, i) => bugs.getBug(actor, "bugId" in i ? i.bugId : await bugs.findBugIdByNumber(actor, i.projectId, i.number)),
+  }),
+  "bug.activity": proc({
+    input: z.object({ bugId: idSchema }),
+    handler: async ({ actor }, i) => {
+      await requireBug(actor.userId, i.bugId);
+      return listBugActivity(i.bugId);
+    },
+  }),
+  "bug.create": proc({
+    input: z.object({
+      projectId: idSchema,
+      title: bugTitleSchema,
+      description: text(50_000).optional(),
+      priority: bugPrioritySchema.optional(),
+      milestoneId: idSchema.nullable().optional(),
+      assigneeId: idSchema.nullable().optional(),
+      reviewerId: idSchema.nullable().optional(),
+      tagIds: z.array(idSchema).max(30).optional(),
+    }),
+    limit: { max: 60, windowMs: 60_000 },
+    handler: ({ actor }, i) => bugs.createBug(actor, i),
+  }),
+  "bug.update": proc({
+    input: z.object({
+      bugId: idSchema,
+      title: bugTitleSchema.optional(),
+      description: text(50_000).optional(),
+      priority: bugPrioritySchema.optional(),
+      milestoneId: idSchema.nullable().optional(),
+      assigneeId: idSchema.nullable().optional(),
+      reviewerId: idSchema.nullable().optional(),
+      tagIds: z.array(idSchema).max(30).optional(),
+    }),
+    handler: ({ actor }, i) => bugs.updateBug(actor, i),
+  }),
+  "bug.setStatus": proc({
+    input: z.object({ bugId: idSchema, status: bugStatusSchema, resolution: bugResolutionSchema.nullable().optional() }),
+    handler: ({ actor }, i) => bugs.setBugStatus(actor, i),
+  }),
+  "bug.delete": proc({
+    input: z.object({ bugId: idSchema }),
+    handler: ({ actor }, i) => bugs.deleteBug(actor, i),
+  }),
+  "bug.comment": proc({
+    input: z.object({ bugId: idSchema, body: text(10_000) }),
+    limit: { max: 60, windowMs: 60_000 },
+    handler: ({ actor }, i) => bugs.addBugComment(actor, i),
+  }),
+  "bug.editComment": proc({
+    input: z.object({ commentId: idSchema, body: text(10_000) }),
+    handler: ({ actor }, i) => bugs.editBugComment(actor, i),
+  }),
+  "bug.deleteComment": proc({
+    input: z.object({ commentId: idSchema }),
+    handler: ({ actor }, i) => bugs.deleteBugComment(actor, i),
+  }),
+  "bug.removeAttachment": proc({
+    input: z.object({ attachmentId: idSchema }),
+    handler: ({ actor }, i) => bugs.removeBugAttachment(actor, i),
+  }),
+  "bugTag.create": proc({
+    input: z.object({ projectId: idSchema, name: bugTagNameSchema, color: colorSchema }),
+    handler: ({ actor }, i) => bugs.createBugTag(actor, i),
+  }),
+  "bugTag.update": proc({
+    input: z.object({ tagId: idSchema, name: bugTagNameSchema.optional(), color: colorSchema.optional() }),
+    handler: ({ actor }, i) => bugs.updateBugTag(actor, i),
+  }),
+  "bugTag.delete": proc({
+    input: z.object({ tagId: idSchema }),
+    handler: ({ actor }, i) => bugs.deleteBugTag(actor, i),
   }),
 };
 
