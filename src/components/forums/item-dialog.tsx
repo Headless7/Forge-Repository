@@ -5,10 +5,10 @@ import { CircleCheck, Copy, Eye, History, Link2, Pencil, Play, RotateCcw, Trash2
 import { Dialog as D, VisuallyHidden } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { BUG_PRIORITY_META, BUG_PRIORITY_ORDER, BUG_RESOLUTION_META, BUG_RESOLUTION_ORDER, BUG_STATUS_META } from "@/lib/bug-meta";
-import { qk, useBugMutation, useRpcMutation } from "@/lib/queries";
+import { FORUM_KIND_META, ITEM_PRIORITY_ORDER, ITEM_RESOLUTION_META, ITEM_RESOLUTION_ORDER, priorityLabel, statusLabel } from "@/lib/forum-meta";
+import { qk, useItemMutation, useRpcMutation } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
-import type { BugDetailDTO, BugListDTO, BugPriority, BugResolution, MemberDTO } from "@/lib/types";
+import type { ForumDTO, ForumItemDetailDTO, ForumViewDTO, ItemPriority, ItemResolution, MemberDTO } from "@/lib/types";
 import { cn, formatDateTime, timeAgo } from "@/lib/utils";
 import { RichText } from "../comments/rich-text";
 import { describeActivity } from "../domain/activity-text";
@@ -21,9 +21,9 @@ import { ConfirmDialog, keepOpenForToasts } from "../ui/dialog";
 import { Textarea } from "../ui/input";
 import { Popover, PopoverContent, PopoverTrigger, Tooltip } from "../ui/menu";
 import { useUploads } from "../upload/upload-manager";
-import { BugPriorityIcon, BugStatusPill } from "./bug-badges";
-import { BugComments } from "./bug-comments";
-import { BugMedia, bugMediaFiles, bugUploadTarget, pastedBugMedia } from "./bug-media";
+import { ItemPriorityIcon, ItemStatusPill } from "./item-badges";
+import { ItemComments } from "./item-comments";
+import { ItemMedia, itemMediaFiles, itemUploadTarget, pastedItemMedia } from "./item-media";
 import { PersonPicker, TagPicker } from "./pickers";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -35,17 +35,17 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-/** One bug, full screen on phones and a large panel on desktop: media, discussion, fields and the fix workflow. */
-export function BugDialog({
-  bugId,
-  list,
+/** One item, full screen on phones and a large panel on desktop: media, discussion, fields and the workflow. */
+export function ItemDialog({
+  itemId,
+  view,
   members,
   studioSlug,
   projectSlug,
   onClose,
 }: {
-  bugId: string;
-  list: BugListDTO;
+  itemId: string;
+  view: ForumViewDTO;
   members: MemberDTO[];
   studioSlug: string;
   projectSlug: string;
@@ -53,34 +53,37 @@ export function BugDialog({
 }) {
   const queryClient = useQueryClient();
   const uploads = useUploads();
-  const { data: bug, isError } = useQuery({ queryKey: qk.bug(bugId), queryFn: () => rpc("bug.get", { bugId }), staleTime: 5_000 });
-  const projectId = list.project.id;
-  const update = useBugMutation("bug.update", bugId, projectId);
-  const setStatus = useBugMutation("bug.setStatus", bugId, projectId);
-  const remove = useRpcMutation("bug.delete", {
+  const { forum } = view;
+  const noun = forum.itemLabel;
+  const wording = FORUM_KIND_META[forum.kind];
+  const { data: item, isError } = useQuery({ queryKey: qk.item(itemId), queryFn: () => rpc("item.get", { itemId }), staleTime: 5_000 });
+  const projectId = view.project.id;
+  const update = useItemMutation("item.update", itemId, projectId);
+  const setStatus = useItemMutation("item.setStatus", itemId, projectId);
+  const remove = useRpcMutation("item.delete", {
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
-      toast.success("Bug deleted.");
+      void queryClient.invalidateQueries({ queryKey: qk.forums(projectId) });
+      toast.success(`${capitalize(noun)} deleted.`);
       onClose();
     },
   });
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [history, setHistory] = useState(false);
-  const viewerId = list.viewer.userId;
-  const perms = bug?.permissions;
+  const viewerId = view.viewer.userId;
+  const perms = item?.permissions;
   const canAssignOthers = Boolean(perms?.canAssign);
-  const milestone = bug?.milestoneId ? list.milestones.find((m) => m.id === bug.milestoneId) : null;
+  const milestone = item?.milestoneId ? view.milestones.find((m) => m.id === item.milestoneId) : null;
   const membersById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
 
-  useTipOnOpen("bugs.workflow", Boolean(bug));
+  useTipOnOpen("forums.workflow", Boolean(item));
 
   const copyLink = () => {
-    if (!bug) return;
-    const url = `${window.location.origin}/${studioSlug}/${projectSlug}/bugs?bug=${bug.number}`;
+    if (!item) return;
+    const url = `${window.location.origin}/${studioSlug}/${projectSlug}/f/${forum.slug}?item=${item.number}`;
     void navigator.clipboard.writeText(url).then(() => toast.success("Link copied"));
   };
 
-  const onPaste = bug && perms?.canUpload ? pastedBugMedia((files) => void uploads.uploadFiles(bugUploadTarget(bug), files, "bug")) : undefined;
+  const onPaste = item && perms?.canUpload ? pastedItemMedia((files) => void uploads.uploadFiles(itemUploadTarget(item), files, "item")) : undefined;
 
   return (
     <D.Root open onOpenChange={(open) => !open && onClose()}>
@@ -92,10 +95,10 @@ export function BugDialog({
             if (perms?.canUpload && e.dataTransfer.types.includes("Files")) e.preventDefault();
           }}
           onDrop={(e) => {
-            if (!bug || !perms?.canUpload || !e.dataTransfer.files.length || e.defaultPrevented) return;
+            if (!item || !perms?.canUpload || !e.dataTransfer.files.length || e.defaultPrevented) return;
             e.preventDefault();
-            const files = bugMediaFiles(e.dataTransfer.files);
-            if (files.length) void uploads.uploadFiles(bugUploadTarget(bug), files, "bug");
+            const files = itemMediaFiles(e.dataTransfer.files);
+            if (files.length) void uploads.uploadFiles(itemUploadTarget(item), files, "item");
           }}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onInteractOutside={keepOpenForToasts}
@@ -103,19 +106,22 @@ export function BugDialog({
           className="fixed inset-0 z-40 flex flex-col overflow-hidden bg-bg shadow-lg outline-none data-[state=open]:animate-pop-in md:inset-4 md:rounded-xl md:border md:border-border-strong lg:inset-x-[max(24px,calc((100vw-1280px)/2))] lg:inset-y-6"
         >
           <VisuallyHidden.Root>
-            <D.Title>{bug?.title ?? "Bug"}</D.Title>
+            <D.Title>{item?.title ?? capitalize(noun)}</D.Title>
           </VisuallyHidden.Root>
 
           <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:px-5">
-            <Tooltip content="Copy link to this bug">
+            <Tooltip content={`Copy link to this ${noun}`}>
               <button type="button" onClick={copyLink} className="inline-flex h-6 items-center gap-1 rounded-md bg-surface-3 px-2 font-mono text-[11.5px] text-fg-muted hover:text-fg">
-                {bug?.key ?? "…"} <Copy className="size-3" />
+                {item?.key ?? "…"} <Copy className="size-3" />
               </button>
             </Tooltip>
-            {milestone ? <span className="hidden text-[12.5px] text-fg-muted sm:inline">{milestone.name}</span> : null}
+            <span className="hidden text-[12.5px] text-fg-muted sm:inline">
+              {forum.icon} {forum.name}
+              {milestone ? <span className="text-fg-subtle"> · {milestone.name}</span> : null}
+            </span>
             <span className="flex-1" />
-            {bug ? <BugStatusPill status={bug.status} resolution={bug.resolution} size="md" short className="sm:hidden" /> : null}
-            {bug ? <BugStatusPill status={bug.status} resolution={bug.resolution} size="md" className="hidden sm:inline-flex" /> : null}
+            {item ? <ItemStatusPill kind={forum.kind} status={item.status} resolution={item.resolution} size="md" short className="sm:hidden" /> : null}
+            {item ? <ItemStatusPill kind={forum.kind} status={item.status} resolution={item.resolution} size="md" className="hidden sm:inline-flex" /> : null}
             <Tooltip content="Copy link">
               <Button size="icon-sm" variant="ghost" aria-label="Copy link" onClick={copyLink} className="hidden sm:inline-flex">
                 <Link2 />
@@ -123,7 +129,7 @@ export function BugDialog({
             </Tooltip>
             <Tooltip content="Close" shortcut="Esc">
               <D.Close asChild>
-                <Button size="icon-sm" variant="ghost" aria-label="Close bug">
+                <Button size="icon-sm" variant="ghost" aria-label="Close">
                   <X />
                 </Button>
               </D.Close>
@@ -132,12 +138,12 @@ export function BugDialog({
 
           {isError ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-              <p className="text-[15px] font-semibold">This bug doesn&apos;t exist or you no longer have access to it.</p>
+              <p className="text-[15px] font-semibold">This {noun} doesn&apos;t exist or you no longer have access to it.</p>
               <Button variant="secondary" className="mt-3" onClick={onClose}>
                 Back to the list
               </Button>
             </div>
-          ) : !bug || !perms ? (
+          ) : !item || !perms ? (
             <div className="grid gap-4 p-4 md:p-6">
               <Skeleton className="h-7 w-2/3" />
               <Skeleton className="h-24" />
@@ -148,89 +154,89 @@ export function BugDialog({
               <div className="grid gap-6 p-4 md:p-6 lg:grid-cols-[minmax(0,1fr)_300px]">
                 <div className="grid min-w-0 content-start gap-5 [&>*]:min-w-0">
                   <div>
-                    <TitleEditor bug={bug} canEdit={perms.canEdit} onSave={(title) => update.mutate({ bugId, title })} />
+                    <TitleEditor item={item} canEdit={perms.canEdit} onSave={(title) => update.mutate({ itemId, title })} />
                     <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-fg-muted">
-                      <BugPriorityIcon priority={bug.priority} withLabel />
+                      <ItemPriorityIcon kind={forum.kind} priority={item.priority} withLabel />
                       <span>
-                        · reported by <Person id={bug.reportedById} membersById={membersById} /> <time title={formatDateTime(bug.createdAt)}>{timeAgo(bug.createdAt)}</time>
+                        · reported by <Person id={item.reportedById} membersById={membersById} /> <time title={formatDateTime(item.createdAt)}>{timeAgo(item.createdAt)}</time>
                       </span>
-                      {bug.fixedAt ? (
+                      {item.fixedAt ? (
                         <span>
-                          · fixed by <Person id={bug.fixedById} membersById={membersById} /> <time title={formatDateTime(bug.fixedAt)}>{timeAgo(bug.fixedAt)}</time>
+                          · {forum.kind === "BUGS" ? "fixed" : "done"} by <Person id={item.fixedById} membersById={membersById} /> <time title={formatDateTime(item.fixedAt)}>{timeAgo(item.fixedAt)}</time>
                         </span>
                       ) : null}
-                      {bug.verifiedAt ? (
+                      {item.verifiedAt ? (
                         <span>
-                          · verified by <Person id={bug.verifiedById} membersById={membersById} /> <time title={formatDateTime(bug.verifiedAt)}>{timeAgo(bug.verifiedAt)}</time>
+                          · verified by <Person id={item.verifiedById} membersById={membersById} /> <time title={formatDateTime(item.verifiedAt)}>{timeAgo(item.verifiedAt)}</time>
                         </span>
                       ) : null}
                     </p>
                   </div>
-                  <DescriptionEditor bug={bug} canEdit={perms.canEdit} members={members} onSave={(description) => update.mutate({ bugId, description })} saving={update.isPending} />
-                  <BugMedia bug={bug} canUpload={perms.canUpload} />
-                  <BugComments bug={bug} members={members} viewerId={viewerId} viewerRole={list.viewer.role} />
+                  <DescriptionEditor item={item} canEdit={perms.canEdit} members={members} onSave={(description) => update.mutate({ itemId, description })} saving={update.isPending} />
+                  <ItemMedia item={item} noun={noun} canUpload={perms.canUpload} />
+                  <ItemComments item={item} members={members} viewerId={viewerId} viewerRole={view.viewer.role} />
                   <section aria-label="History">
                     <button type="button" onClick={() => setHistory((v) => !v)} className="inline-flex items-center gap-1.5 text-[12.5px] text-fg-muted hover:text-fg" aria-expanded={history}>
                       <History className="size-3.5" /> {history ? "Hide history" : "Show history"}
                     </button>
-                    {history ? <BugHistory bugId={bugId} membersById={membersById} /> : null}
+                    {history ? <ItemHistory itemId={itemId} membersById={membersById} /> : null}
                   </section>
                 </div>
 
                 <aside className="grid content-start gap-3 lg:sticky lg:top-0">
-                  <TipAnchor tip="bugs.workflow" facts={{ canFix: perms.canEdit || (perms.canSelfAssign && !bug.assigneeId), canVerify: perms.canVerify }}>
-                    <section className="rounded-xl border border-border bg-surface-2 p-3" aria-label="Fix workflow">
-                      <p className="mb-2 text-[12px] text-fg-muted">{BUG_STATUS_META[bug.status].description}</p>
-                      <StatusActions bug={bug} pending={setStatus.isPending} onStatus={(status, resolution) => setStatus.mutate({ bugId, status, resolution })} />
+                  <TipAnchor tip="forums.workflow" facts={{ canFix: perms.canEdit || (perms.canSelfAssign && !item.assigneeId), canVerify: perms.canVerify, noun }}>
+                    <section className="rounded-xl border border-border bg-surface-2 p-3" aria-label="Workflow">
+                      <p className="mb-2 text-[12px] text-fg-muted">{statusLabel(forum.kind, item.status).description}</p>
+                      <StatusActions item={item} forum={forum} pending={setStatus.isPending} onStatus={(status, resolution) => setStatus.mutate({ itemId, status, resolution })} />
                     </section>
                   </TipAnchor>
                   <section className="rounded-xl border border-border bg-surface-2 px-3 py-1.5" aria-label="Details">
                     <Row label="Status">
-                      <BugStatusPill status={bug.status} resolution={bug.resolution} size="sm" />
+                      <ItemStatusPill kind={forum.kind} status={item.status} resolution={item.resolution} size="sm" />
                     </Row>
                     <Row label="Priority">
-                      <Select<BugPriority>
+                      <Select<ItemPriority>
                         aria-label="Priority"
-                        value={bug.priority}
+                        value={item.priority}
                         disabled={!perms.canEdit}
-                        onValueChange={(priority) => update.mutate({ bugId, priority })}
-                        options={BUG_PRIORITY_ORDER.map((p) => ({ value: p, label: BUG_PRIORITY_META[p].label, icon: <BugPriorityIcon priority={p} /> }))}
+                        onValueChange={(priority) => update.mutate({ itemId, priority })}
+                        options={ITEM_PRIORITY_ORDER.map((p) => ({ value: p, label: priorityLabel(forum.kind, p), icon: <ItemPriorityIcon kind={forum.kind} priority={p} /> }))}
                         className="h-7"
                       />
                     </Row>
                     <Row label="Update">
                       <Select<string>
                         aria-label="Update"
-                        value={bug.milestoneId ?? "none"}
+                        value={item.milestoneId ?? "none"}
                         disabled={!perms.canEdit}
-                        onValueChange={(v) => update.mutate({ bugId, milestoneId: v === "none" ? null : v })}
-                        options={[{ value: "none", label: "No update" }, ...list.milestones.filter((m) => !m.archived || m.id === bug.milestoneId).map((m) => ({ value: m.id, label: m.name }))]}
+                        onValueChange={(v) => update.mutate({ itemId, milestoneId: v === "none" ? null : v })}
+                        options={[{ value: "none", label: "No update" }, ...view.milestones.filter((m) => !m.archived || m.id === item.milestoneId).map((m) => ({ value: m.id, label: m.name }))]}
                         className="h-7"
                       />
                     </Row>
                     <Row label="Assignee">
                       <PersonPicker
                         label="Assignee"
-                        value={bug.assigneeId}
+                        value={item.assigneeId}
                         members={canAssignOthers ? members : members.filter((m) => m.id === viewerId)}
-                        canEdit={canAssignOthers || (perms.canSelfAssign && !bug.assigneeId) || (perms.canEdit && bug.assigneeId === viewerId)}
+                        canEdit={canAssignOthers || (perms.canSelfAssign && !item.assigneeId) || (perms.canEdit && item.assigneeId === viewerId)}
                         emptyLabel="Nobody yet"
-                        onChange={(assigneeId) => update.mutate({ bugId, assigneeId })}
+                        onChange={(assigneeId) => update.mutate({ itemId, assigneeId })}
                       />
                     </Row>
                     <Row label="Reviewer">
-                      <PersonPicker label="Reviewer" value={bug.reviewerId} members={members} canEdit={canAssignOthers} emptyLabel="Any manager" onChange={(reviewerId) => update.mutate({ bugId, reviewerId })} />
+                      <PersonPicker label="Reviewer" value={item.reviewerId} members={members} canEdit={canAssignOthers} emptyLabel="Any manager" onChange={(reviewerId) => update.mutate({ itemId, reviewerId })} />
                     </Row>
                     <Row label="Tags">
-                      <TagPicker selected={bug.tagIds} tags={list.tags} projectId={projectId} canEdit={perms.canEdit} canManage={perms.canManageTags} onChange={(tagIds) => update.mutate({ bugId, tagIds })} />
+                      <TagPicker selected={item.tagIds} tags={view.tags} forumId={forum.id} projectId={projectId} canEdit={perms.canEdit} canManage={perms.canManageTags} onChange={(tagIds) => update.mutate({ itemId, tagIds })} />
                     </Row>
                     <Row label="Reporter">
-                      <Person id={bug.reportedById} membersById={membersById} withAvatar />
+                      <Person id={item.reportedById} membersById={membersById} withAvatar />
                     </Row>
                   </section>
                   {perms.canDelete ? (
                     <Button size="sm" variant="danger-ghost" className="justify-self-start" onClick={() => setConfirmDelete(true)}>
-                      <Trash2 /> Delete bug
+                      <Trash2 /> Delete {noun}
                     </Button>
                   ) : null}
                 </aside>
@@ -242,16 +248,18 @@ export function BugDialog({
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
-        title="Delete this bug?"
-        description="Its comments, pictures and clips go with it. Closing a bug keeps the record; deleting is for mistakes and duplicates."
+        title={`Delete this ${noun}?`}
+        description={`Its comments, pictures and clips go with it. Closing a ${noun} keeps the record; deleting is for mistakes and duplicates.`}
         confirmLabel="Delete"
         destructive
         loading={remove.isPending}
-        onConfirm={() => remove.mutate({ bugId })}
+        onConfirm={() => remove.mutate({ itemId })}
       />
     </D.Root>
   );
 }
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function Person({ id, membersById, withAvatar }: { id: string | null; membersById: Map<string, MemberDTO>; withAvatar?: boolean }) {
   const m = id ? membersById.get(id) : undefined;
@@ -264,33 +272,34 @@ function Person({ id, membersById, withAvatar }: { id: string | null; membersByI
   );
 }
 
-/** The buttons that move a bug along, for what the viewer may do right now. */
-function StatusActions({ bug, pending, onStatus }: { bug: BugDetailDTO; pending: boolean; onStatus: (status: BugDetailDTO["status"], resolution?: BugResolution | null) => void }) {
-  const p = bug.permissions;
-  const canStart = p.canEdit || (p.canSelfAssign && !bug.assigneeId);
+/** The buttons that move an item along, for what the viewer may do right now. */
+function StatusActions({ item, forum, pending, onStatus }: { item: ForumItemDetailDTO; forum: ForumDTO; pending: boolean; onStatus: (status: ForumItemDetailDTO["status"], resolution?: ItemResolution | null) => void }) {
+  const p = item.permissions;
+  const words = FORUM_KIND_META[forum.kind].actions;
+  const canStart = p.canEdit || (p.canSelfAssign && !item.assigneeId);
   const canSendBack = p.canVerify || p.canEdit;
   const buttons: React.ReactNode[] = [];
-  const closeButton = p.canClose && bug.status !== "CLOSED" && bug.status !== "VERIFIED" ? <CloseMenu key="close" pending={pending} onClose={(r) => onStatus("CLOSED", r)} /> : null;
-  switch (bug.status) {
+  const closeButton = p.canClose && item.status !== "CLOSED" && item.status !== "VERIFIED" ? <CloseMenu key="close" pending={pending} onClose={(r) => onStatus("CLOSED", r)} /> : null;
+  switch (item.status) {
     case "OPEN":
       if (canStart)
         buttons.push(
           <Button key="start" variant="primary" size="sm" loading={pending} onClick={() => onStatus("IN_PROGRESS")}>
-            <Play /> {bug.assigneeId ? "Start work" : "Take it & start"}
+            <Play /> {item.assigneeId ? "Start work" : "Take it & start"}
           </Button>,
         );
       if (p.canEdit)
         buttons.push(
-          <Button key="fixed" variant="secondary" size="sm" loading={pending} onClick={() => onStatus("FIXED")}>
-            <CircleCheck /> Mark fixed
+          <Button key="done" variant="secondary" size="sm" loading={pending} onClick={() => onStatus("FIXED")}>
+            <CircleCheck /> {words.done}
           </Button>,
         );
       break;
     case "IN_PROGRESS":
       if (p.canEdit)
         buttons.push(
-          <Button key="fixed" variant="primary" size="sm" loading={pending} onClick={() => onStatus("FIXED")}>
-            <CircleCheck /> Mark fixed
+          <Button key="done" variant="primary" size="sm" loading={pending} onClick={() => onStatus("FIXED")}>
+            <CircleCheck /> {words.done}
           </Button>,
         );
       break;
@@ -298,13 +307,13 @@ function StatusActions({ bug, pending, onStatus }: { bug: BugDetailDTO; pending:
       if (p.canVerify)
         buttons.push(
           <Button key="verify" variant="success" size="sm" loading={pending} onClick={() => onStatus("VERIFIED")}>
-            <Eye /> Verify fix
+            <Eye /> {words.verify}
           </Button>,
         );
       if (canSendBack)
         buttons.push(
           <Button key="back" variant="secondary" size="sm" loading={pending} onClick={() => onStatus("IN_PROGRESS")}>
-            <Undo2 /> Not fixed
+            <Undo2 /> {words.sendBack}
           </Button>,
         );
       break;
@@ -319,11 +328,11 @@ function StatusActions({ bug, pending, onStatus }: { bug: BugDetailDTO; pending:
       break;
   }
   if (closeButton) buttons.push(closeButton);
-  if (!buttons.length) return <p className="text-[12.5px] text-fg-subtle">{bug.status === "FIXED" ? "Waiting for the reviewer to verify the fix." : "Nothing for you to do here."}</p>;
+  if (!buttons.length) return <p className="text-[12.5px] text-fg-subtle">{item.status === "FIXED" ? "Waiting for the reviewer to verify it." : "Nothing for you to do here."}</p>;
   return <div className="flex flex-wrap gap-1.5">{buttons}</div>;
 }
 
-function CloseMenu({ pending, onClose }: { pending: boolean; onClose: (resolution: BugResolution) => void }) {
+function CloseMenu({ pending, onClose }: { pending: boolean; onClose: (resolution: ItemResolution) => void }) {
   const [open, setOpen] = useState(false);
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -333,8 +342,8 @@ function CloseMenu({ pending, onClose }: { pending: boolean; onClose: (resolutio
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-1">
-        <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">Close without a fix</p>
-        {BUG_RESOLUTION_ORDER.map((r) => (
+        <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">Close without doing it</p>
+        {ITEM_RESOLUTION_ORDER.map((r) => (
           <button
             key={r}
             type="button"
@@ -344,8 +353,8 @@ function CloseMenu({ pending, onClose }: { pending: boolean; onClose: (resolutio
             }}
             className="block w-full rounded-md px-2 py-1.5 text-left hover:bg-surface-4"
           >
-            <span className="block text-[13px] font-medium">{BUG_RESOLUTION_META[r].label}</span>
-            <span className="block text-[11.5px] text-fg-muted">{BUG_RESOLUTION_META[r].description}</span>
+            <span className="block text-[13px] font-medium">{ITEM_RESOLUTION_META[r].label}</span>
+            <span className="block text-[11.5px] text-fg-muted">{ITEM_RESOLUTION_META[r].description}</span>
           </button>
         ))}
       </PopoverContent>
@@ -353,22 +362,22 @@ function CloseMenu({ pending, onClose }: { pending: boolean; onClose: (resolutio
   );
 }
 
-function TitleEditor({ bug, canEdit, onSave }: { bug: BugDetailDTO; canEdit: boolean; onSave: (title: string) => void }) {
+function TitleEditor({ item, canEdit, onSave }: { item: ForumItemDetailDTO; canEdit: boolean; onSave: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(bug.title);
-  useEffect(() => setValue(bug.title), [bug.title]);
-  if (!canEdit) return <h2 className="text-lg font-semibold leading-snug tracking-tight md:text-xl">{bug.title}</h2>;
+  const [value, setValue] = useState(item.title);
+  useEffect(() => setValue(item.title), [item.title]);
+  if (!canEdit) return <h2 className="text-lg font-semibold leading-snug tracking-tight md:text-xl">{item.title}</h2>;
   if (!editing)
     return (
       <button type="button" onClick={() => setEditing(true)} className="-mx-1.5 rounded-md px-1.5 text-left text-lg font-semibold leading-snug tracking-tight hover:bg-surface-3 md:text-xl" title="Click to rename">
-        {bug.title}
+        {item.title}
       </button>
     );
   const commit = () => {
     setEditing(false);
     const next = value.trim();
-    if (next && next !== bug.title) onSave(next);
-    else setValue(bug.title);
+    if (next && next !== item.title) onSave(next);
+    else setValue(item.title);
   };
   return (
     <Textarea
@@ -377,7 +386,7 @@ function TitleEditor({ bug, canEdit, onSave }: { bug: BugDetailDTO; canEdit: boo
       maxRows={4}
       value={value}
       data-inline-edit
-      aria-label="Bug title"
+      aria-label="Title"
       onChange={(e) => setValue(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -387,7 +396,7 @@ function TitleEditor({ bug, canEdit, onSave }: { bug: BugDetailDTO; canEdit: boo
           commit();
         }
         if (e.key === "Escape") {
-          setValue(bug.title);
+          setValue(item.title);
           setEditing(false);
         }
       }}
@@ -396,12 +405,12 @@ function TitleEditor({ bug, canEdit, onSave }: { bug: BugDetailDTO; canEdit: boo
   );
 }
 
-function DescriptionEditor({ bug, canEdit, members, onSave, saving }: { bug: BugDetailDTO; canEdit: boolean; members: MemberDTO[]; onSave: (description: string) => void; saving: boolean }) {
+function DescriptionEditor({ item, canEdit, members, onSave, saving }: { item: ForumItemDetailDTO; canEdit: boolean; members: MemberDTO[]; onSave: (description: string) => void; saving: boolean }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(bug.description);
+  const [draft, setDraft] = useState(item.description);
   const mentionSet = useMemo(() => new Set(members.map((m) => m.username)), [members]);
   const start = () => {
-    setDraft(bug.description);
+    setDraft(item.description);
     setEditing(true);
   };
   if (!editing) {
@@ -415,8 +424,8 @@ function DescriptionEditor({ bug, canEdit, members, onSave, saving }: { bug: Bug
             </Button>
           ) : null}
         </div>
-        {bug.description.trim() ? (
-          <RichText text={bug.description} mentions={mentionSet} className="text-fg" />
+        {item.description.trim() ? (
+          <RichText text={item.description} mentions={mentionSet} className="text-fg" />
         ) : canEdit ? (
           <button type="button" onClick={start} className="w-full rounded-lg border border-dashed border-border-strong px-3 py-3 text-left text-[13px] text-fg-subtle hover:border-fg-subtle hover:text-fg-muted">
             Describe it — steps to reproduce, what you expected, links to Discord reports…
@@ -462,8 +471,8 @@ function DescriptionEditor({ bug, canEdit, members, onSave, saving }: { bug: Bug
   );
 }
 
-function BugHistory({ bugId, membersById }: { bugId: string; membersById: Map<string, MemberDTO> }) {
-  const { data, isLoading } = useQuery({ queryKey: qk.bugActivity(bugId), queryFn: () => rpc("bug.activity", { bugId }) });
+function ItemHistory({ itemId, membersById }: { itemId: string; membersById: Map<string, MemberDTO> }) {
+  const { data, isLoading } = useQuery({ queryKey: qk.itemActivity(itemId), queryFn: () => rpc("item.activity", { itemId }) });
   const name = (id: string) => membersById.get(id)?.displayName ?? "someone";
   if (isLoading) return <Skeleton className="mt-2 h-16" />;
   if (!data?.length) return <p className="mt-2 text-[12.5px] text-fg-subtle">No history yet.</p>;

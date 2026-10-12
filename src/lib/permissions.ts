@@ -110,17 +110,18 @@ export const PERMISSIONS = [
   "attachment.upload",
   "comment.create",
   "comment.moderate",
-  /** Report bugs (and take unassigned ones). */
-  "bug.create",
-  /** Change any bug: fields, assignee, status. */
-  "bug.edit",
-  /** Change bugs you reported, are fixing or are verifying. */
-  "bug.editOwn",
-  "bug.assign",
-  /** Verify fixes (the bug's own reviewer can always verify). */
-  "bug.verify",
-  "bug.delete",
-  "bugtag.manage",
+  /** Create, rename, describe, reorder and archive forums (Bugs, QA, custom trackers) and their tags. */
+  "forum.manage",
+  /** Report items (bugs, QA checks) and take unassigned ones. */
+  "item.create",
+  /** Change any item: fields, assignee, status. */
+  "item.edit",
+  /** Change items you reported, are fixing or are verifying. */
+  "item.editOwn",
+  "item.assign",
+  /** Verify done items (an item's own reviewer can also verify). */
+  "item.verify",
+  "item.delete",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -135,8 +136,8 @@ const WORKER: Permission[] = [
   "card.submit",
   "attachment.upload",
   "comment.create",
-  "bug.create",
-  "bug.editOwn",
+  "item.create",
+  "item.editOwn",
 ];
 
 const MANAGER: Permission[] = [
@@ -153,10 +154,10 @@ const MANAGER: Permission[] = [
   "milestone.manage",
   "comment.moderate",
   "reports.view",
-  "bug.edit",
-  "bug.assign",
-  "bug.verify",
-  "bugtag.manage",
+  "forum.manage",
+  "item.edit",
+  "item.assign",
+  "item.verify",
 ];
 
 const ADMIN: Permission[] = [
@@ -168,7 +169,7 @@ const ADMIN: Permission[] = [
   "project.create",
   "project.update",
   "card.delete",
-  "bug.delete",
+  "item.delete",
 ];
 
 /** Only the owner archives, restores or deletes projects (and the studio). */
@@ -262,26 +263,26 @@ export function cardPermissions({ role, userId, card, allowSelfApproval }: CardP
   };
 }
 
-export interface BugPermissionInput {
+export interface ItemPermissionInput {
   role: string;
   userId: string;
-  bug: { reportedById: string | null; assigneeId: string | null; reviewerId: string | null };
+  item: { reportedById: string | null; assigneeId: string | null; reviewerId: string | null };
   allowSelfApproval: boolean;
-  /** The project is archived: everything is read-only. */
+  /** The project or the forum is archived: everything is read-only. */
   readOnly?: boolean;
 }
 
-export interface BugPermissions {
+export interface ItemPermissions {
   canView: boolean;
-  /** Title, description, priority, update, tags; also the fix workflow (start, mark fixed). */
+  /** Title, description, priority, update, tags; also the workflow (start, mark done). */
   canEdit: boolean;
   /** Pick the assignee and the reviewer. */
   canAssign: boolean;
-  /** Take an unassigned bug (become its assignee). */
+  /** Take an unassigned item (become its assignee). */
   canSelfAssign: boolean;
-  /** Confirm a fix (or send it back): the bug's reviewer or anyone with bug.verify — not the person fixing it (unless self-approval is allowed). */
+  /** Confirm a done item (or send it back): the item's reviewer or anyone with item.verify — not the person doing it (unless self-approval is allowed). */
   canVerify: boolean;
-  /** Close without a fix (won't fix, can't reproduce…). */
+  /** Close without doing it (won't fix, can't reproduce…). */
   canClose: boolean;
   canComment: boolean;
   canUpload: boolean;
@@ -289,25 +290,25 @@ export interface BugPermissions {
   canManageTags: boolean;
 }
 
-/** Bug-level rules. Used verbatim by server-side enforcement and by the UI. */
-export function bugPermissions({ role, userId, bug, allowSelfApproval, readOnly }: BugPermissionInput): BugPermissions {
+/** Item-level rules. Used verbatim by server-side enforcement and by the UI. */
+export function itemPermissions({ role, userId, item, allowSelfApproval, readOnly }: ItemPermissionInput): ItemPermissions {
   const has = (p: Permission) => roleHas(role, p);
-  const isReporter = bug.reportedById === userId;
-  const isAssignee = bug.assigneeId === userId;
-  const isReviewer = bug.reviewerId === userId;
-  const canEdit = has("bug.edit") || (has("bug.editOwn") && (isReporter || isAssignee || isReviewer));
-  const base: BugPermissions = {
+  const isReporter = item.reportedById === userId;
+  const isAssignee = item.assigneeId === userId;
+  const isReviewer = item.reviewerId === userId;
+  const canEdit = has("item.edit") || (has("item.editOwn") && (isReporter || isAssignee || isReviewer));
+  const base: ItemPermissions = {
     canView: has("project.view"),
     canEdit,
-    canAssign: has("bug.assign"),
-    canSelfAssign: has("bug.create"),
-    // The named reviewer, or any manager — but never the person fixing it, unless the project allows self-approval.
-    canVerify: (isReviewer || has("bug.verify")) && (allowSelfApproval || !isAssignee),
-    canClose: has("bug.edit") || (has("bug.editOwn") && isReporter),
+    canAssign: has("item.assign"),
+    canSelfAssign: has("item.create"),
+    // The named reviewer, or any manager — but never the person doing it, unless the project allows self-approval.
+    canVerify: (isReviewer || has("item.verify")) && (allowSelfApproval || !isAssignee),
+    canClose: has("item.edit") || (has("item.editOwn") && isReporter),
     canComment: has("comment.create"),
     canUpload: has("attachment.upload") && canEdit,
-    canDelete: has("bug.delete"),
-    canManageTags: has("bugtag.manage"),
+    canDelete: has("item.delete"),
+    canManageTags: has("forum.manage"),
   };
   if (!readOnly) return base;
   return { ...base, canEdit: false, canAssign: false, canSelfAssign: false, canVerify: false, canClose: false, canComment: false, canUpload: false, canManageTags: false };

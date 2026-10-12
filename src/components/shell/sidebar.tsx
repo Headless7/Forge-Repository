@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   Bell,
-  Bug,
   CalendarDays,
   Check,
   ChevronsUpDown,
@@ -283,7 +282,9 @@ export function Sidebar({
                 {isActive && !collapsed ? (
                   <div className="my-0.5 grid gap-0.5">
                     {p.canViewReports ? <NavItem href={`${href}/dashboard`} icon={<Gauge />} label="Dashboard" active={pathname === `${href}/dashboard`} collapsed={false} indent onClick={onNavigate} /> : null}
-                    <NavItem href={`${href}/bugs`} icon={<Bug />} label="Bugs" active={pathname === `${href}/bugs`} collapsed={false} indent onClick={onNavigate} />
+                    {p.forums.map((f) => (
+                      <NavItem key={f.id} href={`${href}/f/${f.slug}`} icon={<span className="flex size-4 items-center justify-center text-[13px] leading-none">{f.icon}</span>} label={f.name} active={pathname === `${href}/f/${f.slug}`} collapsed={false} indent onClick={onNavigate} />
+                    ))}
                     <NavItem href={`${href}/activity`} icon={<Activity />} label="Activity" active={pathname === `${href}/activity`} collapsed={false} indent onClick={onNavigate} />
                     <NavItem href={`${href}/settings#members`} icon={<Users />} label="Members" collapsed={false} indent onClick={onNavigate} />
                     <NavItem href={`${href}/settings`} icon={<Settings />} label="Settings" active={pathname === `${href}/settings`} collapsed={false} indent onClick={onNavigate} />

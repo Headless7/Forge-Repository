@@ -6,7 +6,7 @@ import { projectKeyFrom, RESERVED_PROJECT_SLUGS, slugify } from "@/lib/slugs";
 import type { CardDisplayMode, ProjectDTO, ProjectListItemDTO, ProjectSettings, ProjectVisibility } from "@/lib/types";
 import { asRole, assertStudioOwner, getProjectAccess, requireProject, requireStudio } from "../access";
 import { db, type Executor } from "../db";
-import { attachments, boardColumns, boards, cards, projectMembers, projects, studioMembers, users } from "../db/schema";
+import { attachments, boardColumns, boards, cards, forums, projectMembers, projects, studioMembers, users } from "../db/schema";
 import { forbidden, invalid, notFound } from "../errors";
 import { now } from "../clock";
 import { storage } from "../storage";
@@ -16,6 +16,7 @@ import { copyProjectTemplate } from "./project-templates";
 import type { Actor } from "./context";
 import { announceAccessChange } from "../realtime/bus";
 import { Effects } from "./effects";
+import { createDefaultForums } from "./forums";
 import { inboxAudience } from "./notifications";
 import { purgeOne } from "./purge";
 import { avatarUrl } from "./users-lookup";
@@ -86,6 +87,13 @@ export async function listProjects(actor: Actor, studioId: string, includeArchiv
     .orderBy(asc(boards.position), asc(boards.number));
   const boardMap = new Map<string, ProjectListItemDTO["boards"]>();
   for (const { projectId, ...b } of boardRows) boardMap.set(projectId, [...(boardMap.get(projectId) ?? []), b]);
+  const forumRows = await db
+    .select({ id: forums.id, projectId: forums.projectId, slug: forums.slug, name: forums.name, icon: forums.icon })
+    .from(forums)
+    .where(and(inArray(forums.projectId, accessible.map((p) => p.id)), isNull(forums.archivedAt)))
+    .orderBy(asc(forums.position), asc(forums.createdAt));
+  const forumMap = new Map<string, ProjectListItemDTO["forums"]>();
+  for (const { projectId, ...f } of forumRows) forumMap.set(projectId, [...(forumMap.get(projectId) ?? []), f]);
   return accessible.map((p) => {
     const c = countMap.get(p.id);
     return {
@@ -105,6 +113,7 @@ export async function listProjects(actor: Actor, studioId: string, includeArchiv
         inProgress: c?.inProgress ?? 0,
       },
       boards: boardMap.get(p.id) ?? [],
+      forums: forumMap.get(p.id) ?? [],
       canViewReports: roleHas(roles.get(p.id)!, "reports.view"),
     };
   });
@@ -170,6 +179,7 @@ export async function createProject(actor: Actor, input: CreateProjectInput): Pr
         );
       }
     }
+    await createDefaultForums(tx, row!.id, actor.userId);
     await tx.insert(projectMembers).values({ projectId: row!.id, userId: actor.userId }).onConflictDoNothing();
     await logActivity(tx, { studioId: access.studioId, projectId: row!.id, actorId: actor.userId, type: "project.created", data: { name: row!.name, ...(template ? { template: template.name } : {}) } });
     await audit(tx, actor, {
@@ -234,13 +244,6 @@ export async function updateProject(actor: Actor, input: UpdateProjectInput): Pr
           .from(studioMembers)
           .where(and(eq(studioMembers.studioId, project.studioId), inArray(studioMembers.userId, input.settings.defaultReviewerIds.length ? input.settings.defaultReviewerIds : ["00000000-0000-0000-0000-000000000000"])));
         settings.defaultReviewerIds = valid.map((v) => v.userId);
-      }
-      if (input.settings.defaultBugReviewerId) {
-        const [member] = await tx
-          .select({ userId: studioMembers.userId })
-          .from(studioMembers)
-          .where(and(eq(studioMembers.studioId, project.studioId), eq(studioMembers.userId, input.settings.defaultBugReviewerId)));
-        if (!member) throw invalid("The default bug reviewer must be a member of this studio.");
       }
       patch.settings = settings;
     }

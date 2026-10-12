@@ -35,9 +35,9 @@ export function attachmentKey(parts: {
   return `studios/${parts.studioId}/projects/${parts.projectId}/cards/${parts.cardId}/${parts.attachmentId}/${parts.name}`;
 }
 
-/** Files on a bug report: studios/<studio>/projects/<project>/bugs/<bug>/<attachment>/<name> */
-export function bugAttachmentKey(parts: { studioId: string; projectId: string; bugId: string; attachmentId: string; name: string }) {
-  return `studios/${parts.studioId}/projects/${parts.projectId}/bugs/${parts.bugId}/${parts.attachmentId}/${parts.name}`;
+/** Files on a forum item: studios/<studio>/projects/<project>/items/<item>/<attachment>/<name> */
+export function itemAttachmentKey(parts: { studioId: string; projectId: string; itemId: string; attachmentId: string; name: string }) {
+  return `studios/${parts.studioId}/projects/${parts.projectId}/items/${parts.itemId}/${parts.attachmentId}/${parts.name}`;
 }
 
 export function avatarKey(userId: string, version: string) {

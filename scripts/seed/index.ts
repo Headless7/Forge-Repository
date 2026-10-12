@@ -13,7 +13,7 @@ import { closeDb, db, rawSql } from "@/server/db";
 import { attachments, cardViews, deliverables, notifications, studioMembers, users } from "@/server/db/schema";
 import { mediaQueue } from "@/server/jobs/queue";
 import * as board from "@/server/services/board";
-import * as bugs from "@/server/services/bugs";
+import * as forums from "@/server/services/forums";
 import * as cards from "@/server/services/cards";
 import * as checklists from "@/server/services/checklists";
 import * as comments from "@/server/services/comments";
@@ -497,26 +497,30 @@ export async function seed({ reset = false }: { reset?: boolean } = {}) {
   // A revision after publication: the published record (V2) stays; V3 shows as a pending change.
   await newVersion("sofia", T(0, 9, 40), bp.id, "battlepass_v3.png", "Premium banner glow tweak for the mid-season refresh.");
 
-  // ── Bugs: the tracker beside the boards (per update, with a global open list) ─
+  // ── Forums: Bugs and QA beside the boards (per update, with a global open list) ─
+  const utdForums = await forums.listForums(utd.id);
+  const bugsForum = utdForums.find((f) => f.kind === "BUGS")!;
+  const qaForum = utdForums.find((f) => f.kind === "QA")!;
   const bugTag: Record<string, string> = {};
   for (const [name, color] of [
     ["Lobby", "#60a5fa"],
     ["Play Area", "#34d399"],
     ["UI", "#a78bfa"],
   ] as const) {
-    bugTag[name] = (await as("giorgos", T(26), (a) => bugs.createBugTag(a, { projectId: utd.id, name, color }))).id;
+    bugTag[name] = (await as("giorgos", T(26), (a) => forums.createTag(a, { forumId: bugsForum.id, name, color }))).id;
   }
-  await as("giorgos", T(26), (a) => projects.updateProject(a, { projectId: utd.id, settings: { defaultBugReviewerId: u.kenji!.id } }));
-  const bugUpload = async (username: string, when: Date, bugId: string, name: string) => {
+  await as("giorgos", T(26), (a) => forums.updateForum(a, { forumId: bugsForum.id, defaultReviewerId: u.kenji!.id }));
+  await as("giorgos", T(26), (a) => forums.updateForum(a, { forumId: qaForum.id, defaultReviewerId: u.lena!.id }));
+  const itemUpload = async (username: string, when: Date, itemId: string, name: string) => {
     const source = file(name);
     const size = fs.statSync(source).size;
     const contentType = MIME[path.extname(name)] ?? "application/octet-stream";
-    const intent = await as(username, when, (a) => media.createUpload(a, { bugId, filename: name, size, contentType, purpose: "bug" }));
+    const intent = await as(username, when, (a) => media.createUpload(a, { itemId, filename: name, size, contentType, purpose: "item" }));
     const [row] = await db.select().from(attachments).where(eq(attachments.id, intent.attachmentId));
     await storage().putFile(row!.storageKey, source, contentType);
     return as(username, when, (a) => media.completeUpload(a, { attachmentId: intent.attachmentId }));
   };
-  const bug = (username: string, when: Date, input: Omit<bugs.CreateBugInput, "projectId">) => as(username, when, (a) => bugs.createBug(a, { projectId: utd.id, ...input }));
+  const bug = (username: string, when: Date, input: Omit<forums.CreateItemInput, "forumId">) => as(username, when, (a) => forums.createItem(a, { forumId: bugsForum.id, ...input }));
 
   const lamps = await bug("lena", T(6, 11), {
     title: "Non-upgraded lamps circle sits further forward than upgraded ones",
@@ -526,10 +530,10 @@ export async function seed({ reset = false }: { reset?: boolean } = {}) {
     assigneeId: u.kenji!.id,
     tagIds: [bugTag.Lobby!],
   });
-  await bugUpload("lena", T(6, 11, 5), lamps.id, "shop_v1.png");
-  await as("kenji", T(5, 10), (a) => bugs.setBugStatus(a, { bugId: lamps.id, status: "IN_PROGRESS" }));
-  await as("kenji", T(2, 16), (a) => bugs.addBugComment(a, { bugId: lamps.id, body: "Found it — the circle used the pre-upgrade model's pivot. Fix is in the next build." }));
-  await as("kenji", T(2, 16, 5), (a) => bugs.setBugStatus(a, { bugId: lamps.id, status: "FIXED" }));
+  await itemUpload("lena", T(6, 11, 5), lamps.id, "shop_v1.png");
+  await as("kenji", T(5, 10), (a) => forums.setItemStatus(a, { itemId: lamps.id, status: "IN_PROGRESS" }));
+  await as("kenji", T(2, 16), (a) => forums.addComment(a, { itemId: lamps.id, body: "Found it — the circle used the pre-upgrade model's pivot. Fix is in the next build." }));
+  await as("kenji", T(2, 16, 5), (a) => forums.setItemStatus(a, { itemId: lamps.id, status: "FIXED" }));
 
   const autoroll = await bug("lena", T(5, 9), {
     title: "Auto roll stops after 10 and ignores the selected % on curses",
@@ -539,8 +543,8 @@ export async function seed({ reset = false }: { reset?: boolean } = {}) {
     assigneeId: u.kenji!.id,
     tagIds: [bugTag["Play Area"]!, bugTag.UI!],
   });
-  await bugUpload("lena", T(5, 9, 3), autoroll.id, "hp_v1.mp4");
-  await as("kenji", T(4, 14), (a) => bugs.setBugStatus(a, { bugId: autoroll.id, status: "IN_PROGRESS" }));
+  await itemUpload("lena", T(5, 9, 3), autoroll.id, "hp_v1.mp4");
+  await as("kenji", T(4, 14), (a) => forums.setItemStatus(a, { itemId: autoroll.id, status: "IN_PROGRESS" }));
 
   const traitIndex = await bug("sofia", T(4, 15), {
     title: "Trait index says \"skip\" instead of \"keep\"",
@@ -548,9 +552,9 @@ export async function seed({ reset = false }: { reset?: boolean } = {}) {
     milestoneId: u60.id,
     tagIds: [bugTag.UI!],
   });
-  await as("giorgos", T(4, 15, 30), (a) => bugs.updateBug(a, { bugId: traitIndex.id, assigneeId: u.sofia!.id }));
-  await as("sofia", T(3, 10), (a) => bugs.setBugStatus(a, { bugId: traitIndex.id, status: "FIXED" }));
-  await as("kenji", T(2, 11), (a) => bugs.setBugStatus(a, { bugId: traitIndex.id, status: "VERIFIED" }));
+  await as("giorgos", T(4, 15, 30), (a) => forums.updateItem(a, { itemId: traitIndex.id, assigneeId: u.sofia!.id }));
+  await as("sofia", T(3, 10), (a) => forums.setItemStatus(a, { itemId: traitIndex.id, status: "FIXED" }));
+  await as("kenji", T(2, 11), (a) => forums.setItemStatus(a, { itemId: traitIndex.id, status: "VERIFIED" }));
 
   await bug("lena", T(3, 12), {
     title: "Curses don't drop in the Summerween game mode",
@@ -565,9 +569,19 @@ export async function seed({ reset = false }: { reset?: boolean } = {}) {
     priority: "MEDIUM",
     tagIds: [bugTag["Play Area"]!],
   });
-  await as("giorgos", T(1, 10), (a) => bugs.addBugComment(a, { bugId: portal.id, body: `@${"kenji"} is this the same raycast as the lamp circle?` }));
+  await as("giorgos", T(1, 10), (a) => forums.addComment(a, { itemId: portal.id, body: `@${"kenji"} is this the same raycast as the lamp circle?` }));
   const dup = await bug("mike", T(1, 13), { title: "Lamps placement circle offset (lobby)", priority: "MEDIUM", milestoneId: u60.id, tagIds: [bugTag.Lobby!] });
-  await as("giorgos", T(1, 14), (a) => bugs.setBugStatus(a, { bugId: dup.id, status: "CLOSED", resolution: "DUPLICATE" }));
+  await as("giorgos", T(1, 14), (a) => forums.setItemStatus(a, { itemId: dup.id, status: "CLOSED", resolution: "DUPLICATE" }));
+
+  // QA: checks before Update 6.0 ships.
+  const qaTag = (await as("lena", T(20), (a) => forums.createTag(a, { forumId: qaForum.id, name: "Mobile", color: "#fb923c" }))).id;
+  const qa = (username: string, when: Date, input: Omit<forums.CreateItemInput, "forumId">) => as(username, when, (a) => forums.createItem(a, { forumId: qaForum.id, ...input }));
+  const battlepass = await qa("lena", T(4, 10), { title: "Battlepass purchase flow on mobile: buy, claim, restart, claim again", priority: "HIGH", milestoneId: u60.id, assigneeId: u.sofia!.id, tagIds: [qaTag] });
+  await as("sofia", T(3, 15), (a) => forums.setItemStatus(a, { itemId: battlepass.id, status: "IN_PROGRESS" }));
+  await as("sofia", T(2, 12), (a) => forums.setItemStatus(a, { itemId: battlepass.id, status: "FIXED" }));
+  await as("lena", T(1, 9), (a) => forums.setItemStatus(a, { itemId: battlepass.id, status: "VERIFIED" }));
+  await qa("lena", T(3, 11), { title: "Infinite Mode: leaderboard resets on Monday 00:00 UTC", priority: "MEDIUM", milestoneId: u60.id, assigneeId: u.kenji!.id });
+  await qa("lena", T(2, 14), { title: "Jujutsu banner odds match the design sheet (mythic 0.5%)", priority: "HIGH", milestoneId: u60.id });
 
   // ── One Piece RPG ─────────────────────────────────────────────────────────
   const opr = await as("giorgos", T(20), (a) =>

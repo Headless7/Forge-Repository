@@ -3,7 +3,7 @@
 import { useMutation, useQueryClient, type UseMutationOptions } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { errorMessage, rpc, RpcError, type RpcInput, type RpcName, type RpcOutput } from "./rpc-client";
-import type { BugDetailDTO, CardDetailDTO } from "./types";
+import type { CardDetailDTO, ForumItemDetailDTO } from "./types";
 
 export const qk = {
   /** Every board of a project (a prefix: invalidating it refreshes whichever board is open). */
@@ -26,10 +26,12 @@ export const qk = {
   sessions: () => ["sessions"] as const,
   notificationPrefs: () => ["notification-prefs"] as const,
   search: (studioId: string, projectId: string | null, q: string) => ["search", studioId, projectId, q] as const,
-  /** A project's bug tracker (list, tags, updates). */
-  bugs: (projectId: string) => ["bugs", projectId] as const,
-  bug: (bugId: string) => ["bug", bugId] as const,
-  bugActivity: (bugId: string) => ["bug-activity", bugId] as const,
+  /** Every forum of a project (a prefix: invalidating it refreshes whichever forum is open). */
+  forums: (projectId: string) => ["forums", projectId] as const,
+  /** One forum's items, tags and updates. */
+  forum: (projectId: string, forumId: string) => ["forums", projectId, forumId] as const,
+  item: (itemId: string) => ["item", itemId] as const,
+  itemActivity: (itemId: string) => ["item-activity", itemId] as const,
 };
 
 export function isNetworkError(error: unknown) {
@@ -78,20 +80,20 @@ export function useCardMutation<K extends RpcName>(name: K, cardId: string, proj
   });
 }
 
-/** Mutations that return a full bug: write it straight into the cache and refresh the list. */
-export function useBugMutation<K extends RpcName>(name: K, bugId: string, projectId: string, options: Options<K, unknown> = {}) {
+/** Mutations that return a full forum item: write it straight into the cache and refresh the forum. */
+export function useItemMutation<K extends RpcName>(name: K, itemId: string, projectId: string, options: Options<K, unknown> = {}) {
   const queryClient = useQueryClient();
   return useRpcMutation(name, {
     ...options,
     onSuccess: (data, variables, context, mutationContext) => {
-      const maybeBug = data as unknown as BugDetailDTO | undefined;
-      if (maybeBug && typeof maybeBug === "object" && "permissions" in maybeBug && maybeBug.id === bugId) {
-        queryClient.setQueryData(qk.bug(bugId), maybeBug);
+      const maybeItem = data as unknown as ForumItemDetailDTO | undefined;
+      if (maybeItem && typeof maybeItem === "object" && "permissions" in maybeItem && maybeItem.id === itemId) {
+        queryClient.setQueryData(qk.item(itemId), maybeItem);
       } else {
-        void queryClient.invalidateQueries({ queryKey: qk.bug(bugId) });
+        void queryClient.invalidateQueries({ queryKey: qk.item(itemId) });
       }
-      void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
-      void queryClient.invalidateQueries({ queryKey: qk.bugActivity(bugId) });
+      void queryClient.invalidateQueries({ queryKey: qk.forums(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.itemActivity(itemId) });
       options.onSuccess?.(data, variables, context, mutationContext);
     },
   });

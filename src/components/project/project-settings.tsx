@@ -18,10 +18,11 @@ import { CreateBoardDialog } from "../board/board-switcher";
 import { UserAvatar } from "../domain/avatar";
 import { BoardIcon } from "../domain/board-icon";
 import { LabelChip } from "../domain/state";
+import { NewForumDialog } from "../forums/forum-dialogs";
 import { ProjectDiscordFeeds, useDiscordStatus } from "../integrations/discord-settings";
 import { PROJECT_EMOJIS } from "../shell/create-project-dialog";
 import { Button } from "../ui/button";
-import { Checkbox, Select, Switch } from "../ui/controls";
+import { Checkbox, Select, Skeleton, Switch } from "../ui/controls";
 import { TipAnchor, useTipOnOpen } from "../tutorial/tutorial";
 import { ConfirmDialog } from "../ui/dialog";
 import { Input, Label, Textarea } from "../ui/input";
@@ -390,33 +391,49 @@ function Workflow({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
   );
 }
 
-function Bugs({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
+function Forums({ board, canManage, studioSlug }: { board: BoardDTO; canManage: boolean; studioSlug: string }) {
   const queryClient = useQueryClient();
-  const p = board.project;
-  const update = useRpcMutation("project.update", {
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: qk.board(p.id) });
-      toast.success("Saved.");
-    },
-  });
-  const current = p.settings.defaultBugReviewerId ?? "";
+  const projectId = board.project.id;
+  const { data } = useQuery({ queryKey: ["forum-list", projectId], queryFn: () => rpc("forum.list", { projectId, includeArchived: true }) });
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["forum-list", projectId] });
+    void queryClient.invalidateQueries({ queryKey: ["projects"] });
+    void queryClient.invalidateQueries({ queryKey: qk.forums(projectId) });
+  };
+  const update = useRpcMutation("forum.update", { onSuccess: refresh });
+  const [creating, setCreating] = useState(false);
+  const list = data ?? [];
   return (
-    <Section id="bugs" title="Bugs" description="Bug reports live beside the boards, grouped by update. Tags (Lobby, Play Area, UI…) are managed on the Bugs page.">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-[13px] font-medium">Default bug reviewer</p>
-          <p className="text-[12px] text-fg-muted">Verifies fixes on every new bug — the lead scripter, typically. Reporters with assign rights can pick someone else.</p>
+    <Section id="forums" title="Forums" description="Trackers beside the boards. Bugs and QA come with every project; add your own for a playtest or an update's polish list. Each forum has its own tags, key prefix and default reviewer (set from the forum's page).">
+      {list.length ? (
+        <ul className="divide-y divide-border rounded-lg border border-border">
+          {list.map((f) => (
+            <li key={f.id} className={cn("flex flex-wrap items-center gap-2.5 px-3 py-2", f.archived && "opacity-60")}>
+              <span className="flex size-5 items-center justify-center text-[15px]">{f.icon}</span>
+              <Link href={`/${studioSlug}/${board.project.slug}/f/${f.slug}`} className="min-w-32 flex-1 text-[13px] font-medium hover:underline">
+                {f.name}
+              </Link>
+              <span className="font-mono text-[11px] text-fg-subtle">{board.project.key}-{f.keyPrefix}…</span>
+              <span className="text-[11.5px] text-fg-subtle">{f.kind === "CUSTOM" ? "Custom" : "Standard"}</span>
+              {canManage && f.kind === "CUSTOM" ? (
+                <Button size="xs" variant="ghost" loading={update.isPending && update.variables?.forumId === f.id} onClick={() => update.mutate({ forumId: f.id, archived: !f.archived })}>
+                  {f.archived ? <ArchiveRestore /> : <Archive />} {f.archived ? "Restore" : "Archive"}
+                </Button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <Skeleton className="h-16" />
+      )}
+      {canManage ? (
+        <div className="mt-3">
+          <Button variant="secondary" onClick={() => setCreating(true)}>
+            <Plus /> New forum
+          </Button>
+          <NewForumDialog open={creating} onOpenChange={setCreating} projectId={projectId} studioSlug={studioSlug} projectSlug={board.project.slug} members={board.members} />
         </div>
-        <div className="w-56 max-w-full">
-          <Select
-            aria-label="Default bug reviewer"
-            disabled={!canEdit}
-            value={current}
-            onValueChange={(v) => update.mutate({ projectId: p.id, settings: { defaultBugReviewerId: v || null } })}
-            options={[{ value: "", label: "Nobody (any manager)" }, ...board.members.map((m) => ({ value: m.id, label: m.displayName, icon: <UserAvatar user={m} size="xs" /> }))]}
-          />
-        </div>
-      </div>
+      ) : null}
     </Section>
   );
 }
@@ -641,7 +658,7 @@ export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: Bo
     ["workflow", "Board & workflow"],
     ["labels", "Labels"],
     ["milestones", "Milestones"],
-    ["bugs", "Bugs"],
+    ["forums", "Forums"],
     ...(showDiscord ? [["discord", "Discord feeds"]] : []),
     ["archived", "Archived items"],
     ...(perms.has("project.delete") ? [["danger", "Danger zone"]] : []),
@@ -672,7 +689,7 @@ export function ProjectSettings({ initialBoard, studioSlug }: { initialBoard: Bo
           <Workflow board={board} canEdit={canEdit} />
           <Labels board={board} canEdit={perms.has("label.manage")} />
           <Milestones board={board} canEdit={perms.has("milestone.manage")} />
-          <Bugs board={board} canEdit={canEdit} />
+          <Forums board={board} canManage={perms.has("forum.manage") && !board.project.archived} studioSlug={studioSlug} />
           {showDiscord && discordStatus.data ? <ProjectDiscordFeeds board={board} status={discordStatus.data} studioSlug={studioSlug} canManage={!board.project.archived} /> : null}
           <Section id="archived" title="Archived items" description="Restore anything that was archived — boards, columns, cards, deliverables and files.">
             <ArchivedItems projectId={board.project.id} canDelete={perms.has("card.delete")} canRestoreColumns={perms.has("column.manage")} />

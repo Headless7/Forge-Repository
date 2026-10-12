@@ -1,17 +1,9 @@
-import { notFound } from "next/navigation";
-import { BugsPage } from "@/components/bugs/bugs-page";
-import { getProjectAccessBySlug } from "@/server/access";
-import { actorFor, requireSession } from "@/server/auth/current";
-import { listBugs } from "@/server/services/bugs";
-import { listProjectMembers } from "@/server/services/members-query";
+import { permanentRedirect } from "next/navigation";
 
-export const metadata = { title: "Bugs" };
-
-export default async function ProjectBugsPage({ params }: { params: Promise<{ studio: string; project: string }> }) {
+/** The bug tracker's first address; it now lives with the other forums at /f/bugs. */
+export default async function LegacyBugsPage({ params, searchParams }: { params: Promise<{ studio: string; project: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { studio, project } = await params;
-  const session = await requireSession();
-  const access = await getProjectAccessBySlug(session.user.id, studio, project);
-  if (!access) notFound();
-  const [initial, members] = await Promise.all([listBugs(actorFor(session), access.project.id), listProjectMembers(access.project)]);
-  return <BugsPage initial={initial} members={members} studioSlug={studio} projectSlug={project} />;
+  const { bug } = await searchParams;
+  const item = typeof bug === "string" && /^\d+$/.test(bug) ? `?item=${bug}` : "";
+  permanentRedirect(`/${studio}/${project}/f/bugs${item}`);
 }

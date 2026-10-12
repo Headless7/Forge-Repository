@@ -10,13 +10,13 @@ import type { AttachmentDTO } from "@/lib/types";
 import { cn, formatBytes } from "@/lib/utils";
 import { Button } from "../ui/button";
 
-type Purpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "bug";
+type Purpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "item";
 
 export interface UploadItem {
   id: string;
-  /** The card — or, for a "bug" upload, the bug — the file goes to. */
+  /** The card — or, for an "item" upload, the forum item — the file goes to. */
   cardId: string;
-  target: "card" | "bug";
+  target: "card" | "item";
   cardTitle: string;
   file: File;
   purpose: Purpose;
@@ -30,10 +30,10 @@ export interface UploadItem {
 }
 
 export interface UploadTarget {
-  /** A card id, or a bug id when `kind` is "bug". */
+  /** A card id, or a forum item id when `kind` is "item". */
   id: string;
-  /** What `id` names. Bug uploads use the "bug" purpose and refresh the bug instead of a card. */
-  kind?: "card" | "bug";
+  /** What `id` names. Item uploads use the "item" purpose and refresh the item instead of a card. */
+  kind?: "card" | "item";
   projectId: string;
   title: string;
   /** The deliverable new revisions/files belong to. Omitted for simple (single-deliverable) cards. */
@@ -119,7 +119,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [items, setItems] = useState<UploadItem[]>([]);
   const projects = useRef(new Map<string, string>());
-  const kinds = useRef(new Map<string, "card" | "bug">());
+  const kinds = useRef(new Map<string, "card" | "item">());
 
   const patch = useCallback((id: string, update: Partial<UploadItem>) => {
     setItems((list) => list.map((i) => (i.id === id ? { ...i, ...update } : i)));
@@ -128,10 +128,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(
     (targetId: string) => {
       const projectId = projects.current.get(targetId);
-      if (kinds.current.get(targetId) === "bug") {
-        void queryClient.invalidateQueries({ queryKey: qk.bug(targetId) });
-        void queryClient.invalidateQueries({ queryKey: qk.bugActivity(targetId) });
-        if (projectId) void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
+      if (kinds.current.get(targetId) === "item") {
+        void queryClient.invalidateQueries({ queryKey: qk.item(targetId) });
+        void queryClient.invalidateQueries({ queryKey: qk.itemActivity(targetId) });
+        if (projectId) void queryClient.invalidateQueries({ queryKey: qk.forums(projectId) });
         return;
       }
       void queryClient.invalidateQueries({ queryKey: qk.card(targetId) });
@@ -146,8 +146,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       try {
         const intent = await rpc(
           "upload.create",
-          item.target === "bug"
-            ? { bugId: item.cardId, filename: item.file.name || "pasted-image.png", size: item.file.size, contentType: item.file.type || "application/octet-stream", purpose: "bug" }
+          item.target === "item"
+            ? { itemId: item.cardId, filename: item.file.name || "pasted-image.png", size: item.file.size, contentType: item.file.type || "application/octet-stream", purpose: "item" }
             : {
                 cardId: item.cardId,
                 filename: item.file.name || "pasted-image.png",

@@ -15,10 +15,10 @@ export type RealtimeEvent =
       cardIds: string[];
       /** Whether the board listing changed (cards added/moved/restyled, columns …). */
       board: boolean;
-      /** Bugs whose detail view should refresh (the project's bug list refreshes with any of these). */
-      bugIds?: string[];
-      /** The bug list changed without a particular bug (tags, bulk changes). */
-      bugs?: boolean;
+      /** Forum items whose detail view should refresh (the project's forums refresh with any of these). */
+      itemIds?: string[];
+      /** A forum's list changed without a particular item (tags, bulk changes). */
+      forums?: boolean;
       /** Browser tab that caused the change, so it can skip its own echo. */
       clientId?: string | null;
     }
@@ -83,17 +83,17 @@ const MAX_CARD_IDS = 100;
 export function emitProjectChange(
   projectId: string,
   cardIds: Array<string | null | undefined>,
-  options: { board?: boolean; clientId?: string | null; bugIds?: string[]; bugs?: boolean } = {},
+  options: { board?: boolean; clientId?: string | null; itemIds?: string[]; forums?: boolean } = {},
 ) {
   const ids = [...new Set(cardIds.filter((id): id is string => Boolean(id)))];
-  const bugIds = [...new Set(options.bugIds ?? [])];
+  const itemIds = [...new Set(options.itemIds ?? [])];
   const event: RealtimeEvent = {
     type: "project",
     projectId,
     cardIds: ids.length > MAX_CARD_IDS ? [] : ids,
     board: options.board ?? true,
-    ...(bugIds.length ? { bugIds: bugIds.length > MAX_CARD_IDS ? [] : bugIds } : {}),
-    ...(options.bugs || bugIds.length ? { bugs: true } : {}),
+    ...(itemIds.length ? { itemIds: itemIds.length > MAX_CARD_IDS ? [] : itemIds } : {}),
+    ...(options.forums || itemIds.length ? { forums: true } : {}),
     clientId: options.clientId ?? null,
   };
   realtime()

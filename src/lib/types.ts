@@ -3,16 +3,17 @@
  * Dates are ISO strings so every DTO is JSON-serialisable.
  */
 import type { NotificationType } from "./notifications";
-import type { BugPermissions, CardPermissions, MemberAccess, Permission, Role } from "./permissions";
+import type { CardPermissions, ItemPermissions, MemberAccess, Permission, Role } from "./permissions";
 
 export type CardState = "NOT_SUBMITTED" | "IN_PROGRESS" | "NEEDS_REVIEW" | "CHANGES_REQUESTED" | "APPROVED";
 export type Priority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
 export type CardDisplayMode = "VISUAL" | "COMPACT";
 export type AttachmentKind = "IMAGE" | "VIDEO" | "AUDIO" | "ROBLOX" | "FILE";
-export type AttachmentPurpose = "VERSION" | "CARD" | "COMMENT" | "RESOURCE" | "COVER" | "CHECKLIST" | "BUG";
-export type BugStatus = "OPEN" | "IN_PROGRESS" | "FIXED" | "VERIFIED" | "CLOSED";
-export type BugPriority = "LOW" | "MEDIUM" | "HIGH" | "GAME_BREAKING";
-export type BugResolution = "WONT_FIX" | "CANNOT_REPRODUCE" | "DUPLICATE" | "NOT_A_BUG";
+export type AttachmentPurpose = "VERSION" | "CARD" | "COMMENT" | "RESOURCE" | "COVER" | "CHECKLIST" | "ITEM";
+export type ForumKind = "BUGS" | "QA" | "CUSTOM";
+export type ItemStatus = "OPEN" | "IN_PROGRESS" | "FIXED" | "VERIFIED" | "CLOSED";
+export type ItemPriority = "LOW" | "MEDIUM" | "HIGH" | "GAME_BREAKING";
+export type ItemResolution = "WONT_FIX" | "CANNOT_REPRODUCE" | "DUPLICATE" | "NOT_A_BUG";
 export type ProductionStatus = "TODO" | "COMPLETED" | "PUBLISHED";
 export type BoardView = "CATEGORY" | "PRODUCTION" | "TIMELINE" | "CALENDAR";
 export type DeliverableLinkType = "DEPENDENCY" | "ASSOCIATION";
@@ -30,8 +31,11 @@ export interface ProjectSettings {
   requireFeedbackForChanges: boolean;
   /** Added as reviewers on every new card. */
   defaultReviewerIds: string[];
-  /** Verifies fixes on every new bug report unless the reporter picks someone else (the lead scripter, typically). */
-  defaultBugReviewerId?: string | null;
+}
+
+export interface ForumSettings {
+  /** Verifies every new item of the forum unless the reporter picks someone else (the lead scripter, typically). */
+  defaultReviewerId: string | null;
 }
 
 export interface CardLink {
@@ -413,6 +417,8 @@ export interface BoardDTO {
   members: MemberDTO[];
   labels: LabelDTO[];
   milestones: MilestoneDTO[];
+  /** Live forums of the project (Bugs, QA, custom ones), for the header menu. */
+  forums: Array<{ id: string; slug: string; name: string; icon: string }>;
   viewer: ViewerDTO;
   prefs: { collapsedColumnIds: string[]; view: BoardView };
   /** This board's own background: a preset (null = the project's), or an uploaded image shown instead. */
@@ -421,10 +427,10 @@ export interface BoardDTO {
 
 export interface AttachmentDTO {
   id: string;
-  /** Null for files on a bug report. */
+  /** Null for files on a forum item. */
   cardId: string | null;
-  /** The bug report a BUG file belongs to. */
-  bugId: string | null;
+  /** The forum item (bug report, QA check) an ITEM file belongs to. */
+  itemId: string | null;
   versionId: string | null;
   deliverableId: string | null;
   commentId: string | null;
@@ -549,8 +555,8 @@ export interface ActivityDTO {
   actor: UserDTO | null;
   cardId: string | null;
   card: { id: string; key: string; title: string } | null;
-  /** The bug report a bug.* event is about. */
-  bug: { id: string; number: number; key: string; title: string } | null;
+  /** The forum item an item.* event is about. */
+  item: { id: string; number: number; key: string; title: string; forumSlug: string; forumName: string } | null;
   project: { id: string; name: string; slug: string; icon: string } | null;
   data: Record<string, unknown>;
   createdAt: string;
@@ -679,8 +685,8 @@ export interface NotificationDTO {
   /** The board the card is on. */
   board: { number: number; name: string } | null;
   card: { id: string; key: string; title: string } | null;
-  /** The bug report it's about (bug notifications). */
-  bug: { id: string; number: number; key: string; title: string } | null;
+  /** The forum item it's about (item notifications). */
+  item: { id: string; number: number; key: string; title: string; forumSlug: string; forumName: string } | null;
   /** The deliverable (and revision) it's about, when it's about one. */
   deliverable: { id: string; number: number; name: string } | null;
   versionNumber: number | null;
@@ -712,6 +718,8 @@ export interface ProjectListItemDTO {
   counts: { cards: number; needsReview: number; changesRequested: number; approved: number; inProgress: number };
   /** Live boards in switcher order (the first is where the project opens). */
   boards: Array<{ id: string; number: number; name: string; icon: string | null }>;
+  /** Live forums (Bugs, QA, custom ones) in order. */
+  forums: Array<{ id: string; slug: string; name: string; icon: string }>;
   /** The viewer's effective role here allows the producer dashboard (project overrides count). */
   canViewReports: boolean;
 }
@@ -726,25 +734,42 @@ export interface SearchResultDTO {
   snippet: string | null;
 }
 
-// ── Bugs ────────────────────────────────────────────────────────────────────
+// ── Forums ──────────────────────────────────────────────────────────────────
 
-export interface BugTagDTO {
+export interface ForumDTO {
+  id: string;
+  projectId: string;
+  slug: string;
+  name: string;
+  description: string;
+  icon: string;
+  kind: ForumKind;
+  keyPrefix: string;
+  /** What one item is called ("bug", "issue"). */
+  itemLabel: string;
+  position: number;
+  settings: ForumSettings;
+  archived: boolean;
+}
+
+export interface ForumTagDTO {
   id: string;
   name: string;
   color: string;
 }
 
-/** A bug on the list: everything the rows, filters and counts need; no description or files. */
-export interface BugSummaryDTO {
+/** An item on the list: everything the rows, filters and counts need; no description or files. */
+export interface ForumItemSummaryDTO {
   id: string;
+  forumId: string;
   projectId: string;
   number: number;
   /** "UTD-B12". */
   key: string;
   title: string;
-  status: BugStatus;
-  priority: BugPriority;
-  resolution: BugResolution | null;
+  status: ItemStatus;
+  priority: ItemPriority;
+  resolution: ItemResolution | null;
   /** The update it belongs to (null: none). */
   milestoneId: string | null;
   assigneeId: string | null;
@@ -762,7 +787,7 @@ export interface BugSummaryDTO {
   updatedAt: string;
 }
 
-export interface BugCommentDTO {
+export interface ForumCommentDTO {
   id: string;
   authorId: string | null;
   body: string;
@@ -771,22 +796,24 @@ export interface BugCommentDTO {
   createdAt: string;
 }
 
-export interface BugDetailDTO extends BugSummaryDTO {
+export interface ForumItemDetailDTO extends ForumItemSummaryDTO {
   description: string;
   fixedById: string | null;
   verifiedById: string | null;
   closedById: string | null;
   attachments: AttachmentDTO[];
-  comments: BugCommentDTO[];
-  permissions: BugPermissions;
+  comments: ForumCommentDTO[];
+  permissions: ItemPermissions;
 }
 
-/** The project's bug tracker in one call; the list filters client-side. */
-export interface BugListDTO {
+/** One forum in one call: its items (resolved ones too), tags and the project's updates. The list filters client-side. */
+export interface ForumViewDTO {
   project: { id: string; name: string; slug: string; key: string; icon: string; archived: boolean };
-  bugs: BugSummaryDTO[];
-  tags: BugTagDTO[];
+  forum: ForumDTO;
+  /** Every live forum of the project, for switching. */
+  forums: ForumDTO[];
+  items: ForumItemSummaryDTO[];
+  tags: ForumTagDTO[];
   milestones: MilestoneDTO[];
   viewer: ViewerDTO;
-  settings: { defaultBugReviewerId: string | null };
 }

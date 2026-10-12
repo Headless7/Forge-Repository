@@ -31,8 +31,8 @@ import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { qk, useRpcMutation } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
-import { BUG_RESOLUTION_META } from "@/lib/bug-meta";
-import type { BugResolution, NotificationDTO } from "@/lib/types";
+import { ITEM_RESOLUTION_META } from "@/lib/forum-meta";
+import type { ItemResolution, NotificationDTO } from "@/lib/types";
 import { cn, formatTimecode, timeAgo } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { Button } from "../ui/button";
@@ -58,12 +58,12 @@ const TYPE_ICON: Record<NotificationType, ReactNode> = {
   DUE_CHANGED: <CalendarClock className="text-fg-muted" />,
   WORK_ARCHIVED: <Archive className="text-fg-muted" />,
   WATCHED_CARD: <Sparkles className="text-fg-muted" />,
-  BUG_ASSIGNED: <Bug className="text-info" />,
-  BUG_REVIEWER_ASSIGNED: <UserCheck className="text-state-review" />,
-  BUG_FIXED: <Eye className="text-state-review" />,
-  BUG_RESOLVED: <BugOff className="text-state-approved" />,
-  BUG_REOPENED: <CircleAlert className="text-state-changes" />,
-  BUG_COMMENT: <MessageSquare className="text-fg-muted" />,
+  ITEM_ASSIGNED: <Bug className="text-info" />,
+  ITEM_REVIEWER_ASSIGNED: <UserCheck className="text-state-review" />,
+  ITEM_FIXED: <Eye className="text-state-review" />,
+  ITEM_RESOLVED: <BugOff className="text-state-approved" />,
+  ITEM_REOPENED: <CircleAlert className="text-state-changes" />,
+  ITEM_COMMENT: <MessageSquare className="text-fg-muted" />,
 };
 
 function formatDue(iso: unknown) {
@@ -91,8 +91,10 @@ export function describeNotification(n: NotificationDTO): { headline: ReactNode;
     kind?: string;
     status?: string;
     resolution?: string;
+    itemNoun?: string;
   };
-  const cardTitle = <strong className="font-semibold text-fg">{n.card?.title ?? n.bug?.title ?? "a card"}</strong>;
+  const noun = d.itemNoun || "item";
+  const cardTitle = <strong className="font-semibold text-fg">{n.card?.title ?? n.item?.title ?? "a card"}</strong>;
   // "Rig on Boss" when it's about one deliverable of a card with several.
   const what = d.deliverable ? (
     <>
@@ -144,20 +146,20 @@ export function describeNotification(n: NotificationDTO): { headline: ReactNode;
       return { headline: <>{actor} {d.restored ? "restored" : "archived"} {what}</>, detail: null };
     case "WATCHED_CARD":
       return { headline: <>{actor} {d.change ?? "updated"} on {cardTitle}</>, detail: null };
-    case "BUG_ASSIGNED":
-      return { headline: <>{actor} gave you the bug {what} to fix</>, detail: null };
-    case "BUG_REVIEWER_ASSIGNED":
-      return { headline: <>{actor} made you the reviewer of the bug {what}</>, detail: null };
-    case "BUG_FIXED":
-      return { headline: <>{actor} marked the bug {what} as fixed</>, detail: "Verify it in game, then confirm or send it back." };
-    case "BUG_RESOLVED":
+    case "ITEM_ASSIGNED":
+      return { headline: <>{actor} gave you the {noun} {what}</>, detail: n.item?.forumName ?? null };
+    case "ITEM_REVIEWER_ASSIGNED":
+      return { headline: <>{actor} made you the reviewer of the {noun} {what}</>, detail: n.item?.forumName ?? null };
+    case "ITEM_FIXED":
+      return { headline: <>{actor} marked the {noun} {what} as done</>, detail: "Verify it in game, then confirm or send it back." };
+    case "ITEM_RESOLVED":
       return d.status === "CLOSED"
-        ? { headline: <>{actor} closed the bug {what}</>, detail: d.resolution ? BUG_RESOLUTION_META[d.resolution as BugResolution]?.label ?? null : null }
-        : { headline: <>{actor} verified the fix for {what}</>, detail: null };
-    case "BUG_REOPENED":
-      return { headline: <>{actor} reopened the bug {what}</>, detail: null };
-    case "BUG_COMMENT":
-      return { headline: <>{actor} commented on the bug {what}</>, detail: d.excerpt ?? null };
+        ? { headline: <>{actor} closed the {noun} {what}</>, detail: d.resolution ? ITEM_RESOLUTION_META[d.resolution as ItemResolution]?.label ?? null : null }
+        : { headline: <>{actor} verified the {noun} {what}</>, detail: null };
+    case "ITEM_REOPENED":
+      return { headline: <>{actor} reopened the {noun} {what}</>, detail: null };
+    case "ITEM_COMMENT":
+      return { headline: <>{actor} commented on the {noun} {what}</>, detail: d.excerpt ?? null };
   }
 }
 

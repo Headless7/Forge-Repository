@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { BUG_PRIORITY_META, BUG_RESOLUTION_META, BUG_STATUS_META } from "@/lib/bug-meta";
+import { ITEM_RESOLUTION_META, priorityLabel, statusLabel } from "@/lib/forum-meta";
 import { CARD_STATE_META, PRIORITY_META } from "@/lib/card-meta";
 import { formatDueDay } from "@/lib/checklist";
-import type { ActivityDTO, BugPriority, BugResolution, BugStatus, CardState, Priority } from "@/lib/types";
+import type { ActivityDTO, CardState, ForumKind, ItemPriority, ItemResolution, ItemStatus, Priority } from "@/lib/types";
 import { formatShortDate } from "@/lib/utils";
 
 type D = Record<string, unknown>;
@@ -17,7 +17,9 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
   const d = event.data as D;
   const card = withCard && event.card ? <strong className="font-medium text-fg">{event.card.title}</strong> : null;
   const it = card ?? "this card";
-  const bug = withCard ? <strong className="font-medium text-fg">{event.bug ? `${event.bug.key} ${event.bug.title}` : "a bug"}</strong> : "this bug";
+  const noun = typeof d.noun === "string" && d.noun ? d.noun : "item";
+  const kind = (typeof d.kind === "string" ? d.kind : "CUSTOM") as ForumKind;
+  const item = withCard ? <strong className="font-medium text-fg">{event.item ? `${event.item.key} ${event.item.title}` : `a ${noun}`}</strong> : `this ${noun}`;
   switch (event.type) {
     case "card.created":
       return <>created {card ?? "this card"}{d.columnName ? <> in <strong className="font-medium text-fg">{s(d.columnName)}</strong></> : null}</>;
@@ -109,39 +111,47 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
       return <>restored the board {s(d.boardName)}</>;
     case "project.created":
       return d.template ? <>created the project from {s(d.template)}</> : <>created the project</>;
-    case "bug.created":
-      return <>reported {bug}{d.milestoneName ? <> for <strong className="font-medium text-fg">{s(d.milestoneName)}</strong></> : null}</>;
-    case "bug.renamed":
-      return <>renamed {withCard ? "a bug" : "this bug"} from “{s(d.from)}” to “{s(d.to)}”</>;
-    case "bug.description_changed":
-      return <>updated the description{withCard ? <> of {bug}</> : null}</>;
-    case "bug.status_changed": {
-      const to = s(d.to) as BugStatus;
-      const reason = to === "CLOSED" && d.resolution ? <> ({BUG_RESOLUTION_META[s(d.resolution) as BugResolution]?.label ?? s(d.resolution)})</> : null;
-      if (to === "IN_PROGRESS" && (d.from === "FIXED" || d.from === "VERIFIED" || d.from === "CLOSED")) return <>sent {bug} back: not fixed yet</>;
-      if (to === "IN_PROGRESS") return <>started on {bug}</>;
-      if (to === "FIXED") return <>marked {bug} fixed — waiting for verification</>;
-      if (to === "VERIFIED") return <>verified the fix for {bug}</>;
-      if (to === "CLOSED") return <>closed {bug}{reason}</>;
-      if (to === "OPEN") return <>reopened {bug}</>;
-      return <>set {bug} to {(BUG_STATUS_META as Record<string, { label: string } | undefined>)[s(d.to)]?.label ?? s(d.to)}</>;
+    case "forum.created":
+      return <>created the forum <strong className="font-medium text-fg">{s(d.forumName)}</strong></>;
+    case "forum.renamed":
+      return <>renamed the forum {s(d.from)} to {s(d.to)}</>;
+    case "forum.archived":
+      return <>archived the forum {s(d.forumName)}</>;
+    case "forum.restored":
+      return <>restored the forum {s(d.forumName)}</>;
+    case "item.created":
+      return <>reported {item}{d.milestoneName ? <> for <strong className="font-medium text-fg">{s(d.milestoneName)}</strong></> : null}{withCard && event.item ? <> in {event.item.forumName}</> : null}</>;
+    case "item.renamed":
+      return <>renamed {withCard ? `a ${noun}` : `this ${noun}`} from “{s(d.from)}” to “{s(d.to)}”</>;
+    case "item.description_changed":
+      return <>updated the description{withCard ? <> of {item}</> : null}</>;
+    case "item.status_changed": {
+      const to = s(d.to) as ItemStatus;
+      const reason = to === "CLOSED" && d.resolution ? <> ({ITEM_RESOLUTION_META[s(d.resolution) as ItemResolution]?.label ?? s(d.resolution)})</> : null;
+      if (to === "IN_PROGRESS" && (d.from === "FIXED" || d.from === "VERIFIED" || d.from === "CLOSED")) return <>sent {item} back</>;
+      if (to === "IN_PROGRESS") return <>started on {item}</>;
+      if (to === "FIXED") return <>marked {item} {kind === "BUGS" ? "fixed" : "done"} — waiting for verification</>;
+      if (to === "VERIFIED") return <>verified {item}</>;
+      if (to === "CLOSED") return <>closed {item}{reason}</>;
+      if (to === "OPEN") return <>reopened {item}</>;
+      return <>set {item} to {(["OPEN", "IN_PROGRESS", "FIXED", "VERIFIED", "CLOSED"] as string[]).includes(to) ? statusLabel(kind, to).label : s(d.to)}</>;
     }
-    case "bug.priority_changed":
-      return <>set the priority{withCard ? <> of {bug}</> : null} to {BUG_PRIORITY_META[s(d.to) as BugPriority]?.label ?? s(d.to)}</>;
-    case "bug.milestone_changed":
-      return d.to ? <>moved {bug} into <strong className="font-medium text-fg">{s(d.to)}</strong></> : <>took {bug} out of its update</>;
-    case "bug.assignee_changed":
-      return d.userId ? <>gave {bug} to <strong className="font-medium text-fg">{resolveUser(s(d.userId))}</strong> to fix</> : <>unassigned {bug}</>;
-    case "bug.reviewer_changed":
-      return d.userId ? <>made <strong className="font-medium text-fg">{resolveUser(s(d.userId))}</strong> the reviewer{withCard ? <> of {bug}</> : null}</> : <>removed the reviewer{withCard ? <> of {bug}</> : null}</>;
-    case "bug.tags_changed":
-      return <>updated the tags{withCard ? <> of {bug}</> : null}</>;
-    case "bug.attachment_added":
-      return <>added {s(d.kind) === "VIDEO" ? "a clip" : "a picture"}{withCard ? <> to {bug}</> : null} ({s(d.filename)})</>;
-    case "bug.attachment_removed":
-      return <>removed {s(d.filename)}{withCard ? <> from {bug}</> : null}</>;
-    case "bug.commented":
-      return <>commented{withCard ? <> on {bug}</> : null}{d.excerpt ? <>: “{s(d.excerpt)}”</> : null}</>;
+    case "item.priority_changed":
+      return <>set the priority{withCard ? <> of {item}</> : null} to {(["LOW", "MEDIUM", "HIGH", "GAME_BREAKING"] as string[]).includes(s(d.to)) ? priorityLabel(kind, s(d.to) as ItemPriority) : s(d.to)}</>;
+    case "item.milestone_changed":
+      return d.to ? <>moved {item} into <strong className="font-medium text-fg">{s(d.to)}</strong></> : <>took {item} out of its update</>;
+    case "item.assignee_changed":
+      return d.userId ? <>gave {item} to <strong className="font-medium text-fg">{resolveUser(s(d.userId))}</strong></> : <>unassigned {item}</>;
+    case "item.reviewer_changed":
+      return d.userId ? <>made <strong className="font-medium text-fg">{resolveUser(s(d.userId))}</strong> the reviewer{withCard ? <> of {item}</> : null}</> : <>removed the reviewer{withCard ? <> of {item}</> : null}</>;
+    case "item.tags_changed":
+      return <>updated the tags{withCard ? <> of {item}</> : null}</>;
+    case "item.attachment_added":
+      return <>added {s(d.kind) === "VIDEO" ? "a clip" : "a picture"}{withCard ? <> to {item}</> : null} ({s(d.filename)})</>;
+    case "item.attachment_removed":
+      return <>removed {s(d.filename)}{withCard ? <> from {item}</> : null}</>;
+    case "item.commented":
+      return <>commented{withCard ? <> on {item}</> : null}{d.excerpt ? <>: “{s(d.excerpt)}”</> : null}</>;
     default:
       return <>{event.type.replace(/[._]/g, " ")}</>;
   }

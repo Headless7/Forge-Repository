@@ -1,10 +1,10 @@
 import { Skeleton } from "@/components/ui/controls";
 
-export default function BugsLoading() {
+export default function ForumLoading() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
       <Skeleton className="h-3 w-40" />
-      <Skeleton className="mt-2 h-7 w-24" />
+      <Skeleton className="mt-2 h-7 w-32" />
       <div className="mt-5 flex gap-1.5">
         {Array.from({ length: 4 }, (_, i) => (
           <Skeleton key={i} className="h-8 w-28 rounded-full" />

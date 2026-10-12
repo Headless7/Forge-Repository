@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, lt, notInArray, type SQL } from "drizzle-orm";
 import type { ActivityDTO } from "@/lib/types";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
-import { activityEvents, auditLogs, bugs, cards, projects } from "../db/schema";
+import { activityEvents, auditLogs, cards, forumItems, forums, projects } from "../db/schema";
 import type { Actor } from "./context";
 import { loadUsers, toUserDTO } from "./users-lookup";
 
@@ -62,18 +62,22 @@ export type ActivityType =
   | "board.restored"
   | "project.created"
   | "project.updated"
-  | "bug.created"
-  | "bug.renamed"
-  | "bug.description_changed"
-  | "bug.status_changed"
-  | "bug.priority_changed"
-  | "bug.milestone_changed"
-  | "bug.assignee_changed"
-  | "bug.reviewer_changed"
-  | "bug.tags_changed"
-  | "bug.attachment_added"
-  | "bug.attachment_removed"
-  | "bug.commented";
+  | "forum.created"
+  | "forum.renamed"
+  | "forum.archived"
+  | "forum.restored"
+  | "item.created"
+  | "item.renamed"
+  | "item.description_changed"
+  | "item.status_changed"
+  | "item.priority_changed"
+  | "item.milestone_changed"
+  | "item.assignee_changed"
+  | "item.reviewer_changed"
+  | "item.tags_changed"
+  | "item.attachment_added"
+  | "item.attachment_removed"
+  | "item.commented";
 
 const PROJECT_FEED_TYPES: ActivityType[] = [
   "card.created",
@@ -92,7 +96,8 @@ const PROJECT_FEED_TYPES: ActivityType[] = [
   "board.archived",
   "board.restored",
   "project.created",
-  "bug.created",
+  "forum.created",
+  "item.created",
 ];
 
 export async function logActivity(
@@ -101,7 +106,7 @@ export async function logActivity(
     studioId: string;
     projectId: string;
     cardId?: string | null;
-    bugId?: string | null;
+    itemId?: string | null;
     actorId: string | null;
     type: ActivityType;
     data?: Record<string, unknown>;
@@ -111,7 +116,7 @@ export async function logActivity(
     studioId: entry.studioId,
     projectId: entry.projectId,
     cardId: entry.cardId ?? null,
-    bugId: entry.bugId ?? null,
+    itemId: entry.itemId ?? null,
     actorId: entry.actorId,
     type: entry.type,
     data: entry.data ?? {},
@@ -140,9 +145,9 @@ export async function audit(
 async function hydrate(rows: Array<typeof activityEvents.$inferSelect>): Promise<ActivityDTO[]> {
   const userIds = rows.map((r) => r.actorId).filter((id): id is string => Boolean(id));
   const cardIds = [...new Set(rows.map((r) => r.cardId).filter((id): id is string => Boolean(id)))];
-  const bugIds = [...new Set(rows.map((r) => r.bugId).filter((id): id is string => Boolean(id)))];
+  const itemIds = [...new Set(rows.map((r) => r.itemId).filter((id): id is string => Boolean(id)))];
   const projectIds = [...new Set(rows.map((r) => r.projectId))];
-  const [users, cardRows, projectRows, bugRows] = await Promise.all([
+  const [users, cardRows, projectRows, itemRows] = await Promise.all([
     loadUsers(userIds),
     cardIds.length
       ? db
@@ -154,15 +159,21 @@ async function hydrate(rows: Array<typeof activityEvents.$inferSelect>): Promise
       .select({ id: projects.id, name: projects.name, slug: projects.slug, icon: projects.icon, key: projects.key })
       .from(projects)
       .where(inArray(projects.id, projectIds.length ? projectIds : ["00000000-0000-0000-0000-000000000000"])),
-    bugIds.length ? db.select({ id: bugs.id, number: bugs.number, title: bugs.title }).from(bugs).where(inArray(bugs.id, bugIds)) : Promise.resolve([]),
+    itemIds.length
+      ? db
+          .select({ id: forumItems.id, number: forumItems.number, title: forumItems.title, keyPrefix: forums.keyPrefix, forumSlug: forums.slug, forumName: forums.name })
+          .from(forumItems)
+          .innerJoin(forums, eq(forums.id, forumItems.forumId))
+          .where(inArray(forumItems.id, itemIds))
+      : Promise.resolve([]),
   ]);
   const cardMap = new Map(cardRows.map((c) => [c.id, c]));
-  const bugMap = new Map(bugRows.map((b) => [b.id, b]));
+  const itemMap = new Map(itemRows.map((b) => [b.id, b]));
   const projectMap = new Map(projectRows.map((p) => [p.id, p]));
   return Promise.all(
     rows.map(async (row) => {
       const card = row.cardId ? cardMap.get(row.cardId) : undefined;
-      const bug = row.bugId ? bugMap.get(row.bugId) : undefined;
+      const item = row.itemId ? itemMap.get(row.itemId) : undefined;
       const project = projectMap.get(row.projectId);
       const actor = row.actorId ? users.get(row.actorId) : undefined;
       return {
@@ -172,7 +183,7 @@ async function hydrate(rows: Array<typeof activityEvents.$inferSelect>): Promise
         actor: actor ? await toUserDTO(actor) : null,
         cardId: row.cardId,
         card: card && project ? { id: card.id, key: `${project.key}-${card.number}`, title: card.title } : null,
-        bug: bug && project ? { id: bug.id, number: bug.number, key: `${project.key}-B${bug.number}`, title: bug.title } : null,
+        item: item && project ? { id: item.id, number: item.number, key: `${project.key}-${item.keyPrefix}${item.number}`, title: item.title, forumSlug: item.forumSlug, forumName: item.forumName } : null,
         project: project ? { id: project.id, name: project.name, slug: project.slug, icon: project.icon } : null,
         data: row.data,
         createdAt: row.createdAt.toISOString(),
@@ -216,11 +227,11 @@ export async function listCardActivity(cardId: string, limit = 200): Promise<Act
   return hydrate(rows);
 }
 
-export async function listBugActivity(bugId: string, limit = 200): Promise<ActivityDTO[]> {
+export async function listItemActivity(itemId: string, limit = 200): Promise<ActivityDTO[]> {
   const rows = await db
     .select()
     .from(activityEvents)
-    .where(eq(activityEvents.bugId, bugId))
+    .where(eq(activityEvents.itemId, itemId))
     .orderBy(desc(activityEvents.createdAt))
     .limit(limit);
   return hydrate(rows);

@@ -137,8 +137,6 @@ export const projects = pgTable(
     cardCounter: integer().notNull().default(0),
     /** Last board number handed out (boards are numbered per project for stable URLs: /b/2). */
     boardCounter: integer().notNull().default(0),
-    /** Last bug number handed out (bugs are numbered per project: UTD-B12). */
-    bugCounter: integer().notNull().default(0),
     archivedAt: tsz(),
     createdById: uuid().references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),

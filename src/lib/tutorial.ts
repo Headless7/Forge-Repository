@@ -10,6 +10,7 @@
  * assignments, deliverable ownership, self-approval, archived/read-only), and copy never offers an
  * action the viewer can't take.
  */
+import { withArticle } from "./forum-meta";
 import type { CardState, ProductionStatus } from "./types";
 
 export type TipSide = "top" | "right" | "bottom" | "left";
@@ -52,8 +53,8 @@ export interface TipFacts {
   "access.scope": { place: "studio" | "project"; canManage: boolean };
   /** Account settings, once someone uses the Discord profile controls. */
   "account.discord-profile": { connected: boolean };
-  /** Beside a bug's actions the first time someone opens one. */
-  "bugs.workflow": { canFix: boolean; canVerify: boolean };
+  /** Beside a forum item's actions the first time someone opens one. `noun`: what the forum calls an item ("bug"). */
+  "forums.workflow": { canFix: boolean; canVerify: boolean; noun: string };
 }
 
 export type TipId = keyof TipFacts;
@@ -260,15 +261,15 @@ export const TIPS: { [K in TipId]: TipDefinition<TipFacts[K]> } = {
     side: "bottom",
     align: "start",
   },
-  "bugs.workflow": {
+  "forums.workflow": {
     version: 1,
-    title: () => "How a bug gets resolved",
+    title: (f) => `How ${withArticle(f.noun)} gets resolved`,
     body: (f) =>
       f.canVerify
-        ? "The assignee marks a bug Fixed; you then verify the fix in game and confirm it, or send it back. Until it's verified or closed, a bug stays in the Open list whichever update it belongs to."
+        ? `The assignee marks ${withArticle(f.noun)} done; you then verify it in game and confirm it, or send it back. Until it's verified or closed, ${withArticle(f.noun)} stays in the Open list whichever update it belongs to.`
         : f.canFix
-          ? "Start work to take a bug, then mark it Fixed; its reviewer verifies the fix in game before it counts as resolved. Until then it stays in the Open list whichever update it belongs to."
-          : "The assignee marks a bug Fixed and its reviewer verifies the fix in game before it counts as resolved. Until then it stays in the Open list whichever update it belongs to.",
+          ? `Start work to take ${withArticle(f.noun)}, then mark it done; its reviewer verifies it in game before it counts as resolved. Until then it stays in the Open list whichever update it belongs to.`
+          : `The assignee marks ${withArticle(f.noun)} done and its reviewer verifies it in game before it counts as resolved. Until then it stays in the Open list whichever update it belongs to.`,
     eligible: always,
     side: "bottom",
     align: "start",

@@ -6,7 +6,7 @@ import { POSITION_GAP, positionBetween, resolveInsertIndex, spacedPositions } fr
 import type { BoardDTO, BoardSummaryDTO, BoardView, CardDisplayMode, ColumnDTO, LabelDTO, MilestoneDTO, ProjectDTO } from "@/lib/types";
 import { assertProjectPermission, getProjectAccessBySlug, requireProject, type ProjectAccess, type ProjectRow } from "../access";
 import { db, type Executor } from "../db";
-import { boardColumns, boards, cards, labels, milestones, notifications, projects, userBoardPrefs } from "../db/schema";
+import { boardColumns, boards, cards, forums, labels, milestones, notifications, projects, userBoardPrefs } from "../db/schema";
 import { invalid, notFound } from "../errors";
 import { now } from "../clock";
 import { renderBackground } from "../media/process";
@@ -122,7 +122,7 @@ async function resolveBoard(access: ProjectAccess, ref: { boardId?: string | nul
 async function buildBoard(access: ProjectAccess, boardRow: BoardRow): Promise<BoardDTO> {
   const project = access.project;
   const boardId = boardRow.id;
-  const [columnRows, cardRows, labelRows, milestoneRows, members, prefRows, boardList] = await Promise.all([
+  const [columnRows, cardRows, labelRows, milestoneRows, members, prefRows, boardList, forumRows] = await Promise.all([
     db
       .select()
       .from(boardColumns)
@@ -146,6 +146,7 @@ async function buildBoard(access: ProjectAccess, boardRow: BoardRow): Promise<Bo
       .from(userBoardPrefs)
       .where(and(eq(userBoardPrefs.userId, access.userId), eq(userBoardPrefs.boardId, boardId))),
     listBoards(project.id),
+    db.select({ id: forums.id, slug: forums.slug, name: forums.name, icon: forums.icon }).from(forums).where(and(eq(forums.projectId, project.id), isNull(forums.archivedAt))).orderBy(asc(forums.position), asc(forums.createdAt)),
   ]);
 
   const summaries = await summarizeCards(
@@ -164,6 +165,7 @@ async function buildBoard(access: ProjectAccess, boardRow: BoardRow): Promise<Bo
     members,
     labels: labelRows.map((l): LabelDTO => ({ id: l.id, name: l.name, color: l.color })),
     milestones: milestoneRows.map(milestoneToDTO),
+    forums: forumRows,
     background: {
       preset: boardRow.background,
       imageUrl: boardRow.backgroundImageKey ? await storage().signedUrl(boardRow.backgroundImageKey) : null,

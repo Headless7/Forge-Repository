@@ -9,11 +9,12 @@ import {
   assetVersions,
   boardColumns,
   boards,
-  bugs,
   cards,
   deliverables,
   discordDmDeliveries,
   discordDmRecipients,
+  forumItems,
+  forums,
   notificationPreferences,
   notifications,
   oauthAccounts,
@@ -44,8 +45,8 @@ export interface NotifyInput {
   studioId: string;
   projectId?: string | null;
   cardId?: string | null;
-  /** Bug notifications point at the bug instead of a card. */
-  bugId?: string | null;
+  /** Item notifications point at the forum item instead of a card. */
+  itemId?: string | null;
   deliverableId?: string | null;
   versionId?: string | null;
   commentId?: string | null;
@@ -63,10 +64,11 @@ export function notificationPath(row: {
   deliverableNumber?: number | null;
   versionNumber?: number | null;
   commentId?: string | null;
-  /** A bug notification opens the project's bug tracker on that bug. */
-  bugNumber?: number | null;
+  /** An item notification opens its forum on that item. */
+  forumSlug?: string | null;
+  itemNumber?: number | null;
 }): string {
-  if (row.projectSlug && row.bugNumber) return `/${row.studioSlug}/${row.projectSlug}/bugs?bug=${row.bugNumber}`;
+  if (row.projectSlug && row.forumSlug && row.itemNumber) return `/${row.studioSlug}/${row.projectSlug}/f/${row.forumSlug}?item=${row.itemNumber}`;
   const project = row.projectSlug ? `/${row.studioSlug}/${row.projectSlug}${row.boardNumber ? `/b/${row.boardNumber}` : ""}` : null;
   if (project && row.cardKey) {
     const params = new URLSearchParams({ card: row.cardKey });
@@ -104,7 +106,8 @@ function withWork(query: any): any {
     .leftJoin(boardColumns, eq(boardColumns.id, cards.columnId))
     .leftJoin(boards, eq(boards.id, cards.boardId))
     .leftJoin(deliverables, eq(deliverables.id, notifications.deliverableId))
-    .leftJoin(bugs, eq(bugs.id, notifications.bugId));
+    .leftJoin(forumItems, eq(forumItems.id, notifications.itemId))
+    .leftJoin(forums, eq(forums.id, forumItems.forumId));
 }
 
 /** Whether the work a new notification would be about is archived (then it isn't created at all). */
@@ -291,7 +294,7 @@ export async function notify(ex: Executor, input: NotifyInput): Promise<string[]
         studioId: input.studioId,
         projectId: input.projectId ?? null,
         cardId: input.cardId ?? null,
-        bugId: input.bugId ?? null,
+        itemId: input.itemId ?? null,
         deliverableId: input.deliverableId ?? null,
         versionId: input.versionId ?? null,
         commentId: input.commentId ?? null,
@@ -403,8 +406,11 @@ export async function listNotifications(
         deliverableNumber: deliverables.number,
         deliverableName: deliverables.name,
         versionNumber: assetVersions.versionNumber,
-        bugNumber: bugs.number,
-        bugTitle: bugs.title,
+        itemNumber: forumItems.number,
+        itemTitle: forumItems.title,
+        forumSlug: forums.slug,
+        forumName: forums.name,
+        forumPrefix: forums.keyPrefix,
       })
       .from(notifications)
       .innerJoin(studios, eq(studios.id, notifications.studioId))
@@ -431,8 +437,11 @@ export async function listNotifications(
     deliverableNumber: number | null;
     deliverableName: string | null;
     versionNumber: number | null;
-    bugNumber: number | null;
-    bugTitle: string | null;
+    itemNumber: number | null;
+    itemTitle: string | null;
+    forumSlug: string | null;
+    forumName: string | null;
+    forumPrefix: string | null;
   };
   const page = (rows as Row[]).slice(0, limit);
   const actors = await loadUsers(page.map((r) => r.n.actorId).filter((id): id is string => Boolean(id)));
@@ -451,7 +460,7 @@ export async function listNotifications(
             : null,
         board: r.n.cardId && r.boardNumber != null ? { number: r.boardNumber, name: r.boardName ?? "" } : null,
         card: r.n.cardId && cardKey ? { id: r.n.cardId, key: cardKey, title: r.cardTitle ?? "" } : null,
-        bug: r.n.bugId && r.bugNumber != null && r.projectKey ? { id: r.n.bugId, number: r.bugNumber, key: `${r.projectKey}-B${r.bugNumber}`, title: r.bugTitle ?? "" } : null,
+        item: r.n.itemId && r.itemNumber != null && r.projectKey ? { id: r.n.itemId, number: r.itemNumber, key: `${r.projectKey}-${r.forumPrefix ?? ""}${r.itemNumber}`, title: r.itemTitle ?? "", forumSlug: r.forumSlug ?? "", forumName: r.forumName ?? "" } : null,
         deliverable: r.n.deliverableId && r.deliverableNumber != null ? { id: r.n.deliverableId, number: r.deliverableNumber, name: r.deliverableName ?? "" } : null,
         versionNumber: r.versionNumber ?? null,
         commentId: r.n.commentId,
@@ -466,7 +475,8 @@ export async function listNotifications(
           deliverableNumber: r.deliverableNumber,
           versionNumber: r.versionNumber,
           commentId: r.n.commentId,
-          bugNumber: r.n.bugId ? r.bugNumber : null,
+          forumSlug: r.forumSlug,
+          itemNumber: r.n.itemId ? r.itemNumber : null,
         }),
       } satisfies NotificationDTO;
     }),
@@ -544,19 +554,20 @@ export async function notificationLink(ex: Executor, n: NotificationRecord): Pro
         cardNumber: cards.number,
         boardNumber: boards.number,
         deliverableNumber: deliverables.number,
-        bugNumber: bugs.number,
+        itemNumber: forumItems.number,
+        forumSlug: forums.slug,
       })
       .from(notifications)
       .innerJoin(studios, eq(studios.id, notifications.studioId)),
   )
     .where(eq(notifications.id, n.id))
     .limit(1);
-  const r = (rows as Array<{ studioSlug: string; projectSlug: string | null; projectName: string | null; projectKey: string | null; cardNumber: number | null; boardNumber: number | null; deliverableNumber: number | null; bugNumber: number | null }>)[0];
+  const r = (rows as Array<{ studioSlug: string; projectSlug: string | null; projectName: string | null; projectKey: string | null; cardNumber: number | null; boardNumber: number | null; deliverableNumber: number | null; itemNumber: number | null; forumSlug: string | null }>)[0];
   const [version] = n.versionId ? await ex.select({ number: assetVersions.versionNumber }).from(assetVersions).where(eq(assetVersions.id, n.versionId)) : [];
   const cardKey = r?.projectKey && r.cardNumber != null ? `${r.projectKey}-${r.cardNumber}` : null;
   return {
     path: r
-      ? notificationPath({ studioSlug: r.studioSlug, projectSlug: r.projectSlug, boardNumber: r.boardNumber, cardKey, deliverableNumber: r.deliverableNumber, versionNumber: version?.number, commentId: n.commentId, bugNumber: n.bugId ? r.bugNumber : null })
+      ? notificationPath({ studioSlug: r.studioSlug, projectSlug: r.projectSlug, boardNumber: r.boardNumber, cardKey, deliverableNumber: r.deliverableNumber, versionNumber: version?.number, commentId: n.commentId, forumSlug: r.forumSlug, itemNumber: n.itemId ? r.itemNumber : null })
       : "/",
     projectName: r?.projectName ?? null,
     cardKey,

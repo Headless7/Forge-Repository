@@ -3,10 +3,10 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, Plus, Search, Tag, Trash2, UserRound } from "lucide-react";
 import { useState } from "react";
-import { SUGGESTED_BUG_TAGS } from "@/lib/bug-meta";
+import { SUGGESTED_FORUM_TAGS } from "@/lib/forum-meta";
 import { LABEL_COLORS } from "@/lib/column-icons";
 import { qk, useRpcMutation } from "@/lib/queries";
-import type { BugTagDTO, MemberDTO } from "@/lib/types";
+import type { ForumTagDTO, MemberDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { DiscordHandle } from "../domain/discord-icon";
@@ -17,7 +17,7 @@ import { Dialog, DialogContent } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/menu";
 
-/** One person (the assignee or the reviewer of a bug): a searchable popover, or just the person when read-only. */
+/** One person (the assignee or the reviewer of an item): a searchable popover, or just the person when read-only. */
 export function PersonPicker({
   value,
   members,
@@ -123,28 +123,30 @@ export function PersonPicker({
   );
 }
 
-/** Creates a tag and tells the tracker; `onCreated` gets the new tag (e.g. to select it). */
-function useCreateTag(projectId: string, onCreated?: (tag: BugTagDTO) => void) {
+/** Creates a tag and tells the forum; `onCreated` gets the new tag (e.g. to select it). */
+function useCreateTag(projectId: string, onCreated?: (tag: ForumTagDTO) => void) {
   const queryClient = useQueryClient();
-  return useRpcMutation("bugTag.create", {
+  return useRpcMutation("forumTag.create", {
     onSuccess: (tag) => {
-      void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.forums(projectId) });
       onCreated?.(tag);
     },
   });
 }
 
-/** Where a bug happens: chips plus a popover to toggle tags (and, for managers, make new ones). */
+/** Where an item happens: chips plus a popover to toggle tags (and, for managers, make new ones). */
 export function TagPicker({
   selected,
   tags,
+  forumId,
   projectId,
   canEdit,
   canManage,
   onChange,
 }: {
   selected: string[];
-  tags: BugTagDTO[];
+  tags: ForumTagDTO[];
+  forumId: string;
   projectId: string;
   canEdit: boolean;
   canManage: boolean;
@@ -156,7 +158,7 @@ export function TagPicker({
     onChange([...selected, tag.id]);
     setName("");
   });
-  const chosen = selected.map((id) => tags.find((t) => t.id === id)).filter((t): t is BugTagDTO => Boolean(t));
+  const chosen = selected.map((id) => tags.find((t) => t.id === id)).filter((t): t is ForumTagDTO => Boolean(t));
   const toggle = (id: string) => onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
   const chips = chosen.map((t) => <LabelChip key={t.id} label={t} />);
   if (!canEdit) return <span className="flex flex-wrap gap-1">{chips.length ? chips : <span className="text-fg-subtle">None</span>}</span>;
@@ -188,14 +190,14 @@ export function TagPicker({
             })}
           </ul>
         ) : (
-          <p className="px-1 text-[12.5px] text-fg-muted">No tags yet.{canManage ? " Make some: where in the game a bug happens." : ""}</p>
+          <p className="px-1 text-[12.5px] text-fg-muted">No tags yet.{canManage ? " Make some: where in the game it happens." : ""}</p>
         )}
         {canManage ? (
           <div className="border-t border-border pt-2">
             {!tags.length ? (
               <div className="mb-2 flex flex-wrap gap-1">
-                {SUGGESTED_BUG_TAGS.map((s) => (
-                  <Button key={s.name} size="xs" variant="secondary" loading={create.isPending && create.variables?.name === s.name} onClick={() => create.mutate({ projectId, name: s.name, color: s.color })}>
+                {SUGGESTED_FORUM_TAGS.map((s) => (
+                  <Button key={s.name} size="xs" variant="secondary" loading={create.isPending && create.variables?.name === s.name} onClick={() => create.mutate({ forumId, name: s.name, color: s.color })}>
                     <Plus /> {s.name}
                   </Button>
                 ))}
@@ -205,7 +207,7 @@ export function TagPicker({
               className="flex items-center gap-1.5"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (name.trim()) create.mutate({ projectId, name: name.trim(), color });
+                if (name.trim()) create.mutate({ forumId, name: name.trim(), color });
               }}
             >
               <ColorDot color={color} onChange={setColor} />
@@ -235,18 +237,18 @@ function ColorDot({ color, onChange }: { color: string; onChange: (color: string
   );
 }
 
-/** Rename, recolour and delete the project's bug tags (managers). */
-export function TagManagerDialog({ open, onOpenChange, tags, projectId }: { open: boolean; onOpenChange: (open: boolean) => void; tags: BugTagDTO[]; projectId: string }) {
+/** Rename, recolour and delete a forum's tags (managers). */
+export function TagManagerDialog({ open, onOpenChange, tags, forumId, projectId }: { open: boolean; onOpenChange: (open: boolean) => void; tags: ForumTagDTO[]; forumId: string; projectId: string }) {
   const queryClient = useQueryClient();
-  const refresh = () => void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
-  const update = useRpcMutation("bugTag.update", { onSuccess: refresh });
-  const remove = useRpcMutation("bugTag.delete", { onSuccess: refresh });
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: qk.forums(projectId) });
+  const update = useRpcMutation("forumTag.update", { onSuccess: refresh });
+  const remove = useRpcMutation("forumTag.delete", { onSuccess: refresh });
   const [name, setName] = useState("");
   const [color, setColor] = useState<string>(LABEL_COLORS[0]!);
   const create = useCreateTag(projectId, () => setName(""));
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="Bug tags" description="Where in the game a bug happens — Lobby, Play Area, UI… Every bug can carry several.">
+      <DialogContent title="Tags" description="Where in the game an item happens — Lobby, Play Area, UI… Every item can carry several.">
         {tags.length ? (
           <ul className="divide-y divide-border rounded-lg border border-border">
             {tags.map((t) => (
@@ -272,8 +274,8 @@ export function TagManagerDialog({ open, onOpenChange, tags, projectId }: { open
         )}
         {!tags.length ? (
           <div className="mt-3 flex flex-wrap gap-1.5">
-            {SUGGESTED_BUG_TAGS.map((s) => (
-              <Button key={s.name} size="sm" variant="secondary" onClick={() => create.mutate({ projectId, name: s.name, color: s.color })}>
+            {SUGGESTED_FORUM_TAGS.map((s) => (
+              <Button key={s.name} size="sm" variant="secondary" onClick={() => create.mutate({ forumId, name: s.name, color: s.color })}>
                 <Plus /> {s.name}
               </Button>
             ))}
@@ -283,7 +285,7 @@ export function TagManagerDialog({ open, onOpenChange, tags, projectId }: { open
           className="mt-3 flex items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            if (name.trim()) create.mutate({ projectId, name: name.trim(), color });
+            if (name.trim()) create.mutate({ forumId, name: name.trim(), color });
           }}
         >
           <ColorDot color={color} onChange={setColor} />

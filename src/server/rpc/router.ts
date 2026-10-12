@@ -8,11 +8,14 @@ import { BACKGROUND_IDS } from "@/lib/column-icons";
 import type { DashboardListKey } from "@/lib/types";
 import {
   annotationSchema,
-  bugPrioritySchema,
-  bugResolutionSchema,
-  bugStatusSchema,
-  bugTagNameSchema,
-  bugTitleSchema,
+  forumItemLabelSchema,
+  forumNameSchema,
+  forumPrefixSchema,
+  forumTagNameSchema,
+  itemPrioritySchema,
+  itemResolutionSchema,
+  itemStatusSchema,
+  itemTitleSchema,
   cardLinkSchema,
   cardStateSchema,
   cardTitleSchema,
@@ -39,9 +42,9 @@ import { DISCORD_EVENTS } from "@/lib/discord";
 import { COLUMN_ICONS } from "@/lib/column-icons";
 import * as accounts from "../services/accounts";
 import * as archive from "../services/archive";
-import { listAuditLog, listBugActivity, listCardActivity, listProjectActivity } from "../services/activity";
+import { listAuditLog, listCardActivity, listItemActivity, listProjectActivity } from "../services/activity";
 import * as board from "../services/board";
-import * as bugs from "../services/bugs";
+import * as forums from "../services/forums";
 import * as cards from "../services/cards";
 import * as checklists from "../services/checklists";
 import * as comments from "../services/comments";
@@ -67,7 +70,7 @@ import * as platform from "../services/platform";
 import { searchCards } from "../services/search";
 import { getStudioStorage } from "../services/storage-quota";
 import * as studios from "../services/studios";
-import { requireBug, requireCard, requireProject, requireStudio, getProjectAccess } from "../access";
+import { requireCard, requireItem, requireProject, requireStudio, getProjectAccess } from "../access";
 import { proc } from "./procedure";
 
 const columnIcon = z.enum(COLUMN_ICONS).nullable().optional();
@@ -446,18 +449,18 @@ export const appRouter = {
   "upload.create": proc({
     input: z
       .object({
-        /** The card the file belongs to — or, for a "bug" upload, the bug (bugId). */
+        /** The card the file belongs to — or, for an "item" upload, the forum item (itemId). */
         cardId: idSchema.optional(),
-        bugId: idSchema.optional(),
+        itemId: idSchema.optional(),
         filename: z.string().min(1).max(255),
         size: z.number().int().positive(),
         contentType: z.string().max(200),
-        purpose: z.enum(["version", "attachment", "comment", "resource", "cover", "checklist", "bug"]),
+        purpose: z.enum(["version", "attachment", "comment", "resource", "cover", "checklist", "item"]),
         versionId: idSchema.nullable().optional(),
         deliverableId: idSchema.nullable().optional(),
         checklistItemId: idSchema.nullable().optional(),
       })
-      .refine((i) => (i.purpose === "bug" ? Boolean(i.bugId) : Boolean(i.cardId)), { message: "Choose where the file goes." }),
+      .refine((i) => (i.purpose === "item" ? Boolean(i.itemId) : Boolean(i.cardId)), { message: "Choose where the file goes." }),
     handler: ({ actor }, i) => media.createUpload(actor, i),
   }),
   "upload.complete": proc({
@@ -680,7 +683,6 @@ export const appRouter = {
           allowSelfApproval: z.boolean().optional(),
           requireFeedbackForChanges: z.boolean().optional(),
           defaultReviewerIds: z.array(idSchema).max(20).optional(),
-          defaultBugReviewerId: idSchema.nullable().optional(),
         })
         .optional(),
     }),
@@ -1051,85 +1053,115 @@ export const appRouter = {
     handler: ({ actor }) => accounts.setAvatar(actor, null),
   }),
 
-  // ── Bugs ────────────────────────────────────────────────────────────────────
-  "bug.list": proc({
-    input: z.object({ projectId: idSchema }),
-    handler: ({ actor }, i) => bugs.listBugs(actor, i.projectId),
+  // ── Forums ──────────────────────────────────────────────────────────────────
+  "forum.list": proc({
+    input: z.object({ projectId: idSchema, includeArchived: z.boolean().optional() }),
+    handler: ({ actor }, i) => forums.listForumsFor(actor, i.projectId, i.includeArchived),
   }),
-  "bug.get": proc({
-    input: z.union([z.object({ bugId: idSchema }), z.object({ projectId: idSchema, number: z.number().int().positive() })]),
-    handler: async ({ actor }, i) => bugs.getBug(actor, "bugId" in i ? i.bugId : await bugs.findBugIdByNumber(actor, i.projectId, i.number)),
+  "forum.get": proc({
+    input: z.union([z.object({ forumId: idSchema }), z.object({ projectId: idSchema, slug: z.string().min(1).max(60) })]),
+    handler: async ({ actor }, i) => forums.getForumView(actor, "forumId" in i ? i.forumId : await forums.findForumIdBySlug(actor, i.projectId, i.slug)),
   }),
-  "bug.activity": proc({
-    input: z.object({ bugId: idSchema }),
-    handler: async ({ actor }, i) => {
-      await requireBug(actor.userId, i.bugId);
-      return listBugActivity(i.bugId);
-    },
-  }),
-  "bug.create": proc({
+  "forum.create": proc({
     input: z.object({
       projectId: idSchema,
-      title: bugTitleSchema,
-      description: text(50_000).optional(),
-      priority: bugPrioritySchema.optional(),
-      milestoneId: idSchema.nullable().optional(),
-      assigneeId: idSchema.nullable().optional(),
-      reviewerId: idSchema.nullable().optional(),
-      tagIds: z.array(idSchema).max(30).optional(),
+      name: forumNameSchema,
+      description: text(500).optional(),
+      icon: emojiSchema.optional(),
+      keyPrefix: forumPrefixSchema.optional(),
+      itemLabel: forumItemLabelSchema.optional(),
+      defaultReviewerId: idSchema.nullable().optional(),
     }),
-    limit: { max: 60, windowMs: 60_000 },
-    handler: ({ actor }, i) => bugs.createBug(actor, i),
+    handler: ({ actor }, i) => forums.createForum(actor, i),
   }),
-  "bug.update": proc({
+  "forum.update": proc({
     input: z.object({
-      bugId: idSchema,
-      title: bugTitleSchema.optional(),
+      forumId: idSchema,
+      name: forumNameSchema.optional(),
+      description: text(500).optional(),
+      icon: emojiSchema.optional(),
+      keyPrefix: forumPrefixSchema.optional(),
+      itemLabel: forumItemLabelSchema.optional(),
+      defaultReviewerId: idSchema.nullable().optional(),
+      archived: z.boolean().optional(),
+      position: z.number().finite().optional(),
+    }),
+    handler: ({ actor }, i) => forums.updateForum(actor, i),
+  }),
+  "item.get": proc({
+    input: z.union([z.object({ itemId: idSchema }), z.object({ forumId: idSchema, number: z.number().int().positive() })]),
+    handler: async ({ actor }, i) => forums.getItem(actor, "itemId" in i ? i.itemId : await forums.findItemIdByNumber(actor, i.forumId, i.number)),
+  }),
+  "item.activity": proc({
+    input: z.object({ itemId: idSchema }),
+    handler: async ({ actor }, i) => {
+      await requireItem(actor.userId, i.itemId);
+      return listItemActivity(i.itemId);
+    },
+  }),
+  "item.create": proc({
+    input: z.object({
+      forumId: idSchema,
+      title: itemTitleSchema,
       description: text(50_000).optional(),
-      priority: bugPrioritySchema.optional(),
+      priority: itemPrioritySchema.optional(),
       milestoneId: idSchema.nullable().optional(),
       assigneeId: idSchema.nullable().optional(),
       reviewerId: idSchema.nullable().optional(),
       tagIds: z.array(idSchema).max(30).optional(),
     }),
-    handler: ({ actor }, i) => bugs.updateBug(actor, i),
-  }),
-  "bug.setStatus": proc({
-    input: z.object({ bugId: idSchema, status: bugStatusSchema, resolution: bugResolutionSchema.nullable().optional() }),
-    handler: ({ actor }, i) => bugs.setBugStatus(actor, i),
-  }),
-  "bug.delete": proc({
-    input: z.object({ bugId: idSchema }),
-    handler: ({ actor }, i) => bugs.deleteBug(actor, i),
-  }),
-  "bug.comment": proc({
-    input: z.object({ bugId: idSchema, body: text(10_000) }),
     limit: { max: 60, windowMs: 60_000 },
-    handler: ({ actor }, i) => bugs.addBugComment(actor, i),
+    handler: ({ actor }, i) => forums.createItem(actor, i),
   }),
-  "bug.editComment": proc({
+  "item.update": proc({
+    input: z.object({
+      itemId: idSchema,
+      title: itemTitleSchema.optional(),
+      description: text(50_000).optional(),
+      priority: itemPrioritySchema.optional(),
+      milestoneId: idSchema.nullable().optional(),
+      assigneeId: idSchema.nullable().optional(),
+      reviewerId: idSchema.nullable().optional(),
+      tagIds: z.array(idSchema).max(30).optional(),
+    }),
+    handler: ({ actor }, i) => forums.updateItem(actor, i),
+  }),
+  "item.setStatus": proc({
+    input: z.object({ itemId: idSchema, status: itemStatusSchema, resolution: itemResolutionSchema.nullable().optional() }),
+    handler: ({ actor }, i) => forums.setItemStatus(actor, i),
+  }),
+  "item.delete": proc({
+    input: z.object({ itemId: idSchema }),
+    handler: ({ actor }, i) => forums.deleteItem(actor, i),
+  }),
+  "item.comment": proc({
+    input: z.object({ itemId: idSchema, body: text(10_000) }),
+    limit: { max: 60, windowMs: 60_000 },
+    handler: ({ actor }, i) => forums.addComment(actor, i),
+  }),
+  "item.editComment": proc({
     input: z.object({ commentId: idSchema, body: text(10_000) }),
-    handler: ({ actor }, i) => bugs.editBugComment(actor, i),
+    handler: ({ actor }, i) => forums.editComment(actor, i),
   }),
-  "bug.deleteComment": proc({
+  "item.deleteComment": proc({
     input: z.object({ commentId: idSchema }),
-    handler: ({ actor }, i) => bugs.deleteBugComment(actor, i),
+    handler: ({ actor }, i) => forums.deleteComment(actor, i),
   }),
-  "bug.removeAttachment": proc({
+  "item.removeAttachment": proc({
     input: z.object({ attachmentId: idSchema }),
-    handler: ({ actor }, i) => bugs.removeBugAttachment(actor, i),
+    handler: ({ actor }, i) => forums.removeItemAttachment(actor, i),
   }),
-  "bugTag.create": proc({
-    input: z.object({ projectId: idSchema, name: bugTagNameSchema, color: colorSchema }),
-    handler: ({ actor }, i) => bugs.createBugTag(actor, i),
+  "forumTag.create": proc({
+    input: z.object({ forumId: idSchema, name: forumTagNameSchema, color: colorSchema }),
+    handler: ({ actor }, i) => forums.createTag(actor, i),
   }),
-  "bugTag.update": proc({
-    input: z.object({ tagId: idSchema, name: bugTagNameSchema.optional(), color: colorSchema.optional() }),
-    handler: ({ actor }, i) => bugs.updateBugTag(actor, i),
+  "forumTag.update": proc({
+    input: z.object({ tagId: idSchema, name: forumTagNameSchema.optional(), color: colorSchema.optional() }),
+    handler: ({ actor }, i) => forums.updateTag(actor, i),
   }),
-  "bugTag.delete": proc({
+  "forumTag.delete": proc({
     input: z.object({ tagId: idSchema }),
-    handler: ({ actor }, i) => bugs.deleteBugTag(actor, i),
+    handler: ({ actor }, i) => forums.deleteTag(actor, i),
   }),
 };
 

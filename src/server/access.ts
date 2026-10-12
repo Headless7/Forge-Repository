@@ -7,26 +7,27 @@ import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { deliverablePermissions } from "@/lib/deliverables";
 import type { DeliverablePermissions } from "@/lib/types";
 import {
-  bugPermissions,
+  itemPermissions,
   cardPermissions,
   memberCanOpenProject,
   normalizeRole,
   PRIVATE_ACCESS_ROLES,
   roleHas,
-  type BugPermissions,
+  type ItemPermissions,
   type CardPermissions,
   type MemberAccess,
   type Permission,
   type Role,
 } from "@/lib/permissions";
 import { db, type Executor } from "./db";
-import { boards, bugs, cardAssignees, cards, deliverableContributors, deliverables, projectMembers, projects, studioMembers, studios } from "./db/schema";
+import { boards, cardAssignees, cards, deliverableContributors, deliverables, forumItems, forums, projectMembers, projects, studioMembers, studios } from "./db/schema";
 import { forbidden, notFound } from "./errors";
 
 export type ProjectRow = typeof projects.$inferSelect;
 export type CardRow = typeof cards.$inferSelect;
 export type DeliverableRow = typeof deliverables.$inferSelect;
-export type BugRow = typeof bugs.$inferSelect;
+export type ForumRow = typeof forums.$inferSelect;
+export type ItemRow = typeof forumItems.$inferSelect;
 
 export interface StudioAccess {
   userId: string;
@@ -317,33 +318,47 @@ export function assertDeliverable(perms: DeliverablePermissions, key: keyof Deli
   if (!perms[key]) throw forbidden(message ?? "You don't have permission to change this deliverable.");
 }
 
-// ── Bugs ────────────────────────────────────────────────────────────────────
+// ── Forums ──────────────────────────────────────────────────────────────────
 
-export interface BugAccess {
+export interface ForumAccess {
   access: ProjectAccess;
-  bug: BugRow;
-  perms: BugPermissions;
+  forum: ForumRow;
 }
 
-export function computeBugPermissions(access: ProjectAccess, bug: Pick<BugRow, "reportedById" | "assigneeId" | "reviewerId">): BugPermissions {
-  return bugPermissions({
+export interface ItemAccess extends ForumAccess {
+  item: ItemRow;
+  perms: ItemPermissions;
+}
+
+/** Resolves a forum through the caller's project access (NOT_FOUND outside it). */
+export async function requireForum(userId: string, forumId: string, ex: Executor = db): Promise<ForumAccess> {
+  const [forum] = await ex.select().from(forums).where(eq(forums.id, forumId)).limit(1);
+  if (!forum) throw notFound("Forum");
+  const access = await getProjectAccess(userId, forum.projectId, ex);
+  if (!access) throw notFound("Forum");
+  return { access, forum };
+}
+
+export function computeItemPermissions(access: ProjectAccess, forum: Pick<ForumRow, "archivedAt">, item: Pick<ItemRow, "reportedById" | "assigneeId" | "reviewerId">): ItemPermissions {
+  return itemPermissions({
     role: access.role,
     userId: access.userId,
-    bug,
+    item,
     allowSelfApproval: access.project.settings.allowSelfApproval,
-    readOnly: Boolean(access.project.archivedAt),
+    readOnly: Boolean(access.project.archivedAt || forum.archivedAt),
   });
 }
 
-/** Resolves a bug through the caller's project access (NOT_FOUND outside it). */
-export async function requireBug(userId: string, bugId: string, ex: Executor = db): Promise<BugAccess> {
-  const [bug] = await ex.select().from(bugs).where(eq(bugs.id, bugId)).limit(1);
-  if (!bug) throw notFound("Bug");
-  const access = await getProjectAccess(userId, bug.projectId, ex);
-  if (!access) throw notFound("Bug");
-  return { access, bug, perms: computeBugPermissions(access, bug) };
+/** Resolves a forum item through the caller's project access (NOT_FOUND outside it). */
+export async function requireItem(userId: string, itemId: string, ex: Executor = db): Promise<ItemAccess> {
+  const [item] = await ex.select().from(forumItems).where(eq(forumItems.id, itemId)).limit(1);
+  if (!item) throw notFound("Item");
+  const { access, forum } = await requireForum(userId, item.forumId, ex).catch(() => {
+    throw notFound("Item");
+  });
+  return { access, forum, item, perms: computeItemPermissions(access, forum, item) };
 }
 
-export function assertBug(perms: BugPermissions, key: keyof BugPermissions, message?: string) {
-  if (!perms[key]) throw forbidden(message ?? "You don't have permission to change this bug.");
+export function assertItem(perms: ItemPermissions, key: keyof ItemPermissions, message?: string) {
+  if (!perms[key]) throw forbidden(message ?? "You don't have permission to change this.");
 }

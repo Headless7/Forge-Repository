@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { boolean, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sessions, users } from "./auth";
-import { bugs } from "./bugs";
+import { forumItems } from "./forums";
 import { cards } from "./cards";
 import { createdAt, pk, tsz, updatedAt } from "./columns";
 import { deliverables } from "./deliverables";
@@ -22,8 +22,8 @@ export const notifications = pgTable(
       .references(() => studios.id, { onDelete: "cascade" }),
     projectId: uuid().references(() => projects.id, { onDelete: "cascade" }),
     cardId: uuid().references(() => cards.id, { onDelete: "cascade" }),
-    /** The bug report it's about (bug notifications; cardId stays null). */
-    bugId: uuid().references(() => bugs.id, { onDelete: "cascade" }),
+    /** The forum item it's about (item notifications; cardId stays null). */
+    itemId: uuid().references(() => forumItems.id, { onDelete: "cascade" }),
     commentId: uuid().references(() => comments.id, { onDelete: "set null" }),
     /** The deliverable / revision the notification is about, so it opens exactly there. */
     deliverableId: uuid().references((): AnyPgColumn => deliverables.id, { onDelete: "cascade" }),
@@ -47,7 +47,7 @@ export const notifications = pgTable(
   (t) => [
     index("notifications_user_created_idx").on(t.userId, t.createdAt),
     index("notifications_card_idx").on(t.cardId),
-    index("notifications_bug_idx").on(t.bugId),
+    index("notifications_item_idx").on(t.itemId),
     index("notifications_user_unread_idx").on(t.userId, t.readAt),
     uniqueIndex("notifications_user_dedupe_uq").on(t.userId, t.dedupeKey).where(sql`${t.dedupeKey} is not null`),
   ],
@@ -80,8 +80,8 @@ export const activityEvents = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     cardId: uuid().references(() => cards.id, { onDelete: "set null" }),
-    /** Bug history (bug.* events); cardId stays null. */
-    bugId: uuid().references(() => bugs.id, { onDelete: "set null" }),
+    /** Forum item history (item.* events); cardId stays null. */
+    itemId: uuid().references(() => forumItems.id, { onDelete: "set null" }),
     actorId: uuid().references(() => users.id, { onDelete: "set null" }),
     type: text().notNull(),
     data: jsonb().$type<Record<string, unknown>>().notNull().default({}),
@@ -90,7 +90,7 @@ export const activityEvents = pgTable(
   (t) => [
     index("activity_project_created_idx").on(t.projectId, t.createdAt),
     index("activity_card_created_idx").on(t.cardId, t.createdAt),
-    index("activity_bug_created_idx").on(t.bugId, t.createdAt),
+    index("activity_item_created_idx").on(t.itemId, t.createdAt),
     index("activity_studio_created_idx").on(t.studioId, t.createdAt),
   ],
 );

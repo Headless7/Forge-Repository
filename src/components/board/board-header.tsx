@@ -3,7 +3,6 @@
 import {
   Activity,
   Archive,
-  Bug,
   CalendarDays,
   ChartGantt,
   ChevronDown,
@@ -430,11 +429,13 @@ export function BoardHeader({
                 <Settings /> Project settings
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href={`/${studioSlug}/${project.slug}/bugs`}>
-                <Bug /> Bugs
-              </Link>
-            </DropdownMenuItem>
+            {board.forums.map((f) => (
+              <DropdownMenuItem key={f.id} asChild>
+                <Link href={`/${studioSlug}/${project.slug}/f/${f.slug}`}>
+                  <span className="flex size-4 items-center justify-center text-[13px] leading-none">{f.icon}</span> {f.name}
+                </Link>
+              </DropdownMenuItem>
+            ))}
             <DropdownMenuItem asChild>
               <Link href={`/${studioSlug}/${project.slug}/activity`}>
                 <Activity /> Project activity

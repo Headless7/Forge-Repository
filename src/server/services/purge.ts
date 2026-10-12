@@ -44,7 +44,7 @@ export interface PurgeTarget {
 
 type AttachmentFiles = { id: string; storageKey: string; thumbnailKey: string | null; previewKey: string | null; playbackKey: string | null; sizeBytes: number };
 
-const FOLDER = /^(studios\/[0-9a-f-]{36}\/projects\/[0-9a-f-]{36}\/(?:cards|bugs)\/[0-9a-f-]{36}\/[0-9a-f-]{36}\/)[^/]+$/i;
+const FOLDER = /^(studios\/[0-9a-f-]{36}\/projects\/[0-9a-f-]{36}\/(?:cards|bugs|items)\/[0-9a-f-]{36}\/[0-9a-f-]{36}\/)[^/]+$/i;
 
 /** The storage units an attachment occupies: its folder, or (for older layouts) its individual keys. */
 export function storageUnits(file: Pick<AttachmentFiles, "storageKey" | "thumbnailKey" | "previewKey" | "playbackKey">): string[] {

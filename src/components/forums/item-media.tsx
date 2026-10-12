@@ -3,8 +3,8 @@
 import { ChevronLeft, ChevronRight, ExternalLink, Film, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { toast } from "sonner";
-import { useBugMutation } from "@/lib/queries";
-import type { AttachmentDTO, BugDetailDTO } from "@/lib/types";
+import { useItemMutation } from "@/lib/queries";
+import type { AttachmentDTO, ForumItemDetailDTO } from "@/lib/types";
 import { cn, formatBytes, formatDuration } from "@/lib/utils";
 import { ImageViewer } from "../media/image-viewer";
 import { VideoPlayer } from "../media/video-player";
@@ -13,25 +13,24 @@ import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Tooltip } from "../ui/menu";
 import { useUploads, type UploadTarget } from "../upload/upload-manager";
 
-export const BUG_MEDIA_ACCEPT = "image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-m4v";
+export const ITEM_MEDIA_ACCEPT = "image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-m4v";
 
-/** The files a bug takes out of a drop, paste or picker: pictures and clips only. */
-export function bugMediaFiles(files: Iterable<File>): File[] {
-  const out = [...files].filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/") || /\.(mp4|webm|mov|m4v)$/i.test(f.name));
-  return out;
+/** The files an item takes out of a drop, paste or picker: pictures and clips only. */
+export function itemMediaFiles(files: Iterable<File>): File[] {
+  return [...files].filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/") || /\.(mp4|webm|mov|m4v)$/i.test(f.name));
 }
 
-export function bugUploadTarget(bug: Pick<BugDetailDTO, "id" | "projectId" | "key" | "title">): UploadTarget {
-  return { id: bug.id, kind: "bug", projectId: bug.projectId, title: `${bug.key} ${bug.title}` };
+export function itemUploadTarget(item: Pick<ForumItemDetailDTO, "id" | "projectId" | "key" | "title">): UploadTarget {
+  return { id: item.id, kind: "item", projectId: item.projectId, title: `${item.key} ${item.title}` };
 }
 
 /**
- * Pasted pictures or clips (a fresh screenshot) go to the bug — and stop here, so a paste into a
+ * Pasted pictures or clips (a fresh screenshot) go to the item — and stop here, so a paste into a
  * comment box keeps working as text when the clipboard has no files.
  */
-export function pastedBugMedia(onFiles: (files: File[]) => void) {
+export function pastedItemMedia(onFiles: (files: File[]) => void) {
   return (e: ClipboardEvent<HTMLElement>) => {
-    const files = bugMediaFiles(e.clipboardData.files);
+    const files = itemMediaFiles(e.clipboardData.files);
     if (!files.length) return;
     e.preventDefault();
     e.stopPropagation();
@@ -39,21 +38,21 @@ export function pastedBugMedia(onFiles: (files: File[]) => void) {
   };
 }
 
-/** A bug's pictures and clips: a thumbnail grid, a lightbox, and (for editors) adding by picker, drop or paste. */
-export function BugMedia({ bug, canUpload }: { bug: BugDetailDTO; canUpload: boolean }) {
+/** An item's pictures and clips: a thumbnail grid, a lightbox, and (for editors) adding by picker, drop or paste. */
+export function ItemMedia({ item, noun, canUpload }: { item: ForumItemDetailDTO; noun: string; canUpload: boolean }) {
   const uploads = useUploads();
   const input = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
-  const files = bug.attachments;
+  const files = item.attachments;
 
   const add = (list: File[]) => {
-    const media = bugMediaFiles(list);
+    const media = itemMediaFiles(list);
     if (!media.length) {
-      toast.error("Bug reports take pictures (PNG, JPEG, WebP, GIF) and clips (MP4, WebM, MOV).");
+      toast.error("Pictures (PNG, JPEG, WebP, GIF) and clips (MP4, WebM, MOV) only.");
       return;
     }
-    void uploads.uploadFiles(bugUploadTarget(bug), media, "bug");
+    void uploads.uploadFiles(itemUploadTarget(item), media, "item");
   };
   const onDrop = (e: DragEvent<HTMLElement>) => {
     if (!canUpload) return;
@@ -111,7 +110,7 @@ export function BugMedia({ bug, canUpload }: { bug: BugDetailDTO; canUpload: boo
           className="flex w-full flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border-strong px-3 py-6 text-center text-[13px] text-fg-subtle hover:border-fg-subtle hover:text-fg-muted"
         >
           <ImagePlus className="size-5" />
-          <span>Add screenshots or a clip of the bug</span>
+          <span>Add screenshots or a clip of the {noun}</span>
           <span className="text-[11.5px] [@media(pointer:coarse)]:hidden">Drop files here, or paste a screenshot (Ctrl+V)</span>
         </button>
       ) : (
@@ -123,7 +122,7 @@ export function BugMedia({ bug, canUpload }: { bug: BugDetailDTO; canUpload: boo
           type="file"
           hidden
           multiple
-          accept={BUG_MEDIA_ACCEPT}
+          accept={ITEM_MEDIA_ACCEPT}
           aria-label="Add pictures or clips"
           onChange={(e) => {
             add([...(e.target.files ?? [])]);
@@ -131,7 +130,7 @@ export function BugMedia({ bug, canUpload }: { bug: BugDetailDTO; canUpload: boo
           }}
         />
       ) : null}
-      {open !== null && files[open] ? <Lightbox bug={bug} files={files} index={open} onIndex={setOpen} onClose={() => setOpen(null)} canRemove={canUpload} /> : null}
+      {open !== null && files[open] ? <Lightbox item={item} files={files} index={open} onIndex={setOpen} onClose={() => setOpen(null)} canRemove={canUpload} /> : null}
     </section>
   );
 }
@@ -156,14 +155,14 @@ function MediaTile({ file, onOpen }: { file: AttachmentDTO; onOpen: () => void }
 }
 
 function Lightbox({
-  bug,
+  item,
   files,
   index,
   onIndex,
   onClose,
   canRemove,
 }: {
-  bug: BugDetailDTO;
+  item: ForumItemDetailDTO;
   files: AttachmentDTO[];
   index: number;
   onIndex: (i: number) => void;
@@ -171,7 +170,7 @@ function Lightbox({
   canRemove: boolean;
 }) {
   const file = files[index]!;
-  const remove = useBugMutation("bug.removeAttachment", bug.id, bug.projectId, { onSuccess: () => (files.length <= 1 ? onClose() : onIndex(Math.max(0, index - 1))) });
+  const remove = useItemMutation("item.removeAttachment", item.id, item.projectId, { onSuccess: () => (files.length <= 1 ? onClose() : onIndex(Math.max(0, index - 1))) });
   const prev = index > 0 ? () => onIndex(index - 1) : null;
   const next = index < files.length - 1 ? () => onIndex(index + 1) : null;
   useEffect(() => {
@@ -221,7 +220,7 @@ function Lightbox({
             <span />
           )}
           {canRemove ? (
-            <Tooltip content="Remove this file from the bug">
+            <Tooltip content="Remove this file">
               <Button size="sm" variant="danger-ghost" loading={remove.isPending} onClick={() => remove.mutate({ attachmentId: file.id })}>
                 <Trash2 /> Remove
               </Button>

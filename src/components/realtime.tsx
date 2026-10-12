@@ -32,8 +32,8 @@ interface ProjectEvent {
   projectId: string;
   cardIds: string[];
   board: boolean;
-  bugIds?: string[];
-  bugs?: boolean;
+  itemIds?: string[];
+  forums?: boolean;
   clientId?: string | null;
 }
 
@@ -46,11 +46,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [projectId, setProjectId] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
-  const pending = useRef<{ boards: Set<string>; cards: Set<string>; bugLists: Set<string>; bugs: Set<string>; notifications: boolean; timer: ReturnType<typeof setTimeout> | null }>({
+  const pending = useRef<{ boards: Set<string>; cards: Set<string>; forums: Set<string>; items: Set<string>; notifications: boolean; timer: ReturnType<typeof setTimeout> | null }>({
     boards: new Set(),
     cards: new Set(),
-    bugLists: new Set(),
-    bugs: new Set(),
+    forums: new Set(),
+    items: new Set(),
     notifications: false,
     timer: null,
   });
@@ -72,16 +72,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         void queryClient.invalidateQueries({ queryKey: qk.card(id) });
         void queryClient.invalidateQueries({ queryKey: qk.cardActivity(id) });
       }
-      for (const id of p.bugLists) void queryClient.invalidateQueries({ queryKey: qk.bugs(id) });
-      for (const id of p.bugs) {
-        void queryClient.invalidateQueries({ queryKey: qk.bug(id) });
-        void queryClient.invalidateQueries({ queryKey: qk.bugActivity(id) });
+      for (const id of p.forums) void queryClient.invalidateQueries({ queryKey: qk.forums(id) });
+      for (const id of p.items) {
+        void queryClient.invalidateQueries({ queryKey: qk.item(id) });
+        void queryClient.invalidateQueries({ queryKey: qk.itemActivity(id) });
       }
       if (p.notifications) void queryClient.invalidateQueries({ queryKey: qk.notifications() });
       p.boards.clear();
       p.cards.clear();
-      p.bugLists.clear();
-      p.bugs.clear();
+      p.forums.clear();
+      p.items.clear();
       p.notifications = false;
     };
     const schedule = () => {
@@ -99,7 +99,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // page and this connection (first load), or while disconnected (reconnects).
         if (projectId) {
           void queryClient.invalidateQueries({ queryKey: qk.board(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.bugs(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.forums(projectId) });
         }
         void queryClient.invalidateQueries({ queryKey: ["projects"] });
         if (hadConnection) {
@@ -113,12 +113,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         const own = event.clientId === getClientId();
         if (event.board && !own) pending.current.boards.add(event.projectId);
         for (const id of event.cardIds) if (!own) pending.current.cards.add(id);
-        if (event.bugs && !own) pending.current.bugLists.add(event.projectId);
-        for (const id of event.bugIds ?? []) if (!own) pending.current.bugs.add(id);
+        if (event.forums && !own) pending.current.forums.add(event.projectId);
+        for (const id of event.itemIds ?? []) if (!own) pending.current.items.add(id);
         // Our own writes still change other people's views of shared data (e.g. activity); refresh lightly.
         if (own) {
           for (const id of event.cardIds) void queryClient.invalidateQueries({ queryKey: qk.cardActivity(id) });
-          for (const id of event.bugIds ?? []) void queryClient.invalidateQueries({ queryKey: qk.bugActivity(id) });
+          for (const id of event.itemIds ?? []) void queryClient.invalidateQueries({ queryKey: qk.itemActivity(id) });
         }
         schedule();
       });

@@ -2,10 +2,9 @@
 
 import { Pencil, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { roleHas } from "@/lib/permissions";
-import { useBugMutation } from "@/lib/queries";
-import type { Role } from "@/lib/permissions";
-import type { BugCommentDTO, BugDetailDTO, MemberDTO } from "@/lib/types";
+import { roleHas, type Role } from "@/lib/permissions";
+import { useItemMutation } from "@/lib/queries";
+import type { ForumItemDetailDTO, MemberDTO } from "@/lib/types";
 import { formatDateTime, timeAgo } from "@/lib/utils";
 import { Composer } from "../comments/composer";
 import { RichText } from "../comments/rich-text";
@@ -13,16 +12,16 @@ import { UserAvatar } from "../domain/avatar";
 import { MemberPopover } from "../domain/member-popover";
 import { Button } from "../ui/button";
 
-/** Repro notes and questions on a bug: a flat thread with @mentions. */
-export function BugComments({ bug, members, viewerId, viewerRole }: { bug: BugDetailDTO; members: MemberDTO[]; viewerId: string; viewerRole: Role }) {
+/** Repro notes and questions on an item: a flat thread with @mentions. */
+export function ItemComments({ item, members, viewerId, viewerRole }: { item: ForumItemDetailDTO; members: MemberDTO[]; viewerId: string; viewerRole: Role }) {
   const membersById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
   const mentionSet = useMemo(() => new Set(members.map((m) => m.username)), [members]);
-  const comment = useBugMutation("bug.comment", bug.id, bug.projectId);
-  const edit = useBugMutation("bug.editComment", bug.id, bug.projectId);
-  const remove = useBugMutation("bug.deleteComment", bug.id, bug.projectId);
+  const comment = useItemMutation("item.comment", item.id, item.projectId);
+  const edit = useItemMutation("item.editComment", item.id, item.projectId);
+  const remove = useItemMutation("item.deleteComment", item.id, item.projectId);
   const [editing, setEditing] = useState<string | null>(null);
   const canModerate = roleHas(viewerRole, "comment.moderate");
-  const live = bug.comments.filter((c) => !c.deletedAt);
+  const live = item.comments.filter((c) => !c.deletedAt);
 
   return (
     <section aria-label="Comments">
@@ -48,7 +47,7 @@ export function BugComments({ bug, members, viewerId, viewerRole }: { bug: BugDe
                     <strong className="font-medium text-fg">{author?.displayName ?? "Former member"}</strong>
                     <time title={formatDateTime(c.createdAt)}>{timeAgo(c.createdAt)}</time>
                     {c.editedAt ? <span className="text-fg-subtle">· edited</span> : null}
-                    {(own || canModerate) && editing !== c.id && bug.permissions.canComment ? (
+                    {(own || canModerate) && editing !== c.id && item.permissions.canComment ? (
                       <span className="ml-auto flex items-center gap-0.5">
                         {own ? (
                           <Button size="icon-xs" variant="ghost" aria-label="Edit comment" onClick={() => setEditing(c.id)} className="touch-target">
@@ -77,7 +76,7 @@ export function BugComments({ bug, members, viewerId, viewerRole }: { bug: BugDe
                       />
                     </div>
                   ) : (
-                    <CommentBody comment={c} mentionSet={mentionSet} />
+                    <RichText text={c.body} mentions={mentionSet} className="mt-0.5 text-fg" />
                   )}
                 </div>
               </li>
@@ -87,15 +86,11 @@ export function BugComments({ bug, members, viewerId, viewerRole }: { bug: BugDe
       ) : (
         <p className="text-[13px] text-fg-subtle">No comments yet.</p>
       )}
-      {bug.permissions.canComment ? (
+      {item.permissions.canComment ? (
         <div className="mt-3">
-          <Composer members={members} placeholder="Repro steps, questions, what you tried…" submitLabel="Comment" onSubmit={({ body }) => comment.mutateAsync({ bugId: bug.id, body })} />
+          <Composer members={members} placeholder="Repro steps, questions, what you tried…" submitLabel="Comment" onSubmit={({ body }) => comment.mutateAsync({ itemId: item.id, body })} />
         </div>
       ) : null}
     </section>
   );
-}
-
-function CommentBody({ comment, mentionSet }: { comment: BugCommentDTO; mentionSet: Set<string> }) {
-  return <RichText text={comment.body} mentions={mentionSet} className="mt-0.5 text-fg" />;
 }

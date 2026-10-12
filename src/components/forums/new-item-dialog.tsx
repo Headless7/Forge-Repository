@@ -4,17 +4,17 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Film, ImagePlus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { BUG_PRIORITY_META, BUG_PRIORITY_ORDER } from "@/lib/bug-meta";
+import { FORUM_KIND_META, ITEM_PRIORITY_META, ITEM_PRIORITY_ORDER, priorityLabel, withArticle } from "@/lib/forum-meta";
 import { qk, useRpcMutation } from "@/lib/queries";
-import type { BugDetailDTO, BugListDTO, BugPriority, MemberDTO } from "@/lib/types";
+import type { ForumItemDetailDTO, ForumViewDTO, ItemPriority, MemberDTO } from "@/lib/types";
 import { formatBytes } from "@/lib/utils";
 import { Button } from "../ui/button";
 import { Select } from "../ui/controls";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Input, Label, Textarea } from "../ui/input";
 import { useUploads } from "../upload/upload-manager";
-import { BugPriorityIcon } from "./bug-badges";
-import { BUG_MEDIA_ACCEPT, bugMediaFiles, bugUploadTarget, pastedBugMedia } from "./bug-media";
+import { ItemPriorityIcon } from "./item-badges";
+import { ITEM_MEDIA_ACCEPT, itemMediaFiles, itemUploadTarget, pastedItemMedia } from "./item-media";
 import { PersonPicker, TagPicker } from "./pickers";
 
 interface Picked {
@@ -23,34 +23,37 @@ interface Picked {
   preview: string | null;
 }
 
-/** Report a bug: the essentials in one form, with screenshots or a clip attached before it's sent. */
-export function NewBugDialog({
+/** Report an item: the essentials in one form, with screenshots or a clip attached before it's sent. */
+export function NewItemDialog({
   open,
   onOpenChange,
-  list,
+  view,
   members,
   defaultMilestoneId,
   onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  list: BugListDTO;
+  view: ForumViewDTO;
   members: MemberDTO[];
-  /** The update the list is filtered to, so the bug lands there. */
+  /** The update the list is filtered to, so the item lands there. */
   defaultMilestoneId: string | null;
-  onCreated: (bug: BugDetailDTO) => void;
+  onCreated: (item: ForumItemDetailDTO) => void;
 }) {
   const queryClient = useQueryClient();
   const uploads = useUploads();
-  const can = (p: (typeof list.viewer.permissions)[number]) => list.viewer.permissions.includes(p);
-  const canAssign = can("bug.assign");
-  const viewerId = list.viewer.userId;
+  const { forum } = view;
+  const noun = forum.itemLabel;
+  const verb = FORUM_KIND_META[forum.kind].actions.create;
+  const can = (p: (typeof view.viewer.permissions)[number]) => view.viewer.permissions.includes(p);
+  const canAssign = can("item.assign");
+  const viewerId = view.viewer.userId;
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [priority, setPriority] = useState<BugPriority>("MEDIUM");
+  const [priority, setPriority] = useState<ItemPriority>("MEDIUM");
   const [milestoneId, setMilestoneId] = useState<string | null>(defaultMilestoneId);
   const [assigneeId, setAssigneeId] = useState<string | null>(null);
-  const [reviewerId, setReviewerId] = useState<string | null>(list.settings.defaultBugReviewerId);
+  const [reviewerId, setReviewerId] = useState<string | null>(forum.settings.defaultReviewerId);
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [files, setFiles] = useState<Picked[]>([]);
   const input = useRef<HTMLInputElement>(null);
@@ -65,26 +68,26 @@ export function NewBugDialog({
     setDescription("");
     setPriority("MEDIUM");
     setAssigneeId(null);
-    setReviewerId(list.settings.defaultBugReviewerId);
+    setReviewerId(forum.settings.defaultReviewerId);
     setTagIds([]);
     setFiles([]);
   };
 
-  const create = useRpcMutation("bug.create", {
-    onSuccess: (bug) => {
-      void queryClient.invalidateQueries({ queryKey: qk.bugs(list.project.id) });
-      if (files.length) void uploads.uploadFiles(bugUploadTarget(bug), files.map((f) => f.file), "bug");
-      toast.success(`${bug.key} reported.`);
+  const create = useRpcMutation("item.create", {
+    onSuccess: (item) => {
+      void queryClient.invalidateQueries({ queryKey: qk.forums(view.project.id) });
+      if (files.length) void uploads.uploadFiles(itemUploadTarget(item), files.map((f) => f.file), "item");
+      toast.success(`${item.key} reported.`);
       reset();
       onOpenChange(false);
-      onCreated(bug);
+      onCreated(item);
     },
   });
 
   const addFiles = (picked: File[]) => {
-    const media = bugMediaFiles(picked);
+    const media = itemMediaFiles(picked);
     if (!media.length) {
-      toast.error("Bug reports take pictures (PNG, JPEG, WebP, GIF) and clips (MP4, WebM, MOV).");
+      toast.error("Pictures (PNG, JPEG, WebP, GIF) and clips (MP4, WebM, MOV) only.");
       return;
     }
     setFiles((list) => [...list, ...media.map((file) => ({ id: crypto.randomUUID(), file, preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null }))]);
@@ -92,25 +95,16 @@ export function NewBugDialog({
 
   const submit = () => {
     if (!title.trim()) return;
-    create.mutate({
-      projectId: list.project.id,
-      title: title.trim(),
-      description: description.trim() || undefined,
-      priority,
-      milestoneId,
-      assigneeId,
-      reviewerId,
-      tagIds,
-    });
+    create.mutate({ forumId: forum.id, title: title.trim(), description: description.trim() || undefined, priority, milestoneId, assigneeId, reviewerId, tagIds });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         size="lg"
-        title="Report a bug"
-        description="One line that says what's wrong, then whatever helps someone reproduce it."
-        onPaste={pastedBugMedia(addFiles)}
+        title={`${verb} ${withArticle(noun)}`}
+        description={`One line that says what's wrong, then whatever helps someone reproduce it. It goes to ${forum.icon} ${forum.name}.`}
+        onPaste={pastedItemMedia(addFiles)}
         onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
         onDrop={(e) => {
           if (!e.dataTransfer.files.length) return;
@@ -126,13 +120,13 @@ export function NewBugDialog({
           }}
         >
           <div>
-            <Label htmlFor="bug-title">What&apos;s wrong</Label>
-            <Input id="bug-title" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Non-upgraded lamps float above the ground in the lobby" maxLength={200} required />
+            <Label htmlFor="item-title">What&apos;s wrong</Label>
+            <Input id="item-title" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Non-upgraded lamps float above the ground in the lobby" maxLength={200} required />
           </div>
           <div>
-            <Label htmlFor="bug-description">Details</Label>
+            <Label htmlFor="item-description">Details</Label>
             <Textarea
-              id="bug-description"
+              id="item-description"
               autoGrow
               maxRows={12}
               value={description}
@@ -147,8 +141,8 @@ export function NewBugDialog({
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <Label>Priority</Label>
-              <Select<BugPriority> aria-label="Priority" value={priority} onValueChange={setPriority} options={BUG_PRIORITY_ORDER.map((p) => ({ value: p, label: BUG_PRIORITY_META[p].label, icon: <BugPriorityIcon priority={p} /> }))} />
-              <p className="mt-1 text-[11.5px] text-fg-subtle">{BUG_PRIORITY_META[priority].description}</p>
+              <Select<ItemPriority> aria-label="Priority" value={priority} onValueChange={setPriority} options={ITEM_PRIORITY_ORDER.map((p) => ({ value: p, label: priorityLabel(forum.kind, p), icon: <ItemPriorityIcon kind={forum.kind} priority={p} /> }))} />
+              <p className="mt-1 text-[11.5px] text-fg-subtle">{ITEM_PRIORITY_META[priority].description}</p>
             </div>
             <div>
               <Label>Update</Label>
@@ -156,7 +150,7 @@ export function NewBugDialog({
                 aria-label="Update"
                 value={milestoneId ?? "none"}
                 onValueChange={(v) => setMilestoneId(v === "none" ? null : v)}
-                options={[{ value: "none", label: "No update" }, ...list.milestones.filter((m) => !m.archived).map((m) => ({ value: m.id, label: m.name }))]}
+                options={[{ value: "none", label: "No update" }, ...view.milestones.filter((m) => !m.archived).map((m) => ({ value: m.id, label: m.name }))]}
               />
             </div>
             <div>
@@ -174,7 +168,7 @@ export function NewBugDialog({
           </div>
           <div>
             <Label>Tags</Label>
-            <TagPicker selected={tagIds} tags={list.tags} projectId={list.project.id} canEdit canManage={can("bugtag.manage")} onChange={setTagIds} />
+            <TagPicker selected={tagIds} tags={view.tags} forumId={forum.id} projectId={view.project.id} canEdit canManage={can("forum.manage")} onChange={setTagIds} />
           </div>
           <div>
             <Label>Pictures &amp; clips</Label>
@@ -200,7 +194,7 @@ export function NewBugDialog({
               type="file"
               hidden
               multiple
-              accept={BUG_MEDIA_ACCEPT}
+              accept={ITEM_MEDIA_ACCEPT}
               aria-label="Add pictures or clips"
               onChange={(e) => {
                 addFiles([...(e.target.files ?? [])]);
@@ -213,7 +207,7 @@ export function NewBugDialog({
               Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={!title.trim()} loading={create.isPending}>
-              Report bug
+              {verb} {noun}
             </Button>
           </DialogFooter>
         </form>
