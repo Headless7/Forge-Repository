@@ -136,8 +136,12 @@ export const PopoverTrigger = P.Trigger;
 export const PopoverAnchor = P.Anchor;
 export const PopoverClose = P.Close;
 
-/** Popovers stay inside the window: kept 8px from its edges, capped to the room left, scrolling beyond that. */
-export function PopoverContent({ className, sideOffset = 6, align = "start", collisionPadding = 8, ...props }: ComponentProps<typeof P.Content>) {
+/**
+ * Popovers stay inside the window: kept 8px from its edges, capped to the room left, scrolling beyond that.
+ * Their wheel and touch scrolling stops at the popover: a dialog underneath (the card) locks scrolling
+ * with a document-level listener that would otherwise cancel it, as the popover is portalled outside it.
+ */
+export function PopoverContent({ className, sideOffset = 6, align = "start", collisionPadding = 8, onWheel, onTouchMove, ...props }: ComponentProps<typeof P.Content>) {
   return (
     <P.Portal container={useContext(PortalContainer) ?? undefined}>
       <P.Content
@@ -148,6 +152,14 @@ export function PopoverContent({ className, sideOffset = 6, align = "start", col
           "scrollbar-thin z-50 max-h-[var(--radix-popover-content-available-height)] max-w-[calc(100vw-16px)] overflow-y-auto overscroll-contain rounded-lg border border-border-strong bg-surface-2 p-3 text-[13px] text-fg shadow-lg outline-none data-[state=open]:animate-pop-in",
           className,
         )}
+        onWheel={(e) => {
+          e.stopPropagation();
+          onWheel?.(e);
+        }}
+        onTouchMove={(e) => {
+          e.stopPropagation();
+          onTouchMove?.(e);
+        }}
         {...props}
       />
     </P.Portal>

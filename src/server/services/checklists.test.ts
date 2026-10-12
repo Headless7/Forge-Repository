@@ -3,14 +3,19 @@
  * show up (card counts, Home, schedules and the calendar feed). Every fixture is created here
  * (test database only).
  */
+import { eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { canTickChecklistItem, checklistDueState, formatDueDay } from "@/lib/checklist";
-import { expectAppError, setupStudio, type Fixture } from "@/test/helpers";
+import { db } from "@/server/db";
+import { attachments } from "@/server/db/schema";
+import { storage } from "@/server/storage";
+import { expectAppError, pngBuffer, setupStudio, type Fixture } from "@/test/helpers";
 import { listCardActivity } from "./activity";
 import { calendarFeedFor, createCalendarFeed, revokeCalendarFeed } from "./calendar-feed";
 import * as cardService from "./cards";
 import * as checklists from "./checklists";
 import { getStudioHome } from "./home";
+import * as media from "./media";
 import { boardSchedule, studioSchedule } from "./schedule";
 
 const DAY = 86_400_000;
@@ -153,5 +158,66 @@ describe("due day display", () => {
     expect(checklistDueState("2026-10-10", false, "2026-10-09")).toBe("upcoming");
     expect(checklistDueState("2026-10-08", true, "2026-10-09")).toBeNull();
     expect(checklistDueState(null, false, "2026-10-09")).toBeNull();
+  });
+});
+
+describe("item pictures", () => {
+  const uploadPicture = async (actor: Fixture["manager"]["actor"], checklistItemId: string, name = "bug.png", type = "image/png", buffer?: Buffer) => {
+    const file = buffer ?? (await pngBuffer(64, 48, "#ff00aa"));
+    const intent = await media.createUpload(actor, { cardId: card.id, filename: name, size: file.length, contentType: type, purpose: "checklist", checklistItemId });
+    const [row] = await db.select().from(attachments).where(eq(attachments.id, intent.attachmentId));
+    await storage().put(row!.storageKey, file, type);
+    return media.completeUpload(actor, { attachmentId: intent.attachmentId });
+  };
+  const imageOf = async (id: string) => (await cardService.getCardDetail(f.manager.actor, card.id)).checklists.flatMap((l) => l.items).find((i) => i.id === id)!.imageId;
+
+  it("give an item one picture, replaced by the next and kept out of the card's files", async () => {
+    const detail = await checklists.addChecklistItem(f.manager.actor, { checklistId: listId, text: "Curses UI overlaps https://discord.com/channels/1/2" });
+    const id = itemId(detail, "Curses UI overlaps https://discord.com/channels/1/2");
+    const first = await uploadPicture(f.manager.actor, id);
+    expect(first).toMatchObject({ purpose: "CHECKLIST", kind: "IMAGE" });
+    expect(await imageOf(id)).toBe(first.id);
+
+    const second = await uploadPicture(f.manager.actor, id, "bug-2.png");
+    expect(await imageOf(id)).toBe(second.id);
+    const [old] = await db.select().from(attachments).where(eq(attachments.id, first.id));
+    expect(old!.archivedAt).not.toBeNull();
+    // Not a reference file, cover or revision.
+    const after = await cardService.getCardDetail(f.manager.actor, card.id);
+    expect(after.attachments.filter((a) => a.purpose === "CARD").map((a) => a.id)).not.toContain(second.id);
+    expect(after.versions.flatMap((v) => v.attachmentIds)).not.toContain(second.id);
+
+    await checklists.removeChecklistItemImage(f.manager.actor, { itemId: id });
+    expect(await imageOf(id)).toBeNull();
+  });
+
+  it("need card edit rights, an image and an item on that card", async () => {
+    const detail = await checklists.addChecklistItem(f.manager.actor, { checklistId: listId, text: "Portal ground", assigneeId: f.member2.id });
+    const id = itemId(detail, "Portal ground");
+    // Member Two can tick their item off, but not change its picture.
+    await expectAppError(uploadPicture(f.member2.actor, id), "FORBIDDEN");
+    await expectAppError(checklists.removeChecklistItemImage(f.member2.actor, { itemId: id }), "FORBIDDEN");
+    await expectAppError(
+      media.createUpload(f.manager.actor, { cardId: card.id, filename: "notes.txt", size: 10, contentType: "text/plain", purpose: "checklist", checklistItemId: id }),
+      "VALIDATION",
+    );
+    const other = await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: "Elsewhere" });
+    await expectAppError(
+      media.createUpload(f.manager.actor, { cardId: other.id, filename: "bug.png", size: 10, contentType: "image/png", purpose: "checklist", checklistItemId: id }),
+      "NOT_FOUND",
+    );
+  });
+
+  it("are archived with their item or checklist", async () => {
+    let detail = await checklists.addChecklistItem(f.manager.actor, { checklistId: listId, text: "Doomed item" });
+    const picture = await uploadPicture(f.manager.actor, itemId(detail, "Doomed item"));
+    await checklists.deleteChecklistItem(f.manager.actor, { itemId: itemId(detail, "Doomed item") });
+    expect((await db.select().from(attachments).where(eq(attachments.id, picture.id)))[0]!.archivedAt).not.toBeNull();
+
+    detail = await checklists.createChecklist(f.manager.actor, { cardId: card.id, title: "Doomed list", items: ["One"] });
+    const list = detail.checklists.find((l) => l.title === "Doomed list")!;
+    const listPicture = await uploadPicture(f.manager.actor, list.items[0]!.id);
+    await checklists.deleteChecklist(f.manager.actor, { checklistId: list.id });
+    expect((await db.select().from(attachments).where(eq(attachments.id, listPicture.id)))[0]!.archivedAt).not.toBeNull();
   });
 });

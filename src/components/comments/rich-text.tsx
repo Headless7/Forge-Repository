@@ -136,3 +136,50 @@ export function RichText({ text, mentions, className }: { text: string; mentions
 
   return <div className={cn("space-y-2 break-words text-[13px] leading-relaxed", className)}>{blocks}</div>;
 }
+
+const BARE_URL = /https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/g;
+
+/** A long link as "host/first/…/last" (the full address stays in its tooltip and href). */
+export function shortUrl(url: string, max = 48): string {
+  try {
+    const u = new URL(url);
+    const host = u.host.replace(/^www\./, "");
+    const full = `${host}${u.pathname === "/" ? "" : u.pathname}${u.search}`;
+    if (full.length <= max) return full;
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (parts.length >= 3) return `${host}/${parts[0]}/…/${parts[parts.length - 1]}`;
+    return `${full.slice(0, max - 1)}…`;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Plain text with its http(s) addresses as links (short labels for long ones) — nothing else is
+ * formatted, and nothing is treated as HTML. For one-line text like checklist items.
+ */
+export function LinkedText({ text }: { text: string }) {
+  const out: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(BARE_URL)) {
+    const start = match.index ?? 0;
+    if (start > last) out.push(text.slice(last, start));
+    const url = match[0];
+    out.push(
+      <a
+        key={start}
+        href={url}
+        title={url}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        onDoubleClick={(e) => e.stopPropagation()}
+        className="break-all text-accent underline-offset-2 hover:underline"
+      >
+        {shortUrl(url)}
+      </a>,
+    );
+    last = start + url.length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return <>{out}</>;
+}

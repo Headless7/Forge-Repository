@@ -443,9 +443,10 @@ export const appRouter = {
       filename: z.string().min(1).max(255),
       size: z.number().int().positive(),
       contentType: z.string().max(200),
-      purpose: z.enum(["version", "attachment", "comment", "resource", "cover"]),
+      purpose: z.enum(["version", "attachment", "comment", "resource", "cover", "checklist"]),
       versionId: idSchema.nullable().optional(),
       deliverableId: idSchema.nullable().optional(),
+      checklistItemId: idSchema.nullable().optional(),
     }),
     handler: ({ actor }, i) => media.createUpload(actor, i),
   }),
@@ -588,6 +589,10 @@ export const appRouter = {
   "checklist.moveItem": proc({
     input: z.object({ itemId: idSchema, index: z.number().int().min(0) }),
     handler: ({ actor }, i) => checklists.moveChecklistItem(actor, i),
+  }),
+  "checklist.removeItemImage": proc({
+    input: z.object({ itemId: idSchema }),
+    handler: ({ actor }, i) => checklists.removeChecklistItemImage(actor, i),
   }),
   "checklist.deleteItem": proc({
     input: z.object({ itemId: idSchema }),

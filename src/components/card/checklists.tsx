@@ -1,19 +1,187 @@
 "use client";
 
-import { CalendarPlus, Check, ListChecks, Plus, Trash2, UserPlus, UserRound, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { CalendarPlus, Check, ExternalLink, ImageOff, ImagePlus, ListChecks, Loader2, Plus, Search, Trash2, Upload, UserPlus, UserRound, X } from "lucide-react";
+import { useRef, useState, type ClipboardEvent } from "react";
+import { toast } from "sonner";
 import { canTakeChecklistItems, canTickChecklistItem } from "@/lib/checklist";
 import { useCardMutation } from "@/lib/queries";
-import type { ChecklistDTO, ChecklistItemDTO, MemberDTO } from "@/lib/types";
+import type { AttachmentDTO, ChecklistDTO, ChecklistItemDTO, MemberDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { LinkedText } from "../comments/rich-text";
 import { UserAvatar } from "../domain/avatar";
 import { ChecklistDue } from "../domain/checklist-due";
 import { DiscordHandle } from "../domain/discord-icon";
+import { ImageViewer } from "../media/image-viewer";
 import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/controls";
+import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/menu";
+import { useUploads } from "../upload/upload-manager";
 import { useWorkspace } from "./workspace-context";
+
+const ITEM_IMAGE_TYPES = "image/png,image/jpeg,image/webp,image/gif";
+
+/** Uploads an item's picture (replacing the one before), from a file picker or a paste. */
+function useItemPicture(item: ChecklistItemDTO) {
+  const { uploadTarget } = useWorkspace();
+  const uploads = useUploads();
+  const [uploading, setUploading] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  const upload = async (files: File[]) => {
+    const file = files.find((f) => f.type.startsWith("image/"));
+    if (!file) {
+      if (files.length) toast.error("Choose an image (PNG, JPEG, WebP or GIF).");
+      return;
+    }
+    setUploading(true);
+    try {
+      await uploads.uploadFiles({ ...uploadTarget, deliverableId: null, checklistItemId: item.id, label: "Checklist picture" }, [file], "checklist");
+    } finally {
+      setUploading(false);
+    }
+  };
+  const fileInput = (
+    <input
+      ref={input}
+      type="file"
+      hidden
+      accept={ITEM_IMAGE_TYPES}
+      aria-label={`Picture for ${item.text}`}
+      onChange={(e) => {
+        void upload([...(e.target.files ?? [])]);
+        e.target.value = "";
+      }}
+    />
+  );
+  return { upload, uploading, choose: () => input.current?.click(), fileInput };
+}
+
+/**
+ * A pasted image (e.g. a fresh screenshot) goes to `onImage` — and stops here, so the card's own
+ * "paste anywhere" doesn't also upload it as a revision.
+ */
+function pastedImage(onImage: (files: File[]) => void) {
+  return (e: ClipboardEvent<HTMLElement>) => {
+    const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onImage(files);
+  };
+}
+
+/** Adds a picture to an item that has none: upload one, or paste a screenshot. */
+function AddItemPicture({ item }: { item: ChecklistItemDTO }) {
+  const [open, setOpen] = useState(false);
+  const picture = useItemPicture(item);
+  return (
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Add a picture to ${item.text}`}
+            title="Add a picture"
+            disabled={picture.uploading}
+            className={cn(
+              "touch-target mt-[3px] text-fg-subtle hover:text-fg",
+              !picture.uploading && "hover-reveal opacity-0 focus-visible:opacity-100 group-hover/item:opacity-100 data-[state=open]:opacity-100",
+            )}
+          >
+            {picture.uploading ? <Loader2 className="size-3.5 animate-spin" aria-label="Uploading" /> : <ImagePlus className="size-3.5" />}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          collisionPadding={8}
+          className="grid w-60 max-w-[calc(100vw-16px)] gap-2 p-3"
+          onPaste={pastedImage((files) => {
+            setOpen(false);
+            void picture.upload(files);
+          })}
+        >
+          <p className="text-[12px] font-medium text-fg">Picture for this item</p>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              setOpen(false);
+              picture.choose();
+            }}
+          >
+            <Upload /> Upload image…
+          </Button>
+          <p className="text-[11.5px] leading-snug text-fg-muted [@media(pointer:coarse)]:hidden">Or paste a screenshot (Ctrl+V) while this is open.</p>
+        </PopoverContent>
+      </Popover>
+      {picture.fileInput}
+    </>
+  );
+}
+
+/** An item's picture: a thumbnail that opens it large, where card editors replace or remove it. */
+function ItemPicture({ item, image, canEdit }: { item: ChecklistItemDTO; image: AttachmentDTO; canEdit: boolean }) {
+  const { card } = useWorkspace();
+  const [open, setOpen] = useState(false);
+  const picture = useItemPicture(item);
+  const remove = useCardMutation("checklist.removeItemImage", card.id, card.projectId, { onSuccess: () => setOpen(false) });
+  const src = image.thumbUrl ?? image.url;
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={`View the picture for ${item.text}`}
+        className={cn(
+          "relative mt-1 flex h-20 max-w-48 items-center justify-center overflow-hidden rounded-md border border-border-strong bg-surface-4 text-fg-subtle hover:border-accent focus-visible:ring-2 focus-visible:ring-ring",
+          item.isDone && "opacity-60",
+        )}
+      >
+        {src ? <img src={src} alt="" loading="lazy" decoding="async" className="h-full w-auto max-w-48 object-cover" /> : <Loader2 className="mx-6 size-4 animate-spin" aria-label="Processing" />}
+        {picture.uploading ? (
+          <span className="absolute inset-0 flex items-center justify-center bg-overlay">
+            <Loader2 className="size-4 animate-spin text-fg" aria-label="Uploading" />
+          </span>
+        ) : null}
+      </button>
+      <DialogContent size="xl" title={item.text} hideTitle onPaste={canEdit ? pastedImage((files) => void picture.upload(files)) : undefined}>
+        <p className="mb-3 pr-8 text-[13px] text-fg [overflow-wrap:anywhere]">
+          <LinkedText text={item.text} />
+        </p>
+        <div className="h-[min(62dvh,560px)] overflow-hidden rounded-lg">
+          {image.url ? (
+            <ImageViewer src={image.url} alt={item.text} naturalWidth={image.width} naturalHeight={image.height} markers={[]} />
+          ) : (
+            <div className="flex h-full items-center justify-center bg-surface-4 text-fg-subtle">
+              <Loader2 className="size-5 animate-spin" aria-label="Processing" />
+            </div>
+          )}
+        </div>
+        <DialogFooter className="justify-between">
+          {image.url ? (
+            <a href={image.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-8 items-center gap-1.5 rounded-md px-2 text-[12.5px] text-fg-muted hover:bg-surface-4 hover:text-fg">
+              <ExternalLink className="size-3.5" /> Open original
+            </a>
+          ) : (
+            <span />
+          )}
+          {canEdit ? (
+            <span className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="ghost" loading={remove.isPending} onClick={() => remove.mutate({ itemId: item.id })}>
+                <ImageOff /> Remove
+              </Button>
+              <Button size="sm" variant="secondary" loading={picture.uploading} onClick={picture.choose}>
+                <Upload /> Replace…
+              </Button>
+            </span>
+          ) : null}
+        </DialogFooter>
+        {picture.fileInput}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function ItemPerson({ person }: { person: MemberDTO | null }) {
   return (
@@ -38,6 +206,7 @@ function ItemPeople({ item, canEdit }: { item: ChecklistItemDTO; canEdit: boolea
     if (input.assigneeId || input.dueOn) gave.current = true;
     mutation.mutate(input);
   };
+  const [query, setQuery] = useState("");
   const person = item.assigneeId ? (membersById.get(item.assigneeId) ?? null) : null;
   const summary =
     item.assigneeId || item.dueOn ? (
@@ -49,11 +218,16 @@ function ItemPeople({ item, canEdit }: { item: ChecklistItemDTO; canEdit: boolea
 
   if (!canEdit) return summary ? <span className="flex min-w-0 items-center gap-2">{summary}</span> : null;
 
-  const candidates = members.filter((m) => canTakeChecklistItems(m.role));
+  const q = query.trim().toLowerCase();
+  const candidates = members
+    .filter((m) => canTakeChecklistItems(m.role))
+    .filter((m) => !q || [m.displayName, m.title, m.discord?.username].some((v) => v?.toLowerCase().includes(q)));
+  const showNobody = !q || "nobody".includes(q);
   const choose = (assigneeId: string | null) => assigneeId !== item.assigneeId && update({ itemId: item.id, assigneeId });
   return (
     <Popover
       onOpenChange={(open) => {
+        if (!open) setQuery("");
         if (open || !gave.current) return;
         gave.current = false;
         // After giving an item a person or a day (popover closed): what that means for them.
@@ -83,17 +257,39 @@ function ItemPeople({ item, canEdit }: { item: ChecklistItemDTO; canEdit: boolea
         align="end"
         collisionPadding={8}
         className="flex max-h-[var(--radix-popover-content-available-height)] w-64 max-w-[calc(100vw-16px)] flex-col gap-3 overflow-y-auto p-2"
+        // Opening focuses the search box — except on touch screens, where that would throw up the keyboard.
+        onOpenAutoFocus={(e) => window.matchMedia("(pointer: coarse)").matches && e.preventDefault()}
       >
         <div>
           <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">Given to</p>
-          <ul className="scrollbar-thin max-h-56 overflow-y-auto">
-            <li>
-              <button type="button" onClick={() => choose(null)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4">
-                <UserRound className="size-5 text-fg-subtle" aria-hidden />
-                <span className="flex-1">Nobody</span>
-                {!item.assigneeId ? <Check className="size-4 text-accent" aria-label="Selected" /> : null}
-              </button>
-            </li>
+          <div className="relative mb-1">
+            <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-fg-subtle" aria-hidden />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter gives it to the one person left (or the first match).
+                if (e.key === "Enter" && q && candidates[0]) {
+                  e.preventDefault();
+                  choose(candidates[0].id);
+                }
+              }}
+              placeholder="Search people…"
+              aria-label="Search people"
+              className="h-8 w-full rounded-md border border-border-strong bg-surface-3 pl-7 pr-2 text-[13px] outline-none focus:border-accent"
+            />
+          </div>
+          <ul className="scrollbar-thin max-h-56 overflow-y-auto overscroll-contain" aria-label="People">
+            {showNobody ? (
+              <li>
+                <button type="button" onClick={() => choose(null)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4">
+                  <UserRound className="size-5 text-fg-subtle" aria-hidden />
+                  <span className="flex-1">Nobody</span>
+                  {!item.assigneeId ? <Check className="size-4 text-accent" aria-label="Selected" /> : null}
+                </button>
+              </li>
+            ) : null}
             {candidates.map((m) => (
               <li key={m.id}>
                 <button type="button" onClick={() => choose(m.id)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4">
@@ -106,7 +302,8 @@ function ItemPeople({ item, canEdit }: { item: ChecklistItemDTO; canEdit: boolea
                 </button>
               </li>
             ))}
-            {item.assigneeId && !person ? (
+            {q && !candidates.length && !showNobody ? <li className="px-2 py-1.5 text-[12.5px] text-fg-muted">No one matches “{query.trim()}”.</li> : null}
+            {item.assigneeId && !person && !q ? (
               <li className="flex items-center gap-2 px-2 py-1.5 text-[13px] text-fg-muted">
                 <UserRound className="size-5 text-fg-subtle" aria-hidden />
                 <span className="flex-1">Former member</span>
@@ -143,6 +340,7 @@ function ItemPeople({ item, canEdit }: { item: ChecklistItemDTO; canEdit: boolea
 
 function ChecklistBlock({ list }: { list: ChecklistDTO }) {
   const { card, viewerId } = useWorkspace();
+  const images = new Map(card.attachments.map((a) => [a.id, a]));
   const canEdit = card.permissions.canEdit;
   const [adding, setAdding] = useState(false);
   const [text, setText] = useState("");
@@ -215,15 +413,21 @@ function ChecklistBlock({ list }: { list: ChecklistDTO }) {
                       setEditingId(item.id);
                       setEditText(item.text);
                     }}
-                    className={cn("min-w-32 flex-1 break-words text-[13px]", item.isDone && "text-fg-subtle line-through")}
+                    className={cn("min-w-32 flex-1 text-[13px] [overflow-wrap:anywhere]", item.isDone && "text-fg-subtle line-through")}
                   >
-                    {item.text}
+                    <LinkedText text={item.text} />
                   </span>
                 )}
                 <span className="ml-auto flex min-w-0 max-w-full items-center">
                   <ItemPeople item={item} canEdit={canEdit} />
                 </span>
+                {item.imageId && images.has(item.imageId) ? (
+                  <span className="flex basis-full">
+                    <ItemPicture item={item} image={images.get(item.imageId)!} canEdit={canEdit} />
+                  </span>
+                ) : null}
               </div>
+              {canEdit && !item.imageId ? <AddItemPicture item={item} /> : null}
               {canEdit ? (
                 <button
                   type="button"

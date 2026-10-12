@@ -1,6 +1,6 @@
 import { bigint, index, integer, jsonb, pgTable, real, text, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { users } from "./auth";
-import { cards } from "./cards";
+import { cards, checklistItems } from "./cards";
 import { createdAt, pk, tsz, updatedAt } from "./columns";
 import { deliverables } from "./deliverables";
 import { comments } from "./feedback";
@@ -37,8 +37,8 @@ export const assetVersions = pgTable(
 );
 
 export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO", "AUDIO", "ROBLOX", "FILE"] as const;
-/** COVER: uploaded only to be the card's board cover (no revision, no review). */
-export const ATTACHMENT_PURPOSES = ["VERSION", "CARD", "COMMENT", "RESOURCE", "COVER"] as const;
+/** COVER: uploaded only to be the card's board cover (no revision, no review). CHECKLIST: a checklist item's reference image. */
+export const ATTACHMENT_PURPOSES = ["VERSION", "CARD", "COMMENT", "RESOURCE", "COVER", "CHECKLIST"] as const;
 export const ATTACHMENT_STATUSES = ["PENDING", "PROCESSING", "READY", "FAILED"] as const;
 
 /**
@@ -59,8 +59,10 @@ export const attachments = pgTable(
     /** The deliverable this file belongs to (null: card-level reference files). */
     deliverableId: uuid().references((): AnyPgColumn => deliverables.id, { onDelete: "cascade" }),
     commentId: uuid().references((): AnyPgColumn => comments.id, { onDelete: "set null" }),
+    /** CHECKLIST: the item this image illustrates (its latest unarchived one is shown). */
+    checklistItemId: uuid().references((): AnyPgColumn => checklistItems.id, { onDelete: "set null" }),
     kind: text({ enum: ATTACHMENT_KINDS }).notNull(),
-    /** VERSION: work under review · CARD: reference files · COMMENT: on a comment · RESOURCE: stands in for a Roblox asset. */
+    /** VERSION: work under review · CARD: reference files · COMMENT: on a comment · RESOURCE: stands in for a Roblox asset · CHECKLIST: on a checklist item. */
     purpose: text({ enum: ATTACHMENT_PURPOSES }).notNull().default("CARD"),
     status: text({ enum: ATTACHMENT_STATUSES }).notNull().default("PENDING"),
     storageKey: text().notNull(),
@@ -92,6 +94,7 @@ export const attachments = pgTable(
     index("attachments_version_idx").on(t.versionId),
     index("attachments_deliverable_idx").on(t.deliverableId),
     index("attachments_comment_idx").on(t.commentId),
+    index("attachments_checklist_item_idx").on(t.checklistItemId),
   ],
 );
 

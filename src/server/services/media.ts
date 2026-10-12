@@ -1,9 +1,9 @@
-import { and, eq, isNull, lt, max, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, max, ne, sql } from "drizzle-orm";
 import type { AttachmentDTO } from "@/lib/types";
 import { assertCard, computeDeliverablePermissions, loadContributors, requireCard, requireDeliverable, type CardAccess, type DeliverableAccess } from "../access";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
-import { assetVersions, attachments, cards, deliverables, reviews } from "../db/schema";
+import { assetVersions, attachments, cards, checklistItems, deliverables, reviews } from "../db/schema";
 import { AppError, conflict, forbidden, invalid, notFound } from "../errors";
 import { mediaQueue } from "../jobs/queue";
 import { classifyUpload, maxBytesFor, sanitizeFilename, storageName } from "../media/formats";
@@ -29,7 +29,7 @@ import { Effects } from "./effects";
 import { notify } from "./notifications";
 import { ABANDONED_UPLOAD_MS, reserveStudioStorage } from "./storage-quota";
 
-export type UploadPurpose = "version" | "attachment" | "comment" | "resource" | "cover";
+export type UploadPurpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist";
 
 /** A card with exactly one active deliverable can be addressed by the card alone (board drops, pastes). */
 async function resolveDeliverable(actor: Actor, input: { deliverableId?: string | null; cardId?: string | null }): Promise<DeliverableAccess> {
@@ -114,17 +114,29 @@ export async function updateVersionNotes(actor: Actor, input: { versionId: strin
 interface UploadScope {
   ctx: CardAccess;
   deliverableId: string | null;
+  checklistItemId?: string | null;
 }
 
 async function assertUploadAllowed(
   actor: Actor,
-  input: { cardId: string; purpose: UploadPurpose; versionId?: string | null; deliverableId?: string | null },
+  input: { cardId: string; purpose: UploadPurpose; versionId?: string | null; deliverableId?: string | null; checklistItemId?: string | null },
   ex: Executor,
 ): Promise<UploadScope> {
   const ctx = await requireCard(actor.userId, input.cardId, ex);
   if (input.purpose === "comment") {
     assertCard(ctx.perms, "canComment");
     return { ctx, deliverableId: null };
+  }
+  if (input.purpose === "checklist") {
+    // A checklist item's reference image: editing the item, like its text.
+    assertCard(ctx.perms, "canEdit", "You don't have permission to change this card's checklists.");
+    if (!input.checklistItemId) throw invalid("A checklist item is required.");
+    const [item] = await ex
+      .select({ id: checklistItems.id })
+      .from(checklistItems)
+      .where(and(eq(checklistItems.id, input.checklistItemId), eq(checklistItems.cardId, ctx.card.id)));
+    if (!item) throw notFound("Checklist item");
+    return { ctx, deliverableId: null, checklistItemId: item.id };
   }
   if (input.purpose === "cover") {
     // Changing a cover is a card edit; the file belongs to no revision — and to the deliverable
@@ -170,15 +182,17 @@ export async function createUpload(
     purpose: UploadPurpose;
     versionId?: string | null;
     deliverableId?: string | null;
+    checklistItemId?: string | null;
   },
 ): Promise<{ attachmentId: string; upload: UploadTarget; maxBytes: number }> {
   enforceRateLimit(`upload:${actor.userId}`, 200, 10 * 60 * 1000);
-  const { ctx, deliverableId } = await assertUploadAllowed(actor, input, db);
+  const { ctx, deliverableId, checklistItemId = null } = await assertUploadAllowed(actor, input, db);
 
   const filename = sanitizeFilename(input.filename);
   const classification = classifyUpload(filename, input.contentType);
   if ("error" in classification) throw invalid(classification.error);
   if (input.purpose === "cover" && !(COVER_KINDS as readonly string[]).includes(classification.kind)) throw invalid("A cover must be an image or a video.");
+  if (input.purpose === "checklist" && classification.kind !== "IMAGE") throw invalid("A checklist item's picture must be an image.");
   const maxBytes = maxBytesFor(classification.kind);
   if (input.size > maxBytes) {
     throw new AppError("PAYLOAD_TOO_LARGE", `${filename} is larger than the ${Math.round(maxBytes / 1024 / 1024)} MB limit for this file type.`);
@@ -193,7 +207,7 @@ export async function createUpload(
     attachmentId: id,
     name: `original-${storageName(filename)}`,
   });
-  const purpose = input.purpose === "version" ? "VERSION" : input.purpose === "comment" ? "COMMENT" : input.purpose === "resource" ? "RESOURCE" : input.purpose === "cover" ? "COVER" : "CARD";
+  const purpose = input.purpose === "version" ? "VERSION" : input.purpose === "comment" ? "COMMENT" : input.purpose === "resource" ? "RESOURCE" : input.purpose === "cover" ? "COVER" : input.purpose === "checklist" ? "CHECKLIST" : "CARD";
   await db.transaction(async (tx) => {
     // Counts against the studio's storage limit from now on (until finished or abandoned).
     await reserveStudioStorage(tx, ctx.access.studioId, input.size);
@@ -203,6 +217,7 @@ export async function createUpload(
       projectId: ctx.card.projectId,
       versionId: input.purpose === "version" ? input.versionId! : null,
       deliverableId,
+      checklistItemId,
       purpose,
       kind: classification.kind,
       status: "PENDING",
@@ -375,6 +390,10 @@ export async function completeUpload(
       if (!(COVER_KINDS as readonly string[]).includes(row!.kind)) throw invalid("A cover must be an image or a video.");
       if (row!.deliverableId) await pinDeliverableCover(tx, ctx, row!.deliverableId, row!.id, actor.userId);
       else await pinCover(tx, ctx, row!.id, actor.userId);
+    } else if (attachment.purpose === "CHECKLIST") {
+      // Becomes its item's picture now, replacing the one before.
+      if (row!.kind !== "IMAGE") throw invalid("A checklist item's picture must be an image.");
+      if (row!.checklistItemId) await retireChecklistImages(tx, row!.checklistItemId, row!.id);
     } else if (attachment.purpose === "CARD") {
       await logActivity(tx, {
         studioId: ctx.access.studioId,
@@ -465,6 +484,25 @@ export async function restoreAttachment(actor: Actor, input: { attachmentId: str
   });
   new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
   return { ok: true };
+}
+
+// ── Checklist item pictures ─────────────────────────────────────────────────
+
+/** Archives a checklist item's pictures (all of them, or all but `keep`); the stored files stay. */
+export async function retireChecklistImages(tx: Executor, checklistItemId: string | string[], keep: string | null = null) {
+  const ids = Array.isArray(checklistItemId) ? checklistItemId : [checklistItemId];
+  if (!ids.length) return;
+  await tx
+    .update(attachments)
+    .set({ archivedAt: now() })
+    .where(
+      and(
+        inArray(attachments.checklistItemId, ids),
+        eq(attachments.purpose, "CHECKLIST"),
+        isNull(attachments.archivedAt),
+        keep ? ne(attachments.id, keep) : undefined,
+      ),
+    );
 }
 
 // ── Card covers ─────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import { loadCardDetail } from "./card-dto";
 import { touchCard } from "./cards";
 import type { Actor } from "./context";
 import { Effects } from "./effects";
+import { retireChecklistImages } from "./media";
 import { listProjectMembers } from "./members-query";
 
 async function editableCard(actor: Actor, cardId: string) {
@@ -90,7 +91,11 @@ export async function renameChecklist(actor: Actor, input: { checklistId: string
 export async function deleteChecklist(actor: Actor, input: { checklistId: string }) {
   const list = await loadList(input.checklistId);
   const ctx = await editableCard(actor, list.cardId);
-  await db.delete(checklists).where(eq(checklists.id, list.id));
+  await db.transaction(async (tx) => {
+    const items = await tx.select({ id: checklistItems.id }).from(checklistItems).where(eq(checklistItems.checklistId, list.id));
+    await retireChecklistImages(tx, items.map((i) => i.id));
+    await tx.delete(checklists).where(eq(checklists.id, list.id));
+  });
   return finish(actor, ctx);
 }
 
@@ -211,6 +216,20 @@ export async function moveChecklistItem(actor: Actor, input: { itemId: string; i
 export async function deleteChecklistItem(actor: Actor, input: { itemId: string }) {
   const item = await loadItem(input.itemId);
   const ctx = await editableCard(actor, item.cardId);
-  await db.delete(checklistItems).where(and(eq(checklistItems.id, item.id)));
+  await db.transaction(async (tx) => {
+    await retireChecklistImages(tx, item.id);
+    await tx.delete(checklistItems).where(eq(checklistItems.id, item.id));
+  });
+  return finish(actor, ctx);
+}
+
+/** Takes an item's picture off (pictures are added by uploading one for the item). */
+export async function removeChecklistItemImage(actor: Actor, input: { itemId: string }) {
+  const item = await loadItem(input.itemId);
+  const ctx = await editableCard(actor, item.cardId);
+  await db.transaction(async (tx) => {
+    await retireChecklistImages(tx, item.id);
+    await touchCard(tx, ctx.card.id, actor.userId, false);
+  });
   return finish(actor, ctx);
 }

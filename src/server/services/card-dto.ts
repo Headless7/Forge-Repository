@@ -443,6 +443,9 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
     feedbackIds: commentRows.filter((c) => c.reviewId === r.id && !c.deletedAt).map((c) => c.id),
   }));
 
+  // Each item shows its newest image (older ones are archived when replaced).
+  const itemImages = new Map<string, string>();
+  for (const a of visibleAttachmentRows) if (a.purpose === "CHECKLIST" && a.checklistItemId && a.kind === "IMAGE" && a.status !== "FAILED") itemImages.set(a.checklistItemId, a.id);
   const checklistDTOs: ChecklistDTO[] = checklistRows.map((cl) => ({
     id: cl.id,
     title: cl.title,
@@ -458,6 +461,7 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
         doneAt: i.doneAt?.toISOString() ?? null,
         assigneeId: i.assigneeId,
         dueOn: i.dueOn,
+        imageId: itemImages.get(i.id) ?? null,
       })),
   }));
 

@@ -10,7 +10,7 @@ import type { AttachmentDTO } from "@/lib/types";
 import { cn, formatBytes } from "@/lib/utils";
 import { Button } from "../ui/button";
 
-type Purpose = "version" | "attachment" | "comment" | "resource" | "cover";
+type Purpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist";
 
 export interface UploadItem {
   id: string;
@@ -20,6 +20,7 @@ export interface UploadItem {
   purpose: Purpose;
   versionId: string | null;
   deliverableId: string | null;
+  checklistItemId: string | null;
   progress: number;
   status: "queued" | "uploading" | "processing" | "done" | "error";
   error?: string;
@@ -32,6 +33,8 @@ export interface UploadTarget {
   title: string;
   /** The deliverable new revisions/files belong to. Omitted for simple (single-deliverable) cards. */
   deliverableId?: string | null;
+  /** The checklist item a "checklist" upload is the picture of. */
+  checklistItemId?: string | null;
   /** Shown in the tray, e.g. the deliverable's name. */
   label?: string;
 }
@@ -137,6 +140,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           purpose: item.purpose,
           versionId: item.versionId,
           deliverableId: item.purpose === "version" ? null : item.deliverableId,
+          checklistItemId: item.checklistItemId,
         });
         await putWithProgress(intent.upload.url, item.file, intent.upload.headers, (p) => patch(item.id, { progress: p }));
         patch(item.id, { status: "processing", progress: 1 });
@@ -164,6 +168,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         purpose,
         versionId,
         deliverableId: card.deliverableId ?? null,
+        checklistItemId: card.checklistItemId ?? null,
         progress: 0,
         status: "queued",
       }));

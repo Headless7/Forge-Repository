@@ -127,6 +127,13 @@
       "when": 1791751769059,
       "tag": "0017_colors_and_board_backgrounds",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791809872058,
+      "tag": "0018_checklist_item_images",
+      "breakpoints": true
     }
   ]
 }

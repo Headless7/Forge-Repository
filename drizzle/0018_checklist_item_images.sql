@@ -1,0 +1,3 @@
+ALTER TABLE "attachments" ADD COLUMN "checklist_item_id" uuid;--> statement-breakpoint
+ALTER TABLE "attachments" ADD CONSTRAINT "attachments_checklist_item_id_checklist_items_id_fk" FOREIGN KEY ("checklist_item_id") REFERENCES "public"."checklist_items"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "attachments_checklist_item_idx" ON "attachments" USING btree ("checklist_item_id");

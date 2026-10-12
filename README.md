@@ -23,7 +23,8 @@ every revision, decision and comment stays attached to the work it belongs to.
 - **Checklists** — each item can be given to one person and due on a day. People
   see their items in Home, calendars, their calendar subscription and Discord
   (`/mywork`, `/due`, `/additem`), and can tick their own off without edit rights
-  on the card. Overdue items show on the board card.
+  on the card. Overdue items show on the board card. Links in items are clickable, and
+  each item can carry a picture (upload or paste a screenshot) for visual reference.
 - **Connected canvas** — deliverables on a pan/zoom canvas (or as a list) with
   *dependency* and *association* links; blocked work shows what it is waiting on.
 - **Review workflow** — Not submitted → In progress → Needs review →

@@ -9,7 +9,7 @@ export type CardState = "NOT_SUBMITTED" | "IN_PROGRESS" | "NEEDS_REVIEW" | "CHAN
 export type Priority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
 export type CardDisplayMode = "VISUAL" | "COMPACT";
 export type AttachmentKind = "IMAGE" | "VIDEO" | "AUDIO" | "ROBLOX" | "FILE";
-export type AttachmentPurpose = "VERSION" | "CARD" | "COMMENT" | "RESOURCE" | "COVER";
+export type AttachmentPurpose = "VERSION" | "CARD" | "COMMENT" | "RESOURCE" | "COVER" | "CHECKLIST";
 export type ProductionStatus = "TODO" | "COMPLETED" | "PUBLISHED";
 export type BoardView = "CATEGORY" | "PRODUCTION" | "TIMELINE" | "CALENDAR";
 export type DeliverableLinkType = "DEPENDENCY" | "ASSOCIATION";
@@ -523,6 +523,8 @@ export interface ChecklistItemDTO {
   assigneeId: string | null;
   /** The day it is due ("YYYY-MM-DD"; due by the end of that day). */
   dueOn: string | null;
+  /** Its reference image (an IMAGE attachment on the card), if any. */
+  imageId: string | null;
 }
 
 export interface ChecklistDTO {
