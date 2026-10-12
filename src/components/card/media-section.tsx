@@ -22,7 +22,7 @@ import { toast } from "sonner";
 import { VERSION_STATUS_META } from "@/lib/card-meta";
 import type { RobloxFileMeta } from "@/lib/roblox/manifest";
 import { useCardMutation } from "@/lib/queries";
-import type { AttachmentDTO, CommentDTO, VersionDTO } from "@/lib/types";
+import { demoClipProblem, type AttachmentDTO, type CommentDTO, type VersionDTO } from "@/lib/types";
 import { cn, formatBytes, formatTimecode, timeAgo } from "@/lib/utils";
 import { Composer } from "../comments/composer";
 import { CommentThread, type CommentAnchorInfo } from "../comments/comment-thread";
@@ -91,6 +91,12 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
   const [url, setUrl] = useState("");
   const [over, setOver] = useState(false);
   const [demoFile, setDemoFile] = useState<File | null>(null);
+  const [demoError, setDemoError] = useState<string | null>(null);
+  const chooseDemo = (file: File | null) => {
+    const problem = file ? demoClipProblem(file) : null;
+    setDemoError(problem);
+    setDemoFile(problem ? null : file);
+  };
   const input = useRef<HTMLInputElement>(null);
   const demoInput = useRef<HTMLInputElement>(null);
   const hasRoblox = files.some((f) => /\.rbx[ml]x?$/i.test(f.name));
@@ -121,6 +127,7 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
     setNotes("");
     setUrl("");
     setDemoFile(null);
+    setDemoError(null);
   };
 
   const onDrop = (e: DragEvent) => {
@@ -180,15 +187,20 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
             />
           </div>
         )}
-        {hasRoblox ? (
+        {hasRoblox && card.productionStatus !== "PUBLISHED" ? (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-3/40 px-2.5 py-2 text-[12.5px]">
             <Clapperboard className="size-4 shrink-0 text-fg-subtle" />
             <span className="min-w-0 flex-1">
               <span className="block font-medium">Demonstration clip (optional)</span>
-              <span className="block text-fg-muted">{demoFile ? `${demoFile.name} · ${formatBytes(demoFile.size)}` : "A short video showing how the UI behaves in game — opens as a Demo tab in the preview."}</span>
+              <span className="block text-fg-muted">{demoFile ? `${demoFile.name} · ${formatBytes(demoFile.size)}` : "A short video showing how the UI behaves in game — opens as a Demo tab in the preview. Up to 20 MB."}</span>
+              {demoError ? (
+                <span role="alert" className="mt-1 block text-danger">
+                  {demoError}
+                </span>
+              ) : null}
             </span>
             {demoFile ? (
-              <button type="button" aria-label="Remove the demonstration clip" onClick={() => setDemoFile(null)} className="text-fg-subtle hover:text-fg">
+              <button type="button" aria-label="Remove the demonstration clip" onClick={() => chooseDemo(null)} className="text-fg-subtle hover:text-fg">
                 <X className="size-3.5" />
               </button>
             ) : (
@@ -196,7 +208,7 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
                 Choose video
               </Button>
             )}
-            <input ref={demoInput} type="file" accept="video/*" hidden onChange={(e) => { setDemoFile(e.target.files?.[0] ?? null); e.target.value = ""; }} />
+            <input ref={demoInput} type="file" accept="video/*" hidden onChange={(e) => { chooseDemo(e.target.files?.[0] ?? null); e.target.value = ""; }} />
           </div>
         ) : null}
         <Textarea className="mt-3" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Version notes — what changed?" />
@@ -457,6 +469,11 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
   const removeDemo = useCardMutation("attachment.archive", card.id, card.projectId, { onSuccess: () => setDemoActive(false) });
   const addDemo = (file: File) => {
     if (!current) return;
+    const problem = demoClipProblem(file);
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
     void uploads.uploadFiles({ ...scope.uploadTarget, demoOfId: current.id, label: "Demo clip" }, [file], "demo").then((done) => done.length && setDemoActive(true));
   };
   const numbers = useMemo(() => pinNumbers(scope.comments), [scope.comments]);
@@ -742,7 +759,7 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
                 {...trackPlayhead}
                 demoActive={demoActive}
                 onDemoActiveChange={setDemoActive}
-                onAddDemo={perms.canUpload ? () => demoInput.current?.click() : undefined}
+                onAddDemo={perms.canUpload && card.productionStatus !== "PUBLISHED" ? () => demoInput.current?.click() : undefined}
                 onRemoveDemo={perms.canUpload && demo ? () => removeDemo.mutate({ attachmentId: demo.id }) : undefined}
                 demo={
                   demo?.url ? (

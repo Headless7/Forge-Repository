@@ -31,6 +31,7 @@ export type ActivityType =
   | "deliverable.cover_changed"
   | "version.uploaded"
   | "attachment.added"
+  | "demo.cleared"
   | "review.submitted"
   | "review.approved"
   | "review.changes_requested"

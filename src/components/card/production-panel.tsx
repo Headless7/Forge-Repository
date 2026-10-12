@@ -32,6 +32,7 @@ export function ProductionPanel() {
   const status = card.productionStatus;
   const readiness = card.readiness;
   const last = card.productionEvents.at(-1);
+  const demoClips = card.attachments.filter((a) => a.demoOfId).length;
   const lastActor = last?.actorId ? membersById.get(last.actorId) : undefined;
   const Icon = PRODUCTION_ICONS[status];
 
@@ -180,6 +181,11 @@ export function ProductionPanel() {
                   );
                 })}
             </ul>
+          ) : null}
+          {target === "PUBLISHED" && demoClips > 0 ? (
+            <p className="mb-3 rounded-md border border-state-review/40 bg-state-review/[0.07] p-2 text-[12.5px]">
+              {demoClips === 1 ? "The demonstration clip on this card is" : `The ${demoClips} demonstration clips on this card are`} deleted when it is published, to free storage. Feedback left on {demoClips === 1 ? "it" : "them"} stays.
+            </p>
           ) : null}
           <Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional note (e.g. which build it shipped in)" maxLength={2000} />
           <DialogFooter>

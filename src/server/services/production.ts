@@ -13,6 +13,7 @@ import { cardNotificationData, watcherIds } from "./cards";
 import type { Actor } from "./context";
 import { queueDiscordEvent } from "./discord";
 import { Effects } from "./effects";
+import { deleteDemoClips } from "./media";
 import { notify } from "./notifications";
 
 export interface MoveProductionInput {
@@ -179,6 +180,20 @@ export async function moveProduction(
           `production:${recorded!.id}`,
         ),
       );
+    }
+    if (to === "PUBLISHED") {
+      // Demonstration clips only help while the UI is being made: once it ships they just take up storage.
+      const removed = await deleteDemoClips(tx, ctx.card.id);
+      if (removed.length) {
+        await logActivity(tx, {
+          studioId: ctx.access.studioId,
+          projectId: ctx.card.projectId,
+          cardId: ctx.card.id,
+          actorId: actor.userId,
+          type: "demo.cleared",
+          data: { count: removed.length, filenames: removed.map((r) => r.filename) },
+        });
+      }
     }
     await logActivity(tx, {
       studioId: ctx.access.studioId,

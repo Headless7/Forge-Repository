@@ -61,6 +61,8 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
       return <>uploaded{v(d)}{withCard ? <> of {card}</> : null}</>;
     case "attachment.added":
       return d.demo ? <>added a demonstration clip ({s(d.filename)})</> : <>attached {s(d.filename)}</>;
+    case "demo.cleared":
+      return <>removed {d.count === 1 ? "the demonstration clip" : `${d.count} demonstration clips`} on publish to free storage</>;
     case "card.cover_changed":
       return d.mode === "AUTO" ? <>set the cover back to automatic</> : d.mode === "NONE" ? <>removed the cover</> : <>set the cover to {s(d.filename)}</>;
     case "deliverable.cover_changed": {

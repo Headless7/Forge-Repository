@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, lt, max, ne, sql } from "drizzle-orm";
-import type { AttachmentDTO } from "@/lib/types";
+import { DEMO_CLIP_MAX_BYTES, demoClipProblem, type AttachmentDTO } from "@/lib/types";
 import { assertCard, assertItem, computeDeliverablePermissions, loadContributors, requireCard, requireDeliverable, requireItem, type CardAccess, type DeliverableAccess, type ItemAccess } from "../access";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
@@ -26,6 +26,7 @@ import { addWatchers, cardNotificationData, touchCard, watcherIds } from "./card
 import type { Actor } from "./context";
 import { COVER_KINDS, recomputeCardRollup, recomputeDeliverableCover } from "./deliverables";
 import { Effects } from "./effects";
+import { enqueueStorageCleanup, storageUnits } from "./purge";
 import { notify } from "./notifications";
 import { ABANDONED_UPLOAD_MS, reserveStudioStorage } from "./storage-quota";
 
@@ -140,6 +141,7 @@ async function assertUploadAllowed(
   if (input.purpose === "demo") {
     // A demonstration clip of a Roblox file in a revision: lands in that revision, shown inside that file's preview.
     if (!input.demoOfId) throw invalid("Choose the file the clip demonstrates.");
+    if (ctx.card.productionStatus === "PUBLISHED") throw conflict("This card is published. Demonstration clips are removed once work is published, to save storage.");
     const [target] = await ex
       .select({ id: attachments.id, versionId: attachments.versionId, deliverableId: attachments.deliverableId, kind: attachments.kind, archivedAt: attachments.archivedAt })
       .from(attachments)
@@ -227,7 +229,8 @@ export async function createUpload(
   if (input.purpose === "checklist" && classification.kind !== "IMAGE") throw invalid("A checklist item's picture must be an image.");
   if (input.purpose === "item" && !(ITEM_KINDS as readonly string[]).includes(classification.kind)) throw invalid("Forum items take images and videos.");
   if (input.purpose === "demo" && classification.kind !== "VIDEO") throw invalid("A demonstration clip must be a video.");
-  const maxBytes = maxBytesFor(classification.kind);
+  const maxBytes = input.purpose === "demo" ? Math.min(DEMO_CLIP_MAX_BYTES, maxBytesFor(classification.kind)) : maxBytesFor(classification.kind);
+  if (input.purpose === "demo" && demoClipProblem(input)) throw new AppError("PAYLOAD_TOO_LARGE", demoClipProblem(input)!);
   if (input.size > maxBytes) {
     throw new AppError("PAYLOAD_TOO_LARGE", `${filename} is larger than the ${Math.round(maxBytes / 1024 / 1024)} MB limit for this file type.`);
   }
@@ -344,11 +347,12 @@ async function inspectStoredUpload(attachment: AttachmentRow, clientMeta: Client
   const store = storage();
   const stat = await store.stat(attachment.storageKey);
   if (!stat) throw invalid("The upload didn't reach storage. Please retry.");
-  const maxBytes = maxBytesFor(attachment.kind);
+  // What actually landed in storage, not what the client declared.
+  const maxBytes = attachment.demoOfId ? Math.min(DEMO_CLIP_MAX_BYTES, maxBytesFor(attachment.kind)) : maxBytesFor(attachment.kind);
   if (stat.size > maxBytes) {
     await store.delete(attachment.storageKey).catch(() => {});
     await db.update(attachments).set({ status: "FAILED", error: "File exceeds the size limit." }).where(eq(attachments.id, attachment.id));
-    throw new AppError("PAYLOAD_TOO_LARGE", "That file is larger than the allowed limit.");
+    throw new AppError("PAYLOAD_TOO_LARGE", attachment.demoOfId ? (demoClipProblem(stat) ?? "That clip passes the 20 MB limit for demonstration clips.") : "That file is larger than the allowed limit.");
   }
 
   let analysis;
@@ -560,6 +564,27 @@ export async function importFromUrl(
   const [row] = await db.select().from(attachments).where(eq(attachments.id, intent.attachmentId));
   await storage().put(row!.storageKey, fetched.buffer, row!.mimeType);
   return completeUpload(actor, { attachmentId: intent.attachmentId });
+}
+
+/**
+ * Permanently removes every demonstration clip on a card (the work is published, so the clips
+ * have done their job and only cost storage). Feedback left on a clip stays as plain revision
+ * feedback. Returns what was removed.
+ */
+export async function deleteDemoClips(tx: Executor, cardId: string): Promise<{ id: string; filename: string }[]> {
+  const clips = await tx
+    .select({ id: attachments.id, filename: attachments.filename, storageKey: attachments.storageKey, thumbnailKey: attachments.thumbnailKey, previewKey: attachments.previewKey, playbackKey: attachments.playbackKey })
+    .from(attachments)
+    .where(and(eq(attachments.cardId, cardId), sql`${attachments.demoOfId} is not null`));
+  if (!clips.length) return [];
+  await tx.delete(attachments).where(
+    inArray(
+      attachments.id,
+      clips.map((c) => c.id),
+    ),
+  );
+  await enqueueStorageCleanup(tx, [...new Set(clips.flatMap(storageUnits))], `demo clips of card ${cardId} removed on publish`);
+  return clips.map((c) => ({ id: c.id, filename: c.filename }));
 }
 
 export async function archiveAttachment(actor: Actor, input: { attachmentId: string }) {

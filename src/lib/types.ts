@@ -425,6 +425,18 @@ export interface BoardDTO {
   background: { preset: string | null; imageUrl: string | null };
 }
 
+/** Demonstration clips are short by design: the cap applies on top of the studio's video limit. */
+export const DEMO_CLIP_MAX_BYTES = 20 * 1024 * 1024;
+
+/** Why a chosen demonstration clip can't be used, or null when it can. Checked before the upload starts. */
+export function demoClipProblem(file: { size: number }): string | null {
+  if (file.size > DEMO_CLIP_MAX_BYTES) {
+    const mb = (file.size / 1024 / 1024).toFixed(file.size >= 100 * 1024 * 1024 ? 0 : 1);
+    return `That clip is ${mb} MB, which passes the 20 MB limit for demonstration clips. Trim or compress it and try again.`;
+  }
+  return null;
+}
+
 export interface AttachmentDTO {
   id: string;
   /** Null for files on a forum item. */

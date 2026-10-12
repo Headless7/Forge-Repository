@@ -9,6 +9,7 @@ import { attachments, userBoardPrefs } from "@/server/db/schema";
 import { mediaQueue } from "@/server/jobs/queue";
 import { R, writeBinaryModel } from "@/server/roblox/writer";
 import { expectAppError, pngBuffer, primaryDeliverable, setupStudio, upload, type Fixture } from "@/test/helpers";
+import * as activity from "./activity";
 import * as board from "./board";
 import * as cardService from "./cards";
 import * as comments from "./comments";
@@ -150,6 +151,39 @@ describe("deliverables", () => {
 });
 
 describe("production stages", () => {
+  it("deletes demonstration clips once the card is published, keeping their feedback", async () => {
+    const { storageDeletions } = await import("@/server/db/schema");
+    const { storage } = await import("@/server/storage");
+    const { mp4Buffer } = await import("@/test/helpers");
+    const card = await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.ui, title: "Shop UI", assigneeIds: [f.member.id] });
+    const deliverableId = await primaryDeliverable(card.id);
+    const version = await media.createVersion(f.member.actor, { deliverableId });
+    const ui = writeBinaryModel([{ className: "ScreenGui", props: { Name: R.str("Shop") } }]);
+    const rbx = await upload(f.member.actor, card.id, { name: "shop.rbxm", type: "application/octet-stream", buffer: Buffer.from(ui) }, "version", version.id);
+    const intent = await media.createUpload(f.member.actor, { cardId: card.id, filename: "demo.mp4", size: mp4Buffer(1).length, contentType: "video/mp4", purpose: "demo", demoOfId: rbx.id });
+    const [row] = await db.select().from(attachments).where(eq(attachments.id, intent.attachmentId));
+    await storage().put(row!.storageKey, mp4Buffer(1), "video/mp4");
+    const clip = await media.completeUpload(f.member.actor, { attachmentId: intent.attachmentId });
+    const withNote = await comments.createComment(f.member.actor, { cardId: card.id, body: "Close animation pops", attachmentId: clip.id, annotation: { type: "TIMESTAMP", timestampMs: 1200 } });
+    const note = withNote.comments.find((c) => c.body === "Close animation pops")!;
+    expect(note.annotation?.attachmentId).toBe(clip.id);
+    await reviews.submitForReview(f.member.actor, { deliverableId });
+    await reviews.approve(f.manager.actor, { deliverableId });
+
+    await production.moveProduction(f.manager.actor, { cardId: card.id, status: "PUBLISHED" });
+    const detail = await cardService.getCardDetail(f.manager.actor, card.id);
+    expect(detail.attachments.map((a) => a.id)).toContain(rbx.id);
+    expect(detail.attachments.map((a) => a.id)).not.toContain(clip.id);
+    expect(await db.select().from(attachments).where(eq(attachments.id, clip.id))).toHaveLength(0);
+    // The clip's storage is queued for cleanup; its feedback stays as revision feedback.
+    expect((await db.select().from(storageDeletions)).some((d) => row!.storageKey.startsWith(d.prefix))).toBe(true);
+    const kept = detail.comments.find((c) => c.id === note.id);
+    expect(kept).toMatchObject({ body: "Close animation pops", annotation: null });
+    expect((await activity.listCardActivity(card.id)).some((a) => a.type === "demo.cleared")).toBe(true);
+    // No new clips on published work.
+    await expectAppError(media.createUpload(f.member.actor, { cardId: card.id, filename: "demo2.mp4", size: 10, contentType: "video/mp4", purpose: "demo", demoOfId: rbx.id }), "CONFLICT");
+  });
+
   it("only completes approved work, records it, and keeps the record after new revisions", async () => {
     const { card, rig, anim } = await kitCard("Ship it");
     // Nothing approved: completion is refused with the reasons.

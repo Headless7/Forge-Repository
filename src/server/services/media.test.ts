@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/server/db";
 import { attachments, cards } from "@/server/db/schema";
 import { storage } from "@/server/storage";
+import { DEMO_CLIP_MAX_BYTES } from "@/lib/types";
 import { expectAppError, mp4Buffer, pngBuffer, setupStudio, upload, type Fixture, primaryDeliverable } from "@/test/helpers";
 import * as cardService from "./cards";
 import * as media from "./media";
@@ -104,6 +105,8 @@ describe("demonstration clips", () => {
     await expectAppError(media.createUpload(f.member.actor, { cardId: card.id, filename: "demo.png", size: 10, contentType: "image/png", purpose: "demo", demoOfId: roblox.id }), "VALIDATION");
     await expectAppError(media.createUpload(f.member.actor, { cardId: card.id, filename: "demo.mp4", size: 10, contentType: "video/mp4", purpose: "demo" }), "VALIDATION");
     await expectAppError(media.createUpload(f.viewer.actor, { cardId: card.id, filename: "demo.mp4", size: 10, contentType: "video/mp4", purpose: "demo", demoOfId: roblox.id }), "FORBIDDEN");
+    // Clips are capped at 20 MB, however large the studio's videos may be.
+    await expect(media.createUpload(f.member.actor, { cardId: card.id, filename: "demo.mp4", size: DEMO_CLIP_MAX_BYTES + 1, contentType: "video/mp4", purpose: "demo", demoOfId: roblox.id })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE", message: expect.stringContaining("passes the 20 MB limit") });
     const intent = await media.createUpload(f.member.actor, { cardId: card.id, filename: "demo.mp4", size: mp4Buffer(1).length, contentType: "video/mp4", purpose: "demo", demoOfId: roblox.id });
     const [row] = await db.select().from(attachments).where(eq(attachments.id, intent.attachmentId));
     await storage().put(row!.storageKey, mp4Buffer(1), "video/mp4");
