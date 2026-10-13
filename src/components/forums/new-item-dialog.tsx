@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Input, Label, Textarea } from "../ui/input";
 import { useUploads } from "../upload/upload-manager";
 import { ItemPriorityIcon } from "./item-badges";
-import { ITEM_MEDIA_ACCEPT, itemMediaFiles, itemUploadTarget, pastedItemMedia } from "./item-media";
+import { ITEM_MEDIA_ACCEPT, itemMediaFiles, itemUploadTarget, pastedItemMedia, withinItemLimits } from "./item-media";
 import { PersonPicker, TagPicker } from "./pickers";
 
 interface Picked {
@@ -91,7 +91,9 @@ export function NewItemDialog({
       toast.error("Pictures (PNG, JPEG, WebP, GIF) and clips (MP4, WebM, MOV) only.");
       return;
     }
-    setFiles((list) => [...list, ...media.map((file) => ({ id: crypto.randomUUID(), file, preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null }))]);
+    const allowed = withinItemLimits(media);
+    if (!allowed.length) return;
+    setFiles((list) => [...list, ...allowed.map((file) => ({ id: crypto.randomUUID(), file, preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null }))]);
   };
 
   const submit = () => {
@@ -189,7 +191,7 @@ export function NewItemDialog({
                 <ImagePlus className="size-4" /> Add
               </button>
             </div>
-            <p className="mt-1 text-[11.5px] text-fg-subtle [@media(pointer:coarse)]:hidden">Drop files anywhere here, or paste a screenshot (Ctrl+V).</p>
+            <p className="mt-1 text-[11.5px] text-fg-subtle"><span className="[@media(pointer:coarse)]:hidden">Drop files anywhere here, or paste a screenshot (Ctrl+V). </span>Clips up to 10 MB; bigger videos go in the description as a Discord link.</p>
             <input
               ref={input}
               type="file"

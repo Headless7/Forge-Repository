@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/server/db";
 import { attachments, notifications, projects } from "@/server/db/schema";
 import { storage } from "@/server/storage";
+import { ITEM_VIDEO_MAX_BYTES } from "@/lib/types";
 import { expectAppError, mp4Buffer, pngBuffer, setupStudio, type Fixture, type TestUser } from "@/test/helpers";
 import * as forums from "./forums";
 import * as media from "./media";
@@ -198,6 +199,9 @@ describe("pictures, clips and comments", () => {
     expect(row.counts.attachments).toBe(2);
     expect(row.cover?.attachmentId).toBe(image.id);
     await expectAppError(media.createUpload(f.member.actor, { itemId: item.id, filename: "notes.txt", size: 10, contentType: "text/plain", purpose: "item" }), "VALIDATION");
+    // Videos stop at 10 MB: bigger ones are linked from Discord instead. Pictures aren't capped this way.
+    await expect(media.createUpload(f.member.actor, { itemId: item.id, filename: "long.mp4", size: ITEM_VIDEO_MAX_BYTES + 1, contentType: "video/mp4", purpose: "item" })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE", message: expect.stringContaining("Discord") });
+    await media.createUpload(f.member.actor, { itemId: item.id, filename: "big.png", size: ITEM_VIDEO_MAX_BYTES + 1, contentType: "image/png", purpose: "item" });
     await expectAppError(media.createUpload(f.member2.actor, { itemId: item.id, filename: "x.png", size: 10, contentType: "image/png", purpose: "item" }), "FORBIDDEN");
     await expectAppError(media.createUpload(f.outsider.actor, { itemId: item.id, filename: "x.png", size: 10, contentType: "image/png", purpose: "item" }), "NOT_FOUND");
     await expectAppError(forums.removeItemAttachment(f.member2.actor, { attachmentId: image.id }), "FORBIDDEN");

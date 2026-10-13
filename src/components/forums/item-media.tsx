@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, ExternalLink, Film, ImagePlus, Loader2, Tras
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { toast } from "sonner";
 import { useItemMutation } from "@/lib/queries";
-import type { AttachmentDTO, ForumItemDetailDTO } from "@/lib/types";
+import { itemVideoProblem, type AttachmentDTO, type ForumItemDetailDTO } from "@/lib/types";
 import { cn, formatBytes, formatDuration } from "@/lib/utils";
 import { ImageViewer } from "../media/image-viewer";
 import { VideoPlayer } from "../media/video-player";
@@ -18,6 +18,20 @@ export const ITEM_MEDIA_ACCEPT = "image/png,image/jpeg,image/webp,image/gif,vide
 /** The files an item takes out of a drop, paste or picker: pictures and clips only. */
 export function itemMediaFiles(files: Iterable<File>): File[] {
   return [...files].filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/") || /\.(mp4|webm|mov|m4v)$/i.test(f.name));
+}
+
+/**
+ * The files that may actually go up: videos over the forum limit are refused here, with a toast
+ * saying to link them from Discord instead, so nothing starts uploading only to fail.
+ */
+export function withinItemLimits(files: File[]): File[] {
+  const ok: File[] = [];
+  for (const file of files) {
+    const problem = file.type.startsWith("video/") || /\.(mp4|webm|mov|m4v)$/i.test(file.name) ? itemVideoProblem(file) : null;
+    if (problem) toast.error(problem, { duration: 10_000 });
+    else ok.push(file);
+  }
+  return ok;
 }
 
 export function itemUploadTarget(item: Pick<ForumItemDetailDTO, "id" | "projectId" | "key" | "title">): UploadTarget {
@@ -34,7 +48,8 @@ export function pastedItemMedia(onFiles: (files: File[]) => void) {
     if (!files.length) return;
     e.preventDefault();
     e.stopPropagation();
-    onFiles(files);
+    const allowed = withinItemLimits(files);
+    if (allowed.length) onFiles(allowed);
   };
 }
 
@@ -52,7 +67,8 @@ export function ItemMedia({ item, noun, canUpload }: { item: ForumItemDetailDTO;
       toast.error("Pictures (PNG, JPEG, WebP, GIF) and clips (MP4, WebM, MOV) only.");
       return;
     }
-    void uploads.uploadFiles(itemUploadTarget(item), media, "item");
+    const allowed = withinItemLimits(media);
+    if (allowed.length) void uploads.uploadFiles(itemUploadTarget(item), allowed, "item");
   };
   const onDrop = (e: DragEvent<HTMLElement>) => {
     if (!canUpload) return;
@@ -112,6 +128,7 @@ export function ItemMedia({ item, noun, canUpload }: { item: ForumItemDetailDTO;
           <ImagePlus className="size-5" />
           <span>Add screenshots or a clip of the {noun}</span>
           <span className="text-[11.5px] [@media(pointer:coarse)]:hidden">Drop files here, or paste a screenshot (Ctrl+V)</span>
+          <span className="text-[11.5px]">Clips up to 10 MB. Bigger videos: paste a Discord link in the description or a comment.</span>
         </button>
       ) : (
         <p className="text-[13px] text-fg-subtle">No pictures or clips.</p>

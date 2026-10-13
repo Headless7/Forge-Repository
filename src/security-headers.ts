@@ -4,6 +4,8 @@
  * an injected <script> can't run. Development keeps 'unsafe-inline'/'unsafe-eval' for HMR and
  * React's debugging. Styles stay 'unsafe-inline': the UI uses inline style attributes.
  */
+import { DISCORD_MEDIA_ORIGINS } from "@/lib/discord-links";
+
 export function pageContentSecurityPolicy(options: { nonce: string | null; dev: boolean; storageOrigin: string }) {
   const { nonce, dev, storageOrigin } = options;
   const scripts = nonce && !dev ? `'self' 'nonce-${nonce}' 'strict-dynamic'` : `'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ""}`;
@@ -12,7 +14,8 @@ export function pageContentSecurityPolicy(options: { nonce: string | null; dev: 
     `script-src ${scripts}`,
     "style-src 'self' 'unsafe-inline'",
     `img-src 'self' data: blob: ${storageOrigin}`.trim(),
-    `media-src 'self' blob: ${storageOrigin}`.trim(),
+    // Videos linked from Discord play inline (see src/lib/discord-links.ts); nothing else loads from there.
+    `media-src 'self' blob: ${storageOrigin} ${DISCORD_MEDIA_ORIGINS.join(" ")}`.replace(/\s+/g, " ").trim(),
     `connect-src 'self' ${storageOrigin}${dev ? " ws: wss:" : ""}`.trim(),
     "font-src 'self' data:",
     "worker-src 'self' blob:",

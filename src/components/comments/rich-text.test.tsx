@@ -30,6 +30,24 @@ describe("RichText", () => {
   });
 });
 
+describe("RichText Discord videos", () => {
+  const cdn = "https://cdn.discordapp.com/attachments/1548444224318341161/1548444226054787212/XRecorder_20260912_14.mp4?ex=6acf4a50&is=6acdf8d0&hm=96b9&";
+
+  it("plays a Discord video link inline and keeps the link", () => {
+    const html = render(`Repro: ${cdn} see 0:12`);
+    expect(html).toContain(`<video src="${cdn.replace(/&/g, "&amp;")}"`);
+    expect(html).toContain('href="' + cdn.replace(/&/g, "&amp;") + '"');
+    expect(html).toContain("XRecorder_20260912_14.mp4");
+    // Once per link, even when it's pasted twice.
+    expect(render(`${cdn}\n${cdn}`).match(/<video /g)).toHaveLength(1);
+  });
+
+  it("only embeds videos from Discord's CDN", () => {
+    expect(render("https://cdn.discordapp.com/attachments/1/2/shot.png?ex=1&is=1&hm=1")).not.toContain("<video");
+    expect(render("https://example.com/attachments/1/2/clip.mp4")).not.toContain("<video");
+  });
+});
+
 describe("LinkedText", () => {
   const linked = (text: string) => renderToStaticMarkup(<LinkedText text={text} />);
 

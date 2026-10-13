@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, lt, max, ne, sql } from "drizzle-orm";
-import { DEMO_CLIP_MAX_BYTES, demoClipProblem, type AttachmentDTO } from "@/lib/types";
+import { DEMO_CLIP_MAX_BYTES, ITEM_VIDEO_MAX_BYTES, demoClipProblem, itemVideoProblem, type AttachmentDTO } from "@/lib/types";
 import { assertCard, assertItem, computeDeliverablePermissions, loadContributors, requireCard, requireDeliverable, requireItem, type CardAccess, type DeliverableAccess, type ItemAccess } from "../access";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
@@ -229,8 +229,10 @@ export async function createUpload(
   if (input.purpose === "checklist" && classification.kind !== "IMAGE") throw invalid("A checklist item's picture must be an image.");
   if (input.purpose === "item" && !(ITEM_KINDS as readonly string[]).includes(classification.kind)) throw invalid("Forum items take images and videos.");
   if (input.purpose === "demo" && classification.kind !== "VIDEO") throw invalid("A demonstration clip must be a video.");
-  const maxBytes = input.purpose === "demo" ? Math.min(DEMO_CLIP_MAX_BYTES, maxBytesFor(classification.kind)) : maxBytesFor(classification.kind);
+  const itemVideo = input.purpose === "item" && classification.kind === "VIDEO";
+  const maxBytes = Math.min(maxBytesFor(classification.kind), input.purpose === "demo" ? DEMO_CLIP_MAX_BYTES : itemVideo ? ITEM_VIDEO_MAX_BYTES : Infinity);
   if (input.purpose === "demo" && demoClipProblem(input)) throw new AppError("PAYLOAD_TOO_LARGE", demoClipProblem(input)!);
+  if (itemVideo && itemVideoProblem({ size: input.size, name: filename })) throw new AppError("PAYLOAD_TOO_LARGE", itemVideoProblem({ size: input.size, name: filename })!);
   if (input.size > maxBytes) {
     throw new AppError("PAYLOAD_TOO_LARGE", `${filename} is larger than the ${Math.round(maxBytes / 1024 / 1024)} MB limit for this file type.`);
   }
@@ -348,11 +350,17 @@ async function inspectStoredUpload(attachment: AttachmentRow, clientMeta: Client
   const stat = await store.stat(attachment.storageKey);
   if (!stat) throw invalid("The upload didn't reach storage. Please retry.");
   // What actually landed in storage, not what the client declared.
-  const maxBytes = attachment.demoOfId ? Math.min(DEMO_CLIP_MAX_BYTES, maxBytesFor(attachment.kind)) : maxBytesFor(attachment.kind);
+  const itemVideo = Boolean(attachment.itemId) && attachment.kind === "VIDEO";
+  const maxBytes = Math.min(maxBytesFor(attachment.kind), attachment.demoOfId ? DEMO_CLIP_MAX_BYTES : itemVideo ? ITEM_VIDEO_MAX_BYTES : Infinity);
   if (stat.size > maxBytes) {
     await store.delete(attachment.storageKey).catch(() => {});
-    await db.update(attachments).set({ status: "FAILED", error: "File exceeds the size limit." }).where(eq(attachments.id, attachment.id));
-    throw new AppError("PAYLOAD_TOO_LARGE", attachment.demoOfId ? (demoClipProblem(stat) ?? "That clip passes the 20 MB limit for demonstration clips.") : "That file is larger than the allowed limit.");
+    const why = attachment.demoOfId
+      ? (demoClipProblem(stat) ?? "That clip passes the 20 MB limit for demonstration clips.")
+      : itemVideo
+        ? (itemVideoProblem(stat) ?? "That video passes the 10 MB limit for forum clips. Post it on Discord and paste the link instead.")
+        : "That file is larger than the allowed limit.";
+    await db.update(attachments).set({ status: "FAILED", error: why }).where(eq(attachments.id, attachment.id));
+    throw new AppError("PAYLOAD_TOO_LARGE", why);
   }
 
   let analysis;

@@ -1,5 +1,7 @@
 import { Fragment, type ReactNode } from "react";
+import { discordVideoLink, type DiscordVideoLink } from "@/lib/discord-links";
 import { cn } from "@/lib/utils";
+import { DiscordVideo } from "./discord-video";
 
 /**
  * Lightweight, XSS-safe formatting for comments and descriptions. Input is never
@@ -59,6 +61,24 @@ function inline(text: string, mentions: ReadonlySet<string> | undefined, keyPref
   return out;
 }
 
+/** The Discord-hosted videos linked in these lines, each once, in order: they play inline under the block. */
+function discordVideosIn(lines: string[]): DiscordVideoLink[] {
+  const seen = new Set<string>();
+  const out: DiscordVideoLink[] = [];
+  for (const line of lines) {
+    for (const match of line.matchAll(INLINE)) {
+      const url = match[5] ?? match[6];
+      if (!url) continue;
+      const link = discordVideoLink(url);
+      if (link && !seen.has(link.url)) {
+        seen.add(link.url);
+        out.push(link);
+      }
+    }
+  }
+  return out;
+}
+
 export function RichText({ text, mentions, className }: { text: string; mentions?: ReadonlySet<string>; className?: string }) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
@@ -66,6 +86,9 @@ export function RichText({ text, mentions, className }: { text: string; mentions
   let list: string[] = [];
   let quote: string[] = [];
 
+  const pushVideos = (source: string[], key: string) => {
+    for (const [i, link] of discordVideosIn(source).entries()) blocks.push(<DiscordVideo key={`${key}-v${i}`} link={link} />);
+  };
   const flushParagraph = () => {
     if (!paragraph.length) return;
     const key = `p${blocks.length}`;
@@ -79,6 +102,7 @@ export function RichText({ text, mentions, className }: { text: string; mentions
         ))}
       </p>,
     );
+    pushVideos(paragraph, key);
     paragraph = [];
   };
   const flushList = () => {
@@ -91,6 +115,7 @@ export function RichText({ text, mentions, className }: { text: string; mentions
         ))}
       </ul>,
     );
+    pushVideos(list, key);
     list = [];
   };
   const flushQuote = () => {
@@ -106,6 +131,7 @@ export function RichText({ text, mentions, className }: { text: string; mentions
         ))}
       </blockquote>,
     );
+    pushVideos(quote, key);
     quote = [];
   };
 

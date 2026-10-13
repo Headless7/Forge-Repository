@@ -24,7 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger, Tooltip } from "../ui/menu";
 import { useUploads } from "../upload/upload-manager";
 import { ItemPriorityIcon, ItemStatusPill } from "./item-badges";
 import { ItemComments } from "./item-comments";
-import { ItemMedia, itemMediaFiles, itemUploadTarget, pastedItemMedia } from "./item-media";
+import { ItemMedia, itemMediaFiles, itemUploadTarget, pastedItemMedia, withinItemLimits } from "./item-media";
 import { PersonPicker, TagPicker } from "./pickers";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -98,7 +98,7 @@ export function ItemDialog({
           onDrop={(e) => {
             if (!item || !perms?.canUpload || !e.dataTransfer.files.length || e.defaultPrevented) return;
             e.preventDefault();
-            const files = itemMediaFiles(e.dataTransfer.files);
+            const files = withinItemLimits(itemMediaFiles(e.dataTransfer.files));
             if (files.length) void uploads.uploadFiles(itemUploadTarget(item), files, "item");
           }}
           onOpenAutoFocus={(e) => e.preventDefault()}
