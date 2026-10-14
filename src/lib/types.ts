@@ -426,13 +426,13 @@ export interface BoardDTO {
 }
 
 /** Forum items (bugs, QA) take short clips only; a bigger video is linked from Discord instead, where it plays inline. */
-export const ITEM_VIDEO_MAX_BYTES = 10 * 1024 * 1024;
+export const ITEM_VIDEO_MAX_BYTES = 12 * 1024 * 1024;
 
 /** Why a video can't go on a forum item, or null when it can. Checked before the upload starts. */
 export function itemVideoProblem(file: { size: number; name?: string }): string | null {
   if (file.size > ITEM_VIDEO_MAX_BYTES) {
     const mb = (file.size / 1024 / 1024).toFixed(file.size >= 100 * 1024 * 1024 ? 0 : 1);
-    return `${file.name ? `${file.name} is` : "That video is"} ${mb} MB, which passes the 10 MB limit for forum clips. Post it on Discord and paste the video link here instead; it plays right in the description or comment.`;
+    return `${file.name ? `${file.name} is` : "That video is"} ${mb} MB, which passes the 12 MB limit for forum clips. Post it on Discord and paste the video link here instead; it plays right in the description or comment.`;
   }
   return null;
 }

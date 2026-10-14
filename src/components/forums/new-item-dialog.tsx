@@ -191,7 +191,7 @@ export function NewItemDialog({
                 <ImagePlus className="size-4" /> Add
               </button>
             </div>
-            <p className="mt-1 text-[11.5px] text-fg-subtle"><span className="[@media(pointer:coarse)]:hidden">Drop files anywhere here, or paste a screenshot (Ctrl+V). </span>Clips up to 10 MB; bigger videos go in the description as a Discord link.</p>
+            <p className="mt-1 text-[11.5px] text-fg-subtle"><span className="[@media(pointer:coarse)]:hidden">Drop files anywhere here, or paste a screenshot (Ctrl+V). </span>Clips up to 12 MB; bigger videos go in the description as a Discord link.</p>
             <input
               ref={input}
               type="file"

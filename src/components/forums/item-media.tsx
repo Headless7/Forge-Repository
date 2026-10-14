@@ -128,7 +128,7 @@ export function ItemMedia({ item, noun, canUpload }: { item: ForumItemDetailDTO;
           <ImagePlus className="size-5" />
           <span>Add screenshots or a clip of the {noun}</span>
           <span className="text-[11.5px] [@media(pointer:coarse)]:hidden">Drop files here, or paste a screenshot (Ctrl+V)</span>
-          <span className="text-[11.5px]">Clips up to 10 MB. Bigger videos: paste a Discord link in the description or a comment.</span>
+          <span className="text-[11.5px]">Clips up to 12 MB. Bigger videos: paste a Discord link in the description or a comment.</span>
         </button>
       ) : (
         <p className="text-[13px] text-fg-subtle">No pictures or clips.</p>

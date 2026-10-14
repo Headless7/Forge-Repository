@@ -357,7 +357,7 @@ async function inspectStoredUpload(attachment: AttachmentRow, clientMeta: Client
     const why = attachment.demoOfId
       ? (demoClipProblem(stat) ?? "That clip passes the 20 MB limit for demonstration clips.")
       : itemVideo
-        ? (itemVideoProblem(stat) ?? "That video passes the 10 MB limit for forum clips. Post it on Discord and paste the link instead.")
+        ? (itemVideoProblem(stat) ?? "That video passes the 12 MB limit for forum clips. Post it on Discord and paste the link instead.")
         : "That file is larger than the allowed limit.";
     await db.update(attachments).set({ status: "FAILED", error: why }).where(eq(attachments.id, attachment.id));
     throw new AppError("PAYLOAD_TOO_LARGE", why);
