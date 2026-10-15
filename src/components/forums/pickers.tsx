@@ -1,19 +1,49 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, Plus, Tag, Trash2 } from "lucide-react";
+import { Check, Plus, Tag, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { SUGGESTED_FORUM_TAGS } from "@/lib/forum-meta";
 import { LABEL_COLORS } from "@/lib/column-icons";
 import { qk, useRpcMutation } from "@/lib/queries";
 import type { ForumTagDTO } from "@/lib/types";
-import { LabelChip } from "../domain/state";
+import { cn, dueStatus, toLocalInput } from "@/lib/utils";
+import { DueChip, LabelChip } from "../domain/state";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/menu";
 
 export { PersonPicker } from "../domain/people-menu";
+
+/**
+ * An item's deadline, like the card sidebar's: a date-and-time field with a clear button, or the
+ * due chip when read-only. `done` items (verified, closed) never show as overdue.
+ */
+export function DueDateField({ value, onChange, canEdit, done, className }: { value: string | null; onChange: (dueAt: string | null) => void; canEdit: boolean; done?: boolean; className?: string }) {
+  const due = dueStatus(value, done);
+  if (!canEdit) return value ? <DueChip dueAt={value} done={done} className={className} /> : <span className={cn("text-fg-subtle", className)}>None</span>;
+  return (
+    <div className={cn("flex min-w-0 items-center gap-1", className)}>
+      <input
+        type="datetime-local"
+        aria-label="Due date"
+        value={toLocalInput(value)}
+        onChange={(e) => onChange(e.target.value ? new Date(e.target.value).toISOString() : null)}
+        className={cn(
+          "h-7 min-w-0 flex-1 rounded-md border border-border-strong/70 bg-surface-3/60 px-2 text-[12.5px] outline-none focus:border-accent [color-scheme:dark] light:[color-scheme:light]",
+          due === "overdue" && "text-state-changes",
+          (due === "today" || due === "soon") && "text-state-review",
+        )}
+      />
+      {value ? (
+        <Button type="button" size="icon-xs" variant="ghost" aria-label="Clear due date" className="touch-target" onClick={() => onChange(null)}>
+          <X />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
 
 /** Creates a tag and tells the forum; `onCreated` gets the new tag (e.g. to select it). */
 function useCreateTag(projectId: string, onCreated?: (tag: ForumTagDTO) => void) {

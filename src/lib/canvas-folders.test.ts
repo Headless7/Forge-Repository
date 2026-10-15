@@ -111,3 +111,34 @@ describe("canvas folders", () => {
     expect(folderTree(folders, [{ id: "q", groupId: "gone", position: 1 }]).map((n) => n.kind)).toEqual(["item", "folder", "folder"]);
   });
 });
+
+describe("keeping the canvas tidy", () => {
+  it("finds the nearest clear spot, preferring right and down", async () => {
+    const { freeSpot, rectsOverlap } = await import("./canvas-folders");
+    const card = { x: 0, y: 0, w: 200, h: 100 };
+    expect(freeSpot(card, [])).toEqual({ x: 0, y: 0 });
+    const blocker = { x: 0, y: 0, w: 200, h: 100 };
+    const spot = freeSpot(card, [blocker]);
+    expect(rectsOverlap({ ...card, ...spot }, blocker, 24)).toBe(false);
+    expect(spot.x >= 0 && spot.y >= 0).toBe(true);
+    // Hemmed in on the right: it goes below rather than far away.
+    const wall = { x: 150, y: -1000, w: 2000, h: 2000 };
+    const below = freeSpot({ x: 0, y: 0, w: 100, h: 100 }, [{ x: 0, y: 0, w: 100, h: 100 }, wall]);
+    expect(below.x + 100 + 24 <= 150).toBe(true);
+  });
+
+  it("packs blocks into rows and names folders uniquely", async () => {
+    const { packBlocks, uniqueFolderName, boundsOf } = await import("./canvas-folders");
+    expect(packBlocks([{ w: 100, h: 50 }, { w: 100, h: 80 }, { w: 100, h: 50 }, { w: 100, h: 50 }], { x: 10, y: 10 }, 20)).toEqual([
+      { x: 10, y: 10 },
+      { x: 130, y: 10 },
+      { x: 10, y: 110 },
+      { x: 130, y: 110 },
+    ]);
+    expect(packBlocks([], { x: 0, y: 0 })).toEqual([]);
+    expect(uniqueFolderName("Audio", ["Audio", "audio 2"])).toBe("Audio 3");
+    expect(uniqueFolderName("UI", ["Items"])).toBe("UI");
+    expect(boundsOf([{ x: 0, y: 0, w: 10, h: 10 }, { x: 20, y: -5, w: 10, h: 10 }])).toEqual({ x: 0, y: -5, w: 30, h: 15 });
+    expect(boundsOf([])).toBeNull();
+  });
+});

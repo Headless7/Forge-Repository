@@ -140,6 +140,8 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
     }
     case "item.priority_changed":
       return <>set the priority{withCard ? <> of {item}</> : null} to {(["LOW", "MEDIUM", "HIGH", "GAME_BREAKING"] as string[]).includes(s(d.to)) ? priorityLabel(kind, s(d.to) as ItemPriority) : s(d.to)}</>;
+    case "item.due_changed":
+      return d.to ? <>changed the due date{withCard ? <> of {item}</> : null} to {formatShortDate(s(d.to))}</> : <>removed the due date{withCard ? <> of {item}</> : null}</>;
     case "item.milestone_changed":
       return d.to ? <>moved {item} into <strong className="font-medium text-fg">{s(d.to)}</strong></> : <>took {item} out of its update</>;
     case "item.assignee_changed":

@@ -347,6 +347,12 @@ export function RequestChangesDialog({ open, onOpenChange, onDone }: { open: boo
   );
 }
 
+/** Shown where work is submitted with nobody named to review it: nobody is pinged, so say so. */
+export function NoReviewerHint({ reviewerId, cardReviewerIds, className }: { reviewerId: string | null; cardReviewerIds: string[]; className?: string }) {
+  if (reviewerId || cardReviewerIds.length) return null;
+  return <p className={cn("text-[12px] text-fg-muted", className)}>No reviewer set. Nobody will be notified.</p>;
+}
+
 export function SubmitDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { card, scope, multi } = useWorkspace();
   const [note, setNote] = useState("");
@@ -399,6 +405,7 @@ export function SubmitDialog({ open, onOpenChange }: { open: boolean; onOpenChan
           </p>
         ) : null}
         <Textarea autoFocus value={note} onChange={(e) => setNote(e.target.value)} placeholder="What changed? Anything the reviewer should look at?" />
+        <NoReviewerHint reviewerId={scope.deliverable.reviewerId} cardReviewerIds={card.reviewerIds} className="mt-2" />
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel

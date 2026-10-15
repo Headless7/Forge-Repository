@@ -52,6 +52,7 @@ export function PeopleMenu({
   onToggle,
   single,
   nobody,
+  choices,
   canToggle,
   label,
   hint,
@@ -65,6 +66,8 @@ export function PeopleMenu({
   single?: boolean;
   /** A "Nobody" row (single choice): what the empty choice is called, and whether it's current. */
   nobody?: { label: string; selected: boolean; onSelect: () => void };
+  /** More rows above the people (single choice), such as "Anyone" or "Me" in a filter. Shown while they match the search. */
+  choices?: Array<{ id: string; label: string; icon?: ReactNode; selected: boolean; onSelect: () => void }>;
   /** Rows the viewer may not change show dimmed. */
   canToggle?: (m: MemberDTO) => boolean;
   /** Heading inside the menu ("Assignees"). */
@@ -89,6 +92,7 @@ export function PeopleMenu({
     onToggle(userId, selected);
   };
   const showNobody = nobody && (!q || nobody.label.toLowerCase().includes(q));
+  const shownChoices = (choices ?? []).filter((c) => !q || c.label.toLowerCase().includes(q));
   const enter = () => {
     const first = shown[0];
     if (!q || !first || (canToggle && !canToggle(first))) return;
@@ -136,6 +140,15 @@ export function PeopleMenu({
             </button>
           </li>
         ) : null}
+        {shownChoices.map((c) => (
+          <li key={c.id}>
+            <button type="button" onClick={c.onSelect} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-4">
+              {c.icon ?? <UserRound className="size-5 text-fg-subtle" aria-hidden />}
+              <span className="flex-1">{c.label}</span>
+              {c.selected ? <Check className="size-4 text-accent" aria-label="Selected" /> : null}
+            </button>
+          </li>
+        ))}
         {recent.length ? (
           <>
             <li className="px-2 pb-0.5 pt-1 text-[10.5px] font-semibold uppercase tracking-wide text-fg-subtle" aria-hidden>
@@ -150,7 +163,7 @@ export function PeopleMenu({
           </>
         ) : null}
         {rest.map(renderRow)}
-        {q && !shown.length && !showNobody ? <li className="px-2 py-1.5 text-[12.5px] text-fg-muted">{emptyText}</li> : null}
+        {q && !shown.length && !showNobody && !shownChoices.length ? <li className="px-2 py-1.5 text-[12.5px] text-fg-muted">{emptyText}</li> : null}
       </ul>
     </div>
   );

@@ -24,6 +24,7 @@ const typesFor = async (userId: string, cardId: string) =>
 describe("review state transitions", () => {
   it("runs the full lifecycle and preserves every review on the right version", async () => {
     const card = await assignedCard("Hollow Purple");
+    await cardService.setReviewers(f.manager.actor, { cardId: card.id, add: [f.manager.id] });
     const v1 = await media.createVersion(f.member.actor, { cardId: card.id, notes: "first pass" });
     const clip = await upload(f.member.actor, card.id, { name: "gojo_v1.mp4", type: "video/mp4", buffer: mp4Buffer(2) }, "version", v1.id);
 
@@ -69,6 +70,21 @@ describe("review state transitions", () => {
     const timestamped = detail.comments.find((c) => c.body === "Increase the impact here.")!;
     expect(timestamped.versionId).toBe(v1.id);
     expect(timestamped.annotation?.timestampMs).toBe(1470);
+  });
+
+  it("asks only the named reviewer; with nobody named, nobody is notified but the work still waits for review", async () => {
+    const named = await assignedCard("Named reviewer");
+    await cardService.setReviewers(f.manager.actor, { cardId: named.id, add: [f.admin.id] });
+    await reviews.submitForReview(f.member.actor, { deliverableId: await primaryDeliverable(named.id) });
+    expect(await typesFor(f.admin.id, named.id)).toContain("REVIEW_REQUESTED");
+    expect(await typesFor(f.manager.id, named.id)).not.toContain("REVIEW_REQUESTED");
+
+    const nobody = await assignedCard("Nobody named");
+    expect((await cardService.getCardDetail(f.manager.actor, nobody.id)).reviewerIds).toEqual([]);
+    const detail = await reviews.submitForReview(f.member.actor, { deliverableId: await primaryDeliverable(nobody.id) });
+    expect(detail.state).toBe("NEEDS_REVIEW");
+    const requests = await db.select().from(notifications).where(and(eq(notifications.cardId, nobody.id), eq(notifications.type, "REVIEW_REQUESTED")));
+    expect(requests).toHaveLength(0);
   });
 
   it("requires at least one feedback item when the project asks for it", async () => {

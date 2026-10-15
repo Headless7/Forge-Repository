@@ -5,11 +5,14 @@ import { CalendarCheck, CalendarX, CircleAlert, CircleCheck, CircleDashed, Clock
 import Link from "next/link";
 import { useMemo, useState, type ReactNode } from "react";
 import { CARD_STATE_META } from "@/lib/card-meta";
+import { qk } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
 import type { CardState, DashboardItemDTO, DashboardListKey, DurationStatDTO, ProjectDashboardDTO } from "@/lib/types";
 import { cn, formatShortDate } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
+import { CreatorMark } from "../domain/creator-mark";
 import { StatePill } from "../domain/state";
+import { useShell } from "../shell/shell-context";
 import { TipAnchor, useTipOnOpen } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
 import { Select, Skeleton } from "../ui/controls";
@@ -230,6 +233,10 @@ const durationSub = (s: DurationStatDTO, what: string) => (s.n ? `p75 ${hours(s.
 
 function Drilldown({ open, title, items, loading, studioSlug, projectSlug, onClose, filename }: { open: boolean; title: string; items: DashboardItemDTO[] | undefined; loading: boolean; studioSlug: string; projectSlug: string; onClose: () => void; filename: string }) {
   const href = (i: DashboardItemDTO) => `/${studioSlug}/${projectSlug}/b/${i.board.number}?card=${encodeURIComponent(i.cardKey)}&d=${i.number}`;
+  // Who created each deliverable (the members page's cache; people who left aren't in it).
+  const { studio } = useShell();
+  const members = useQuery({ queryKey: qk.members(studio.id), queryFn: () => rpc("member.list", { studioId: studio.id }), enabled: open, staleTime: 60_000 });
+  const membersById = useMemo(() => new Map((members.data ?? []).map((m) => [m.id, m])), [members.data]);
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent title={title} description={items ? `${items.length} deliverable${items.length === 1 ? "" : "s"}` : undefined} size="lg">
@@ -250,10 +257,13 @@ function Drilldown({ open, title, items, loading, studioSlug, projectSlug, onClo
                       {i.name} <span className="font-normal text-fg-muted">· {i.cardTitle}</span>
                     </span>
                     <StatePill state={i.state} size="sm" />
-                    <span className="w-full text-[11.5px] text-fg-subtle sm:w-auto">
-                      {i.board.name}
-                      {i.dueAt ? ` · due ${formatShortDate(i.dueAt)}${i.dueInherited ? " (card's)" : ""}` : ""}
-                      {i.note ? ` · ${i.note}` : ""}
+                    <span className="flex w-full min-w-0 flex-wrap items-center gap-x-1.5 text-[11.5px] text-fg-subtle sm:w-auto">
+                      <span className="min-w-0">
+                        {i.board.name}
+                        {i.dueAt ? ` · due ${formatShortDate(i.dueAt)}${i.dueInherited ? " (card's)" : ""}` : ""}
+                        {i.note ? ` · ${i.note}` : ""}
+                      </span>
+                      <CreatorMark person={membersById.get(i.createdById ?? "")} />
                     </span>
                   </Link>
                 </li>

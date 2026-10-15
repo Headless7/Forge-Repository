@@ -212,6 +212,7 @@ async function queueEmails(ex: Executor, input: NotifyInput, recipients: Array<{
   const [card] = input.cardId ? await ex.select({ boardNumber: boards.number }).from(cards).innerJoin(boards, eq(boards.id, cards.boardId)).where(eq(cards.id, input.cardId)) : [];
   const [deliverable] = input.deliverableId ? await ex.select({ number: deliverables.number }).from(deliverables).where(eq(deliverables.id, input.deliverableId)) : [];
   const [version] = input.versionId ? await ex.select({ number: assetVersions.versionNumber }).from(assetVersions).where(eq(assetVersions.id, input.versionId)) : [];
+  const [item] = input.itemId ? await ex.select({ number: forumItems.number, forumSlug: forums.slug }).from(forumItems).innerJoin(forums, eq(forums.id, forumItems.forumId)).where(eq(forumItems.id, input.itemId)) : [];
   const to = recipients.map((r) => r.userId);
   const people = await ex.select({ id: users.id, email: users.email, displayName: users.displayName }).from(users).where(inArray(users.id, [...to, ...(input.actorId ? [input.actorId] : [])]));
   const actorName = people.find((p) => p.id === input.actorId)?.displayName ?? null;
@@ -225,6 +226,8 @@ async function queueEmails(ex: Executor, input: NotifyInput, recipients: Array<{
     deliverableNumber: deliverable?.number,
     versionNumber: version?.number,
     commentId: input.commentId,
+    forumSlug: item?.forumSlug,
+    itemNumber: item?.number,
   })}`;
   for (const r of recipients) {
     const person = people.find((p) => p.id === r.userId);

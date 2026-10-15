@@ -32,6 +32,7 @@ import type { CardDisplayMode, CardSummaryDTO } from "@/lib/types";
 import { cn, formatDuration } from "@/lib/utils";
 import { useLocalDay } from "@/hooks/use-local-day";
 import { AvatarStack, UserAvatar } from "../domain/avatar";
+import { CreatorMark } from "../domain/creator-mark";
 import { BoardIcon } from "../domain/board-icon";
 import { ColumnIcon } from "../domain/column-icon";
 import { DeliverableProgress, PRODUCTION_COLOR, PRODUCTION_ICONS, PRODUCTION_ORDER, ProductionPill } from "../domain/production";
@@ -104,6 +105,7 @@ function ChecklistChip({ counts, compact }: { counts: CardSummaryDTO["counts"]; 
 function MetaRow({ card, compact }: { card: CardSummaryDTO; compact?: boolean }) {
   const { membersById } = useBoard();
   const assignees = card.assigneeIds.map((id) => membersById.get(id)).filter((m): m is NonNullable<typeof m> => Boolean(m));
+  const creator = card.createdById ? membersById.get(card.createdById) : undefined;
   const { counts } = card;
   return (
     <div className="mt-2 flex items-center gap-2.5 text-[11px] text-fg-subtle">
@@ -121,6 +123,7 @@ function MetaRow({ card, compact }: { card: CardSummaryDTO; compact?: boolean })
       ) : null}
       {counts.checklistTotal ? <ChecklistChip counts={counts} compact={compact} /> : null}
       {compact && counts.versions ? <span className="font-mono">V{card.currentVersionNumber}</span> : null}
+      <CreatorMark person={creator} avatarOnly className="opacity-80" />
       <span className="flex-1" />
       {card.unread ? <span className="size-1.5 rounded-full bg-accent" title="New activity" /> : null}
       {assignees.length === 1 ? (

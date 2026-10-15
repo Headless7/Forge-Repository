@@ -12,6 +12,7 @@ import { roleHas } from "@/lib/permissions";
 import { cn, formatShortDate } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/queries";
+import { CreatorMark } from "../domain/creator-mark";
 import { PersonPicker } from "../domain/people-menu";
 import { recentPeopleKey } from "@/lib/recent-people";
 import { DeliverableProgress, KIND_ICONS } from "../domain/production";
@@ -221,7 +222,8 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
 }
 
 function DeliverableRow({ d, first, last, canEdit, onMove }: { d: DeliverableDTO; first: boolean; last: boolean; canEdit: boolean; onMove: (d: DeliverableDTO, dir: -1 | 1) => void }) {
-  const { openDeliverable, deliverables } = useWorkspace();
+  const { openDeliverable, deliverables, membersById } = useWorkspace();
+  const creator = d.createdById ? membersById.get(d.createdById) : undefined;
   const kind = d.kinds.find((k) => k !== "FILE") ?? d.kinds[0];
   const KindIcon = kind ? KIND_ICONS[kind] : Layers;
   const blockedNames = d.blockedBy.map((id) => deliverables.find((x) => x.id === id)?.name ?? "?");
@@ -247,6 +249,7 @@ function DeliverableRow({ d, first, last, canEdit, onMove }: { d: DeliverableDTO
                 <Lock className="size-3" /> waiting on {blockedNames.join(", ")}
               </span>
             ) : null}
+            <CreatorMark person={creator} />
           </span>
           {d.description.trim() ? <span className="mt-0.5 line-clamp-2 whitespace-pre-wrap break-words text-[11.5px] text-fg-muted">{d.description}</span> : null}
           <DeliverableWork d={d} className="mt-0.5" />

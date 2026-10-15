@@ -130,6 +130,7 @@ async function loadRows(access: ProjectAccess, filters: { boardId?: string | nul
         dueInherited: !d.dueAt && Boolean(card.dueAt),
         people: team,
         reviewerIds,
+        createdById: d.createdById,
         note: null,
       },
       createdAt: d.createdAt,

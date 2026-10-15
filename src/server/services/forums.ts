@@ -302,6 +302,7 @@ async function summaries(access: ProjectAccess, forum: ForumRow, rows: ItemRow[]
         assigneeId: b.assigneeId,
         reviewerId: b.reviewerId,
         reportedById: b.reportedById,
+        dueAt: b.dueAt?.toISOString() ?? null,
         tagIds: tagsByItem.get(b.id) ?? [],
         counts: { attachments: own.length, comments: comments.get(b.id) ?? 0 },
         cover: await mediaRef(own.find((f) => f.thumbnailKey) ?? own[0]),
@@ -387,6 +388,8 @@ export interface CreateItemInput {
   /** Undefined: the forum's default reviewer. Null: nobody (any manager verifies). */
   reviewerId?: string | null;
   tagIds?: string[];
+  /** ISO date-time it should be done by. */
+  dueAt?: string | null;
 }
 
 export async function createItem(actor: Actor, input: CreateItemInput): Promise<ForumItemDetailDTO> {
@@ -421,6 +424,7 @@ export async function createItem(actor: Actor, input: CreateItemInput): Promise<
         assigneeId: assigneeId ?? null,
         reviewerId: reviewerId ?? null,
         reportedById: actor.userId,
+        dueAt: input.dueAt ? new Date(input.dueAt) : null,
         lastActivityAt: createdAt,
         createdAt,
       })
@@ -455,12 +459,13 @@ export interface UpdateItemInput {
   assigneeId?: string | null;
   reviewerId?: string | null;
   tagIds?: string[];
+  dueAt?: string | null;
 }
 
 export async function updateItem(actor: Actor, input: UpdateItemInput): Promise<ForumItemDetailDTO> {
   const ctx = await requireItem(actor.userId, input.itemId);
   const { item, forum, access, perms } = ctx;
-  const editsFields = input.title !== undefined || input.description !== undefined || input.priority !== undefined || input.milestoneId !== undefined || input.tagIds !== undefined;
+  const editsFields = input.title !== undefined || input.description !== undefined || input.priority !== undefined || input.milestoneId !== undefined || input.tagIds !== undefined || input.dueAt !== undefined;
   if (editsFields) assertItem(perms, "canEdit");
   if (input.assigneeId !== undefined && input.assigneeId !== item.assigneeId) {
     const takesIt = input.assigneeId === actor.userId && !item.assigneeId;
@@ -503,6 +508,11 @@ export async function updateItem(actor: Actor, input: UpdateItemInput): Promise<
       await log("item.tags_changed", { count: ids.length });
     }
     const batch = new NotificationBatch();
+    const nextDue = input.dueAt === undefined ? undefined : input.dueAt ? new Date(input.dueAt) : null;
+    if (nextDue !== undefined && (nextDue?.getTime() ?? null) !== (item.dueAt?.getTime() ?? null)) {
+      patch.dueAt = nextDue;
+      await log("item.due_changed", { from: item.dueAt?.toISOString() ?? null, to: nextDue?.toISOString() ?? null });
+    }
     if (input.assigneeId !== undefined && input.assigneeId !== item.assigneeId) {
       const [assigneeId] = input.assigneeId ? await filterProjectMembers(access.project, [input.assigneeId], tx) : [];
       if (input.assigneeId && !assigneeId) throw invalid("That person can't open this project.");
@@ -516,6 +526,12 @@ export async function updateItem(actor: Actor, input: UpdateItemInput): Promise<
       patch.reviewerId = reviewerId ?? null;
       await log("item.reviewer_changed", { userId: reviewerId ?? null, from: item.reviewerId });
       if (reviewerId) batch.add(itemNotice(ctx, actor.userId, "ITEM_REVIEWER_ASSIGNED", [reviewerId]));
+    }
+    if (patch.dueAt !== undefined) {
+      // The people named on it hear about the new deadline (never whoever moved it); someone just
+      // given the item hears about the assignment instead.
+      const named = [patch.assigneeId !== undefined ? patch.assigneeId : item.assigneeId, patch.reviewerId !== undefined ? patch.reviewerId : item.reviewerId];
+      batch.add(itemNotice(ctx, actor.userId, "DUE_CHANGED", named, { dueAt: patch.dueAt?.toISOString() ?? null, previousDueAt: item.dueAt?.toISOString() ?? null }));
     }
     if (Object.keys(patch).length || input.tagIds !== undefined) {
       await tx.update(forumItems).set({ ...patch, lastActivityAt: now() }).where(eq(forumItems.id, item.id));

@@ -169,6 +169,13 @@
       "when": 1792018785924,
       "tag": "0023_canvas_folders",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792024641501,
+      "tag": "0024_forum_item_due_dates",
+      "breakpoints": true
     }
   ]
 }

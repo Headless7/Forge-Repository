@@ -78,9 +78,11 @@ export const forumItems = pgTable(
     milestoneId: uuid().references(() => milestones.id, { onDelete: "set null" }),
     /** The one person fixing it. */
     assigneeId: uuid().references(() => users.id, { onDelete: "set null" }),
-    /** The one person verifying the fix (null: any manager). */
+    /** The one person verifying the fix (null: any manager may verify; nobody is notified). */
     reviewerId: uuid().references(() => users.id, { onDelete: "set null" }),
     reportedById: uuid().references(() => users.id, { onDelete: "set null" }),
+    /** When it should be done by (null: no deadline). Reminders go to whoever has to act next (see due-dates). */
+    dueAt: tsz(),
     fixedAt: tsz(),
     fixedById: uuid().references(() => users.id, { onDelete: "set null" }),
     verifiedAt: tsz(),
@@ -98,6 +100,7 @@ export const forumItems = pgTable(
     index("forum_items_milestone_idx").on(t.milestoneId),
     index("forum_items_assignee_idx").on(t.assigneeId),
     index("forum_items_reviewer_idx").on(t.reviewerId),
+    index("forum_items_due_idx").on(t.dueAt),
   ],
 );
 

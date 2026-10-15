@@ -39,6 +39,7 @@ import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Textarea } from "../ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Tooltip } from "../ui/menu";
 import { useUploads } from "../upload/upload-manager";
+import { NoReviewerHint } from "./review-panel";
 import { useScope, useWorkspace } from "./workspace-context";
 
 // three.js and the Roblox viewer only load when a Roblox file is opened.
@@ -218,6 +219,7 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
             Submit V{nextNumber} for review when the upload finishes
           </label>
         ) : null}
+        {submit && scope.permissions.canSubmit ? <NoReviewerHint reviewerId={scope.deliverable.reviewerId} cardReviewerIds={card.reviewerIds} className="mt-1.5 pl-6" /> : null}
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel

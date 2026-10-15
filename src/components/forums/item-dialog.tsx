@@ -5,7 +5,7 @@ import { CircleCheck, Copy, Eye, History, Link2, Pencil, Play, RotateCcw, Trash2
 import { Dialog as D, VisuallyHidden } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { FORUM_KIND_META, ITEM_PRIORITY_ORDER, ITEM_RESOLUTION_META, ITEM_RESOLUTION_ORDER, priorityLabel, statusLabel } from "@/lib/forum-meta";
+import { FORUM_KIND_META, ITEM_PRIORITY_ORDER, ITEM_RESOLUTION_META, ITEM_RESOLUTION_ORDER, isResolvedItem, priorityLabel, statusLabel } from "@/lib/forum-meta";
 import { qk, useItemMutation, useRpcMutation } from "@/lib/queries";
 import { recentPeopleKey } from "@/lib/recent-people";
 import { rpc } from "@/lib/rpc-client";
@@ -25,7 +25,7 @@ import { useUploads } from "../upload/upload-manager";
 import { ItemPriorityIcon, ItemStatusPill } from "./item-badges";
 import { ItemComments } from "./item-comments";
 import { ItemMedia, itemMediaFiles, itemUploadTarget, pastedItemMedia, withinItemLimits } from "./item-media";
-import { PersonPicker, TagPicker } from "./pickers";
+import { DueDateField, PersonPicker, TagPicker } from "./pickers";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -215,6 +215,9 @@ export function ItemDialog({
                         className="h-7"
                       />
                     </Row>
+                    <Row label="Due">
+                      <DueDateField value={item.dueAt} canEdit={perms.canEdit} done={isResolvedItem(item.status)} onChange={(dueAt) => update.mutate({ itemId, dueAt })} />
+                    </Row>
                     <Row label="Assignee">
                       <PersonPicker
                         label="Assignee"
@@ -233,7 +236,7 @@ export function ItemDialog({
                       <TagPicker selected={item.tagIds} tags={view.tags} forumId={forum.id} projectId={projectId} canEdit={perms.canEdit} canManage={perms.canManageTags} onChange={(tagIds) => update.mutate({ itemId, tagIds })} />
                     </Row>
                     <Row label="Reporter">
-                      <Person id={item.reportedById} membersById={membersById} withAvatar />
+                      <Person id={item.reportedById} membersById={membersById} withAvatar handle />
                     </Row>
                   </section>
                   {perms.canDelete ? (
@@ -263,13 +266,14 @@ export function ItemDialog({
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-function Person({ id, membersById, withAvatar }: { id: string | null; membersById: Map<string, MemberDTO>; withAvatar?: boolean }) {
+/** A person named on the item. `handle` shows avatar + @username (unknown or departed people read "Former member"). */
+function Person({ id, membersById, withAvatar, handle }: { id: string | null; membersById: Map<string, MemberDTO>; withAvatar?: boolean; handle?: boolean }) {
   const m = id ? membersById.get(id) : undefined;
-  if (!m) return <span className="text-fg-subtle">{id ? "a former member" : "nobody"}</span>;
+  if (!m) return <span className="text-fg-subtle">{handle ? "Former member" : id ? "a former member" : "nobody"}</span>;
   return (
     <MemberPopover user={m} member={m} className={cn("touch-target max-w-full gap-1.5 font-medium text-fg", withAvatar && "gap-2")}>
       {withAvatar ? <UserAvatar user={m} size="xs" online={m.online} /> : null}
-      <span className="truncate">{m.displayName}</span>
+      <span className="truncate">{handle ? `@${m.username}` : m.displayName}</span>
     </MemberPopover>
   );
 }

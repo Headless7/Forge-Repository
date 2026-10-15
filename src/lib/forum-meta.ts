@@ -152,3 +152,12 @@ export function plural(noun: string): string {
   if (/[^aeiou]y$/i.test(noun)) return `${noun.slice(0, -1)}ies`;
   return `${noun}s`;
 }
+
+/**
+ * Who has to act before a forum item's deadline: the assignee while it's open or in progress, the
+ * reviewer once it's done and waiting to be verified. Nobody named, nobody reminded.
+ */
+export function itemDeadlineRecipients(item: { status: string; assigneeId: string | null; reviewerId: string | null }): string[] {
+  const who = item.status === "FIXED" ? item.reviewerId : item.status === "OPEN" || item.status === "IN_PROGRESS" ? item.assigneeId : null;
+  return who ? [who] : [];
+}

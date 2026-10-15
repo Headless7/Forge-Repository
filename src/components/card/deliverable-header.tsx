@@ -133,6 +133,7 @@ export function DeliverableHeader() {
   const { card, scope, members, deliverables, viewerId, openDeliverable } = useScope();
   const d = scope.deliverable;
   const perms = d.permissions;
+  const creator = d.createdById ? members.find((m) => m.id === d.createdById) : undefined;
   const update = useCardMutation("deliverable.update", card.id, card.projectId);
   const archive = useCardMutation("deliverable.archive", card.id, card.projectId, { onSuccess: () => openDeliverable(null) });
   const [name, setName] = useState(d.name);
@@ -333,6 +334,9 @@ export function DeliverableHeader() {
           <span>Required to complete the card</span>
           {!d.required ? <span className="text-fg-subtle">— optional work doesn&apos;t block completion</span> : null}
         </label>
+        <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-fg-subtle sm:col-span-2 xl:col-span-3">
+          Created by {creator ? <UserAvatar user={creator} size="xs" /> : null} <span className="truncate">{creator ? `@${creator.username}` : "Former member"}</span>
+        </p>
       </div>
 
       {perms.canEdit || d.description ? (

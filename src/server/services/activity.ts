@@ -72,6 +72,7 @@ export type ActivityType =
   | "item.description_changed"
   | "item.status_changed"
   | "item.priority_changed"
+  | "item.due_changed"
   | "item.milestone_changed"
   | "item.assignee_changed"
   | "item.reviewer_changed"

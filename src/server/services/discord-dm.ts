@@ -16,7 +16,7 @@ import { notificationSubject } from "@/lib/notifications";
 import { now } from "../clock";
 import { db } from "../db";
 import { blockedBy } from "@/lib/deliverables";
-import { cards, deliverableLinks, deliverables, discordConnections, discordDmDeliveries, discordDmRecipients, oauthAccounts, studioMembers, studios, users } from "../db/schema";
+import { cards, deliverableLinks, deliverables, discordConnections, discordDmDeliveries, discordDmRecipients, forumItems, oauthAccounts, studioMembers, studios, users } from "../db/schema";
 import { appOrigin } from "../env";
 import { invalid } from "../errors";
 import type { Actor } from "./context";
@@ -103,8 +103,12 @@ async function pause(userId: string, reason: string) {
 
 const str = (v: unknown) => (typeof v === "string" && v ? v : null);
 
-/** The deadline of what the notification is about: the deliverable's own, else the card's. */
+/** The deadline of what the notification is about: the forum item's, the deliverable's own, else the card's. */
 async function workDueAt(n: NotificationRecord): Promise<string | null> {
+  if (n.itemId) {
+    const [i] = await db.select({ dueAt: forumItems.dueAt }).from(forumItems).where(eq(forumItems.id, n.itemId));
+    return i?.dueAt?.toISOString() ?? null;
+  }
   if (n.deliverableId) {
     const [d] = await db.select({ dueAt: deliverables.dueAt }).from(deliverables).where(eq(deliverables.id, n.deliverableId));
     if (d?.dueAt) return d.dueAt.toISOString();
@@ -169,7 +173,8 @@ async function notificationMessage(n: NotificationRecord, link: Awaited<ReturnTy
     fields,
     footer: studio?.name ?? "Forge",
     timestamp: n.createdAt.toISOString(),
-    buttonLabel: style.button,
+    // Deadline reminders share their style with cards; an item's button opens the item.
+    buttonLabel: n.itemId && style.button === "Open card" ? "Open it" : style.button,
   });
 }
 

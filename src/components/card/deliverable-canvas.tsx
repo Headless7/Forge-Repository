@@ -38,6 +38,7 @@ import {
   FolderOpen,
   FolderOutput,
   FolderPlus,
+  LayoutGrid,
   Link2,
   Lock,
   MessageSquareWarning,
@@ -56,10 +57,19 @@ import {
   dropTargetAt,
   FOLDER_COLLAPSED,
   folderDepth,
+  folderContains,
   folderDescendants,
   folderFrames,
   folderSummary,
-  GROUP_DROP_GAP,
+  boundsOf,
+  FOLDER_HEADER,
+  FOLDER_PAD,
+  folderAncestors,
+  foldersById,
+  freeSpot,
+  LAYOUT_GAP,
+  packBlocks,
+  uniqueFolderName,
   visibleFolderOf,
   type Rect,
 } from "@/lib/canvas-folders";
@@ -78,8 +88,9 @@ import {
   type Side,
 } from "@/lib/canvas-points";
 import { CARD_STATE_META } from "@/lib/card-meta";
-import type { CardDetailDTO, CardState, DeliverableDTO, DeliverableGroupDTO, DeliverableLinkDTO, DeliverableLinkType } from "@/lib/types";
+import type { CardDetailDTO, CardState, DeliverableDTO, DeliverableGroupDTO, DeliverableLinkDTO, DeliverableLinkType, MemberDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { CreatorMark } from "../domain/creator-mark";
 import { KIND_ICONS } from "../domain/production";
 import { StatePill } from "../domain/state";
 import { Button } from "../ui/button";
@@ -118,6 +129,8 @@ type Point = { x: number; y: number };
 type DeliverableNodeData = {
   deliverable: DeliverableDTO;
   blockedNames: string[];
+  /** Who made it (null: unknown or left the studio, shown as nothing). */
+  creator: MemberDTO | null;
   selected: boolean;
   canEdit: boolean;
   /** Explicit size: the node is drawn at it; otherwise it's as tall as its content. */
@@ -180,7 +193,7 @@ const quote = (name: string) => `“${name}”`;
 const describe = (names: string[]) => (names.length === 1 ? quote(names[0]!) : `${names.length} items`);
 
 const DeliverableNodeView = memo(function DeliverableNodeView({ data }: NodeProps<DeliverableNode>) {
-  const { deliverable: d, blockedNames, onOpen } = data;
+  const { deliverable: d, blockedNames, creator, onOpen } = data;
   const kind = d.kinds.find((k) => k !== "FILE") ?? d.kinds[0];
   const KindIcon = kind ? KIND_ICONS[kind] : null;
   const attention = d.state === "NEEDS_REVIEW" ? "ring-2 ring-state-review/60" : d.state === "CHANGES_REQUESTED" ? "ring-2 ring-state-changes/60" : "";
@@ -256,6 +269,7 @@ const DeliverableNodeView = memo(function DeliverableNodeView({ data }: NodeProp
       <div className="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1 text-[10.5px] text-fg-muted">
         <DeliverableWork d={d} className="min-w-0 flex-1 text-[10.5px]" />
         {!d.hasFiles ? <span className="shrink-0 text-fg-subtle">no files</span> : null}
+        <CreatorMark person={creator} avatarOnly />
         {blockedNames.length ? (
           <span className="inline-flex shrink-0 items-center gap-0.5 text-state-review" title={`Waiting on ${blockedNames.join(", ")}`}>
             <Lock className="size-3" /> blocked
@@ -501,7 +515,7 @@ function Canvas({
   actions: CanvasActions;
   onOpen: (id: string) => void;
 }) {
-  const { card } = useWorkspace();
+  const { card, membersById } = useWorkspace();
   const flow = useReactFlow();
   // Local layout while dragging/resizing (and until the saved values come back). Positions are
   // absolute canvas coordinates whatever folder a node is in.
@@ -727,6 +741,7 @@ function Canvas({
         data: {
           deliverable: d,
           blockedNames: d.blockedBy.map((id) => names.get(id) ?? "?"),
+          creator: (d.createdById && membersById.get(d.createdById)) || null,
           selected: selectedIds.has(d.id),
           canEdit,
           fixedHeight: fixed,
@@ -742,7 +757,7 @@ function Canvas({
       });
     }
     return list;
-  }, [folderList, folderMap, frames, movingFolders, contents, selectedIds, canEdit, dropTarget, toggleFolder, deliverables, sizing, measured, names, onOpen, onResize, onResizeEnd, sizeOf, posOf, groupOf]);
+  }, [folderList, folderMap, frames, movingFolders, contents, selectedIds, canEdit, dropTarget, toggleFolder, deliverables, sizing, measured, names, membersById, onOpen, onResize, onResizeEnd, sizeOf, posOf, groupOf]);
 
   /** The node an arrow end attaches to: the deliverable, or the collapsed folder standing in for it. */
   const endpoint = useCallback(
@@ -820,6 +835,165 @@ function Canvas({
     });
   }, []);
   const layoutOf = (positions: Map<string, Point>): NodeLayoutChange[] => [...positions].map(([id, p]) => ({ id, x: p.x, y: p.y }));
+
+  // ── Placement: nothing lands on top of anything else ──────────────────────
+  //
+  // A move is planned on a copy of the canvas: what goes where (folder membership) and where it
+  // sits. The moved cards go next to their destination's contents (or stay where they were
+  // dropped), nudged to the nearest clear spot; then the destination folder — and each folder
+  // around it — is nudged clear of its neighbours if it grew into them.
+
+  type Plan = {
+    positions: Map<string, Point>;
+    /** New folder of a deliverable. */
+    parentOf: Map<string, string | null>;
+    /** New parent of a folder. */
+    folderParent: Map<string, string | null>;
+    /** A folder being made by this move (not saved yet). */
+    newFolder?: { parentId: string | null };
+  };
+  const NEW_FOLDER_ID = "__new__";
+
+  const world = (plan: Plan) => {
+    const foldersH: Array<{ id: string; parentId: string | null; collapsed: boolean }> = folderList.map((f) => ({
+      id: f.id,
+      parentId: plan.folderParent.has(f.id) ? plan.folderParent.get(f.id)! : f.parentId,
+      collapsed: f.collapsed,
+    }));
+    if (plan.newFolder) foldersH.push({ id: NEW_FOLDER_ID, parentId: plan.newFolder.parentId, collapsed: false });
+    const byIdH = foldersById(foldersH);
+    const itemsH = deliverables.map((d) => {
+      const at = plan.positions.get(d.id) ?? posOf(d);
+      return { id: d.id, groupId: plan.parentOf.has(d.id) ? plan.parentOf.get(d.id)! : groupOf(d), rect: { ...at, ...sizeOf(d) } };
+    });
+    return { foldersH, byIdH, itemsH, framesH: folderFrames(foldersH, itemsH) };
+  };
+
+  /** Everything visible in the planned canvas except `skipItems`, `skipFolders` and the frames of `around`. */
+  const obstaclesIn = (w: ReturnType<typeof world>, skipItems: Set<string>, skipFolders: Set<string>, around: Set<string>): Rect[] => [
+    ...w.itemsH.filter((i) => !skipItems.has(i.id) && visibleFolderOf(w.byIdH, i.groupId) === null).map((i) => i.rect),
+    ...w.foldersH
+      .filter((f) => !skipFolders.has(f.id) && !around.has(f.id) && visibleFolderOf(w.byIdH, f.parentId) === null)
+      .flatMap((f) => (w.framesH.has(f.id) ? [w.framesH.get(f.id)!] : [])),
+  ];
+
+  const shiftItems = (plan: Plan, ids: Iterable<string>, dx: number, dy: number) => {
+    if (!dx && !dy) return;
+    for (const id of ids) {
+      const d = byId.get(id);
+      if (!d) continue;
+      const p = plan.positions.get(id) ?? posOf(d);
+      plan.positions.set(id, { x: p.x + dx, y: p.y + dy });
+    }
+  };
+
+  /** Nudges a folder (and then each folder around it) clear of its neighbours. */
+  const settle = (plan: Plan, folderId: string | null) => {
+    let cursor = folderId;
+    for (let guard = 0; cursor && guard < 40; guard++) {
+      const w = world(plan);
+      const frame = w.framesH.get(cursor);
+      if (!frame) break;
+      const inside = folderDescendants(w.foldersH, w.itemsH, cursor);
+      const obstacles = obstaclesIn(w, new Set(inside.itemIds), new Set([cursor, ...inside.folderIds]), new Set(folderAncestors(w.byIdH, cursor)));
+      const spot = freeSpot(frame, obstacles);
+      shiftItems(plan, inside.itemIds, spot.x - frame.x, spot.y - frame.y);
+      cursor = w.byIdH.get(cursor)?.parentId ?? null;
+    }
+  };
+
+  /**
+   * Plans a move of deliverables and folders into `target` (or into a new folder there with
+   * `newFolder`). `place` are the ones to position (default: all of them): packed together when
+   * `pack`, then put at `start` — when left out, beside the destination's contents (or where they
+   * are, when leaving for the top level); `null` keeps them where they are — or the nearest clear spot. Returns the deliverables that
+   * end up somewhere new, and where they were.
+   */
+  const planMove = (opts: {
+    deliverableIds: string[];
+    groupIds: string[];
+    target: string | null;
+    newFolder?: boolean;
+    positions?: Map<string, Point>;
+    place?: { deliverableIds: string[]; groupIds: string[] };
+    start?: Point | null;
+    pack?: boolean;
+  }): { positions: Map<string, Point>; before: Map<string, Point> } => {
+    const dest = opts.newFolder ? NEW_FOLDER_ID : opts.target;
+    const plan: Plan = {
+      positions: new Map(opts.positions ?? []),
+      parentOf: new Map(opts.deliverableIds.map((id) => [id, dest])),
+      folderParent: new Map(opts.groupIds.map((id) => [id, dest])),
+      newFolder: opts.newFolder ? { parentId: opts.target } : undefined,
+    };
+    const place = opts.place ?? { deliverableIds: opts.deliverableIds, groupIds: opts.groupIds };
+    // Each placed thing is a block: a deliverable, or a folder with everything inside it.
+    const blocksOf = () => {
+      const w = world(plan);
+      return [
+        ...place.deliverableIds.flatMap((id) => {
+          const r = w.itemsH.find((i) => i.id === id)?.rect;
+          return r ? [{ rect: r, itemIds: [id] }] : [];
+        }),
+        ...place.groupIds.flatMap((id) => {
+          const r = w.framesH.get(id);
+          return r ? [{ rect: r, itemIds: folderDescendants(w.foldersH, w.itemsH, id).itemIds }] : [];
+        }),
+      ];
+    };
+    let blocks = blocksOf();
+    if (blocks.length) {
+      if (opts.pack && blocks.length > 1) {
+        const ordered = [...blocks].sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+        const first = boundsOf(ordered.map((b) => b.rect))!;
+        const spots = packBlocks(
+          ordered.map((b) => b.rect),
+          { x: first.x, y: first.y },
+        );
+        ordered.forEach((b, i) => shiftItems(plan, b.itemIds, spots[i]!.x - b.rect.x, spots[i]!.y - b.rect.y));
+        blocks = blocksOf();
+      }
+      const w = world(plan);
+      const bounds = boundsOf(blocks.map((b) => b.rect))!;
+      const movingItems = new Set(blocks.flatMap((b) => b.itemIds));
+      const movingFolders = new Set(place.groupIds.flatMap((id) => [id, ...folderDescendants(w.foldersH, w.itemsH, id).folderIds]));
+      // `start: null` keeps them where they are (dropped there); left out, they go beside the destination's contents.
+      let start = opts.start ?? null;
+      if (opts.start === undefined && dest && dest !== NEW_FOLDER_ID) {
+        // Beside what's already in the destination, aligned with its top.
+        const existing = [
+          ...w.itemsH.filter((i) => i.groupId === dest && !movingItems.has(i.id)).map((i) => i.rect),
+          ...w.foldersH.filter((f) => f.parentId === dest && !movingFolders.has(f.id)).flatMap((f) => (w.framesH.has(f.id) ? [w.framesH.get(f.id)!] : [])),
+        ];
+        const there = boundsOf(existing);
+        if (there) start = { x: there.x + there.w + LAYOUT_GAP, y: there.y };
+      }
+      start ??= { x: bounds.x, y: bounds.y };
+      const around = new Set(dest && dest !== NEW_FOLDER_ID ? [dest, ...folderAncestors(w.byIdH, dest)] : dest === NEW_FOLDER_ID && opts.target ? [opts.target, ...folderAncestors(w.byIdH, opts.target)] : []);
+      const spot = freeSpot({ ...start, w: bounds.w, h: bounds.h }, obstaclesIn(w, movingItems, movingFolders, around));
+      shiftItems(plan, movingItems, spot.x - bounds.x, spot.y - bounds.y);
+    }
+    settle(plan, dest);
+    const positions = new Map<string, Point>();
+    const before = new Map<string, Point>();
+    for (const [id, p] of plan.positions) {
+      const d = byId.get(id);
+      if (!d) continue;
+      const was = posOf(d);
+      if (Math.abs(was.x - p.x) > 0.5 || Math.abs(was.y - p.y) > 0.5) {
+        positions.set(id, { x: Math.round(p.x), y: Math.round(p.y) });
+        before.set(id, was);
+      }
+    }
+    return { positions, before };
+  };
+
+  /** A new folder's name: from the shared type, and never the same as a folder beside or around it. */
+  const nameFor = (members: DeliverableDTO[], parentId: string | null) =>
+    uniqueFolderName(defaultFolderName(members), [
+      ...folderList.filter((f) => f.parentId === parentId).map((f) => f.name),
+      ...(parentId ? [parentId, ...folderAncestors(folderMap, parentId)].map((id) => folderMap.get(id)?.name ?? "") : []),
+    ]);
 
   const onNodeDragStart = useCallback(
     (_: unknown, __: CanvasNode, dragged: CanvasNode[]) => {
@@ -921,20 +1095,29 @@ function Canvas({
   const draggedNames = (dragged: Dragged[]) => dragged.map((d) => (d.kind === "folder" ? folderMap.get(d.id)?.name : names.get(d.id)) ?? "?");
 
   /** Dropped onto a deliverable: a new folder (in that deliverable's folder) around it and what was dragged. */
-  const groupOnto = (s: DragSession, targetId: string, dragged: Dragged[], finalPos: Map<string, Point>, primaryNodeId: string) => {
+  const groupOnto = (s: DragSession, targetId: string, dragged: Dragged[], finalPos: Map<string, Point>) => {
     const target = byId.get(targetId);
     if (!target) return;
-    const primary = dragged.find((d) => (d.kind === "folder" ? folderNodeId(d.id) : d.id) === primaryNodeId) ?? dragged[0]!;
-    // Beside the target rather than on top of it.
-    const rect = { ...posOf(target), ...sizeOf(target) };
-    const dx = rect.x + rect.w + GROUP_DROP_GAP - primary.abs.x;
-    const dy = rect.y - primary.abs.y;
-    const nudged = new Map([...finalPos].map(([id, p]) => [id, { x: p.x + dx, y: p.y + dy }]));
-    const before = snapshotOf(s, dragged, nudged.keys());
-    commitPositions(nudged);
-    const deliverableIds = [targetId, ...dragged.filter((d) => d.kind === "deliverable").map((d) => d.id)];
+    const draggedIds = dragged.filter((d) => d.kind === "deliverable").map((d) => d.id);
     const groupIds = dragged.filter((d) => d.kind === "folder").map((d) => d.id);
-    const name = defaultFolderName(deliverableIds.map((id) => byId.get(id)).filter((d): d is DeliverableDTO => Boolean(d)));
+    const deliverableIds = [targetId, ...draggedIds];
+    // Beside the target rather than on top of it, clear of everything else; the new folder then
+    // makes room for itself if its frame would cover a neighbour.
+    const rect = { ...posOf(target), ...sizeOf(target) };
+    const { positions: planned } = planMove({
+      deliverableIds,
+      groupIds,
+      target: groupOf(target),
+      newFolder: true,
+      positions: finalPos,
+      place: { deliverableIds: draggedIds, groupIds },
+      start: { x: rect.x + rect.w + LAYOUT_GAP, y: rect.y },
+    });
+    const nudged = new Map([...finalPos, ...planned]);
+    const before = snapshotOf(s, dragged, nudged.keys());
+    if (planned.has(targetId)) before.positions.set(targetId, posOf(target));
+    commitPositions(nudged);
+    const name = nameFor(deliverableIds.map((id) => byId.get(id)).filter((d): d is DeliverableDTO => Boolean(d)), groupOf(target));
     actions
       .createFolder({ name, parentId: groupOf(target), deliverableIds, groupIds, positions: layoutOf(nudged) })
       .then((detail) => {
@@ -955,11 +1138,15 @@ function Canvas({
   };
 
   /** Dropped into a folder, or out of one onto the open canvas. */
-  const moveDragged = (s: DragSession, target: string | null, dragged: Dragged[], finalPos: Map<string, Point>) => {
-    const before = snapshotOf(s, dragged, finalPos.keys());
-    commitPositions(finalPos);
+  const moveDragged = (s: DragSession, target: string | null, dragged: Dragged[], dropped: Map<string, Point>) => {
     const deliverableIds = dragged.filter((d) => d.kind === "deliverable").map((d) => d.id);
     const groupIds = dragged.filter((d) => d.kind === "folder").map((d) => d.id);
+    // Where it was dropped, unless that covers something: then the nearest clear spot.
+    const { positions: planned } = planMove({ deliverableIds, groupIds, target, positions: dropped, start: null });
+    const finalPos = new Map([...dropped, ...planned]);
+    const before = snapshotOf(s, dragged, finalPos.keys());
+    for (const id of planned.keys()) if (!before.positions.has(id)) before.positions.set(id, posOf(byId.get(id)!));
+    commitPositions(finalPos);
     const fromIds = new Set(dragged.map((d) => d.parent));
     const from = fromIds.size === 1 ? [...fromIds][0]! : null;
     const fromName = from ? folderMap.get(from)?.name : null;
@@ -1012,7 +1199,7 @@ function Canvas({
       const p = pointerOf(event, toFlow);
       const target = canEdit && p ? dropTargetAt(p, s.candidates, s.excluded) : null;
       if (target?.kind === "deliverable") {
-        groupOnto(s, target.id, top, finalPos, node.id);
+        groupOnto(s, target.id, top, finalPos);
         return;
       }
       if (target?.kind === "folder" && top.some((t) => t.parent !== target.id)) {
@@ -1024,6 +1211,19 @@ function Canvas({
         return;
       }
       if (!moved) return;
+      // Same folder as before: just moved, but never left covering something.
+      const parents = new Set(top.map((t) => t.parent));
+      if (canEdit && parents.size === 1) {
+        const parent = [...parents][0]!;
+        const { positions: planned } = planMove({
+          deliverableIds: top.filter((t) => t.kind === "deliverable").map((t) => t.id),
+          groupIds: top.filter((t) => t.kind === "folder").map((t) => t.id),
+          target: parent,
+          positions: finalPos,
+          start: null,
+        });
+        for (const [id, at] of planned) finalPos.set(id, at);
+      }
       commitPositions(finalPos);
       void actions.layout(layoutOf(finalPos));
     },
@@ -1051,25 +1251,44 @@ function Canvas({
     if (!canEdit || !selectedCount) return;
     const parents = new Set<string | null>([...selectedDeliverables.map((id) => groupOf(byId.get(id)!)), ...selectedFolders.map((id) => folderMap.get(id)!.parentId)]);
     const parentId = parents.size === 1 ? [...parents][0]! : null;
-    const name = defaultFolderName(selectedDeliverables.map((id) => byId.get(id)!));
-    const what = describe([...selectedDeliverables.map((id) => names.get(id) ?? "?"), ...selectedFolders.map((id) => folderMap.get(id)?.name ?? "?")]);
+    // Folders already inside another selected folder travel with it.
+    const groupIds = selectedFolders.filter((id) => !selectedFolders.some((other) => other !== id && folderAncestors(folderMap, id).includes(other)));
+    const deliverableIds = selectedDeliverables.filter((id) => !groupIds.some((g) => folderDescendants(folderList, items, g).itemIds.includes(id)));
+    const name = nameFor(selectedDeliverables.map((id) => byId.get(id)!), parentId);
+    const what = describe([...deliverableIds.map((id) => names.get(id) ?? "?"), ...groupIds.map((id) => folderMap.get(id)?.name ?? "?")]);
+    // Gathered together where the selection starts, so the folder holds exactly what's in it.
+    const { positions, before } = planMove({ deliverableIds, groupIds, target: parentId, newFolder: true, pack: true });
+    commitPositions(positions);
     actions
-      .createFolder({ name, parentId, deliverableIds: selectedDeliverables, groupIds: selectedFolders })
+      .createFolder({ name, parentId, deliverableIds, groupIds, positions: layoutOf(positions) })
       .then((detail) => {
         const created = detail.deliverableGroups.find((g) => !folderMap.has(g.id));
         selectFolder(created?.id);
         toast.success(`Put ${what} in ${quote(name)}.`, {
           description: "Select the folder to rename it or change its colour.",
-          action: { label: "Undo", onClick: () => created && void actions.ungroup(created.id).catch(() => {}) },
+          action: {
+            label: "Undo",
+            onClick: () => {
+              const undo = created && foldersRef.current.has(created.id) ? actions.ungroup(created.id) : Promise.resolve();
+              void undo
+                .then(() => {
+                  commitPositions(before);
+                  return before.size ? actions.layout(layoutOf(before)) : undefined;
+                })
+                .catch(() => {});
+            },
+          },
         });
       })
-      .catch(() => {});
+      .catch(() => commitPositions(before));
   };
   /** A new folder around one deliverable, where it is. */
   const folderAround = (d: DeliverableDTO) => {
-    const name = defaultFolderName([d]);
+    const name = nameFor([d], groupOf(d));
+    const { positions } = planMove({ deliverableIds: [d.id], groupIds: [], target: groupOf(d), newFolder: true, place: { deliverableIds: [], groupIds: [] } });
+    commitPositions(positions);
     actions
-      .createFolder({ name, parentId: groupOf(d), deliverableIds: [d.id] })
+      .createFolder({ name, parentId: groupOf(d), deliverableIds: [d.id], positions: layoutOf(positions) })
       .then((detail) => {
         const created = detail.deliverableGroups.find((g) => !folderMap.has(g.id));
         selectFolder(created?.id, true);
@@ -1080,8 +1299,12 @@ function Canvas({
   const moveOne = (item: { kind: "deliverable" | "folder"; id: string; name: string; parent: string | null }, target: string | null) => {
     if (target === item.parent) return;
     const fromName = item.parent ? folderMap.get(item.parent)?.name : null;
+    const ids = { deliverableIds: item.kind === "deliverable" ? [item.id] : [], groupIds: item.kind === "folder" ? [item.id] : [] };
+    // Next to what's already in the folder (or just outside the one it leaves), never on top of anything.
+    const { positions, before } = planMove({ ...ids, target });
+    commitPositions(positions);
     actions
-      .moveToFolder({ deliverableIds: item.kind === "deliverable" ? [item.id] : [], groupIds: item.kind === "folder" ? [item.id] : [], targetGroupId: target })
+      .moveToFolder({ ...ids, targetGroupId: target, positions: layoutOf(positions) })
       .then((detail) => {
         const removed = item.parent && !detail.deliverableGroups.some((g) => g.id === item.parent) ? fromName : null;
         toast.success(target ? `Moved ${quote(item.name)} into ${quote(folderMap.get(target)?.name ?? "folder")}.` : fromName ? `Moved ${quote(item.name)} out of ${quote(fromName)}.` : `Moved ${quote(item.name)} to the top level.`, {
@@ -1090,12 +1313,68 @@ function Canvas({
             label: "Undo",
             onClick: () => {
               const back = item.parent && foldersRef.current.has(item.parent) ? item.parent : null;
-              void actions.moveToFolder({ deliverableIds: item.kind === "deliverable" ? [item.id] : [], groupIds: item.kind === "folder" ? [item.id] : [], targetGroupId: back }).catch(() => {});
+              commitPositions(before);
+              void actions.moveToFolder({ ...ids, targetGroupId: back, positions: before.size ? layoutOf(before) : undefined }).catch(() => {});
             },
           },
         });
       })
-      .catch(() => {});
+      .catch(() => commitPositions(before));
+  };
+  /** Several at once into a folder (or the top level), packed together beside what's there. */
+  const moveMany = (deliverableIds: string[], groupIds: string[], target: string | null) => {
+    const okGroups = groupIds.filter((id) => !target || !folderContains(folderMap, id, target));
+    if (!deliverableIds.length && !okGroups.length) return Promise.resolve();
+    const { positions, before } = planMove({ deliverableIds, groupIds: okGroups, target, pack: true });
+    commitPositions(positions);
+    return actions.moveToFolder({ deliverableIds, groupIds: okGroups, targetGroupId: target, positions: layoutOf(positions) }).catch((e) => {
+      commitPositions(before);
+      throw e;
+    });
+  };
+  /** Lays a folder's contents out in neat rows (sub-folders keep their own layout), then makes room around it. */
+  const tidyFolder = (f: DeliverableGroupDTO) => {
+    const frame = frames.get(f.id);
+    if (!frame || f.collapsed) return;
+    const plan: Plan = { positions: new Map(), parentOf: new Map(), folderParent: new Map() };
+    const w = world(plan);
+    const blocks = [
+      ...w.itemsH.filter((i) => i.groupId === f.id).map((i) => ({ rect: i.rect, itemIds: [i.id] })),
+      ...w.foldersH.filter((x) => x.parentId === f.id).flatMap((x) => (w.framesH.has(x.id) ? [{ rect: w.framesH.get(x.id)!, itemIds: folderDescendants(w.foldersH, w.itemsH, x.id).itemIds }] : [])),
+    ].sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+    const spots = packBlocks(
+      blocks.map((b) => b.rect),
+      { x: frame.x + FOLDER_PAD, y: frame.y + FOLDER_PAD + FOLDER_HEADER },
+    );
+    blocks.forEach((b, i) => shiftItems(plan, b.itemIds, spots[i]!.x - b.rect.x, spots[i]!.y - b.rect.y));
+    settle(plan, f.id);
+    const positions = new Map<string, Point>();
+    const before = new Map<string, Point>();
+    for (const [id, p] of plan.positions) {
+      const d = byId.get(id);
+      if (!d) continue;
+      const was = posOf(d);
+      if (Math.abs(was.x - p.x) > 0.5 || Math.abs(was.y - p.y) > 0.5) {
+        positions.set(id, { x: Math.round(p.x), y: Math.round(p.y) });
+        before.set(id, was);
+      }
+    }
+    if (!positions.size) {
+      toast(`${quote(f.name)} is already tidy.`);
+      return;
+    }
+    commitPositions(positions);
+    void actions.layout(layoutOf(positions)).then(() =>
+      toast.success(`Tidied ${quote(f.name)}.`, {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            commitPositions(before);
+            void actions.layout(layoutOf(before));
+          },
+        },
+      }),
+    );
   };
   const ungroupFolder = (f: DeliverableGroupDTO) => {
     actions
@@ -1225,6 +1504,8 @@ function Canvas({
         maxZoom={2}
         onlyRenderVisibleElements={deliverables.length > 60}
         nodesDraggable={canEdit}
+        // Over something you can drop onto, the view holds still instead of panning away under you.
+        autoPanOnNodeDrag={!dropTarget}
         nodesConnectable={canEdit}
         // Any point can start or end an arrow; the direction is the way it was drawn.
         connectionMode={ConnectionMode.Loose}
@@ -1259,7 +1540,7 @@ function Canvas({
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
         <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap pannable zoomable className="!hidden md:!block" nodeColor={(n) => (n.type === "folder" ? ((n.data as FolderNodeData).folder.color ?? "var(--border-strong)") : CARD_STATE_META[(n.data as DeliverableNodeData).deliverable.state].color)} />
+        <MiniMap pannable zoomable className="!hidden md:!block [@media(max-height:600px)]:!hidden" nodeColor={(n) => (n.type === "folder" ? ((n.data as FolderNodeData).folder.color ?? "var(--border-strong)") : CARD_STATE_META[(n.data as DeliverableNodeData).deliverable.state].color)} />
         <Panel position="top-left" className="!m-2 rounded-md border border-border bg-surface-2/90 px-2 py-1 text-[11px] text-fg-muted backdrop-blur">
           <span className="inline-flex items-center gap-1">
             <span className="inline-block h-0.5 w-5 bg-state-review" /> requires (arrow → dependant)
@@ -1356,6 +1637,11 @@ function Canvas({
                         <DropdownMenuItem onSelect={() => selectFolder(f.id, true)}>
                           <Pencil /> Rename
                         </DropdownMenuItem>
+                        {!f.collapsed ? (
+                          <DropdownMenuItem onSelect={() => tidyFolder(f)}>
+                            <LayoutGrid /> Tidy up
+                          </DropdownMenuItem>
+                        ) : null}
                         <DropdownMenuSeparator />
                         <DropdownMenuNested
                           label={
@@ -1493,9 +1779,7 @@ function Canvas({
                   label="Move selection to folder"
                   onChange={(target) => {
                     if (target === NEW_FOLDER) return;
-                    const okFolders = selectedFolders.filter((id) => !target || !folderDescendants(folderList, items, id).folderIds.includes(target) && id !== target);
-                    actions
-                      .moveToFolder({ deliverableIds: selectedDeliverables, groupIds: okFolders, targetGroupId: target })
+                    moveMany(selectedDeliverables, selectedFolders, target)
                       .then(() => toast.success(target ? `Moved ${selectedCount} items into ${quote(folderMap.get(target)?.name ?? "folder")}.` : `Moved ${selectedCount} items to the top level.`))
                       .catch(() => {});
                   }}
@@ -1522,6 +1806,11 @@ function Canvas({
               {selectedFolder.collapsed ? <ChevronRight /> : <ChevronDown />} {selectedFolder.collapsed ? "Expand" : "Collapse"}
             </Button>
             {canEdit ? <FolderColorPicker folder={selectedFolder} canEdit onChange={(color) => void actions.updateFolder(selectedFolder.id, { color })} /> : null}
+            {canEdit && !selectedFolder.collapsed ? (
+              <Button size="xs" variant="ghost" onClick={() => tidyFolder(selectedFolder)} title="Lay out what's inside in neat rows">
+                <LayoutGrid /> Tidy
+              </Button>
+            ) : null}
           </div>
           {canEdit ? (
             <>
@@ -1537,7 +1826,7 @@ function Canvas({
                 />
               </label>
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <AddToFolderPopover folder={selectedFolder} deliverables={deliverables} byId={folderMap} onAdd={(ids) => actions.moveToFolder({ deliverableIds: ids, targetGroupId: selectedFolder.id }).then(() => toast.success(`Added ${ids.length} to ${quote(selectedFolder.name)}.`))} />
+                <AddToFolderPopover folder={selectedFolder} deliverables={deliverables} byId={folderMap} onAdd={(ids) => moveMany(ids, [], selectedFolder.id).then(() => toast.success(`Added ${ids.length} to ${quote(selectedFolder.name)}.`))} />
                 <Button size="xs" variant="ghost" onClick={() => ungroupFolder(selectedFolder)} title="Ctrl+Shift+G">
                   <Ungroup /> Ungroup
                 </Button>

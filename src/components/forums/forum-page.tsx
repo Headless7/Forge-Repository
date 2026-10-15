@@ -1,31 +1,30 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Film, Image as ImageIcon, MessageSquare, Plus, Search, Settings2, Tag } from "lucide-react";
+import { ChevronDown, Film, Image as ImageIcon, MessageSquare, Plus, Search, Settings2, Tag, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FORUM_KIND_META, ITEM_PRIORITY_META, ITEM_PRIORITY_ORDER, isResolvedItem, plural, priorityLabel, withArticle } from "@/lib/forum-meta";
+import { DEFAULT_ITEM_FILTERS, filterItems, hasNarrowingFilters, type AssigneeFilter, type ItemFilters, type ItemSort, type ReporterFilter } from "@/lib/forum-filter";
+import { FORUM_KIND_META, ITEM_PRIORITY_ORDER, isResolvedItem, plural, priorityLabel, withArticle } from "@/lib/forum-meta";
 import { qk } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
 import type { ForumItemSummaryDTO, ForumViewDTO, ItemPriority, MemberDTO } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
 import { useRealtimeProject } from "../realtime";
 import { UserAvatar } from "../domain/avatar";
-import { LabelChip } from "../domain/state";
+import { CreatorMark } from "../domain/creator-mark";
+import { PeopleMenu } from "../domain/people-menu";
+import { DueChip, LabelChip } from "../domain/state";
 import { Button } from "../ui/button";
 import { EmptyState, Select } from "../ui/controls";
 import { Input } from "../ui/input";
-import { Tooltip } from "../ui/menu";
+import { Popover, PopoverContent, PopoverTrigger, Tooltip } from "../ui/menu";
 import { ForumSettingsDialog } from "./forum-dialogs";
 import { ItemPriorityIcon, ItemStatusPill } from "./item-badges";
 import { ItemDialog } from "./item-dialog";
 import { NewItemDialog } from "./new-item-dialog";
 import { TagManagerDialog } from "./pickers";
-
-type Scope = "all" | "none" | string;
-type StatusFilter = "open" | "resolved" | "all";
-type Sort = "newest" | "priority" | "updated";
 
 /**
  * One forum (Bugs, QA or a custom tracker). The default view is the global list of every unresolved
@@ -45,13 +44,10 @@ export function ForumPage({ initial, members, studioSlug, projectSlug }: { initi
   const searchParams = useSearchParams();
   const openNumber = Number(searchParams.get("item")) || null;
 
-  const [scope, setScope] = useState<Scope>("all");
-  const [status, setStatus] = useState<StatusFilter>("open");
-  const [q, setQ] = useState("");
-  const [priority, setPriority] = useState<ItemPriority | "any">("any");
-  const [tagId, setTagId] = useState<string>("any");
-  const [person, setPerson] = useState<string>("any");
-  const [sort, setSort] = useState<Sort>("newest");
+  const [filters, setFilters] = useState<ItemFilters>(DEFAULT_ITEM_FILTERS);
+  const set = <K extends keyof ItemFilters>(key: K) => (value: ItemFilters[K]) => setFilters((f) => ({ ...f, [key]: value }));
+  const { scope, status } = filters;
+  const [sort, setSort] = useState<ItemSort>("newest");
   const [reporting, setReporting] = useState(false);
   const [managingTags, setManagingTags] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -98,29 +94,13 @@ export function ForumPage({ initial, members, studioSlug, projectSlug }: { initi
   // ── Filtering ─────────────────────────────────────────────────────────────
   const unresolved = useMemo(() => view.items.filter((b) => !isResolvedItem(b.status)), [view.items]);
   const openCount = (filter: (b: ForumItemSummaryDTO) => boolean) => unresolved.filter(filter).length;
-  const scopes: Array<{ id: Scope; label: string; count: number; released?: boolean }> = [
+  const scopes: Array<{ id: ItemFilters["scope"]; label: string; count: number; released?: boolean }> = [
     { id: "all", label: "All updates", count: unresolved.length },
     ...view.milestones.filter((m) => !m.archived).map((m) => ({ id: m.id, label: m.name, count: openCount((b) => b.milestoneId === m.id), released: Boolean(m.releasedAt) })),
     { id: "none", label: "No update", count: openCount((b) => !b.milestoneId) },
   ];
-  const needle = q.trim().toLowerCase();
-  const filtered = useMemo(() => {
-    const rows = view.items.filter((b) => {
-      if (scope === "none" ? b.milestoneId : scope !== "all" && b.milestoneId !== scope) return false;
-      if (status === "open" ? isResolvedItem(b.status) : status === "resolved" && !isResolvedItem(b.status)) return false;
-      if (priority !== "any" && b.priority !== priority) return false;
-      if (tagId !== "any" && !b.tagIds.includes(tagId)) return false;
-      if (person === "me" ? !(b.assigneeId === viewerId || b.reviewerId === viewerId || b.reportedById === viewerId) : person !== "any" && b.assigneeId !== person) return false;
-      if (needle && !`${b.key} ${b.title}`.toLowerCase().includes(needle)) return false;
-      return true;
-    });
-    const rank = (b: ForumItemSummaryDTO) => ITEM_PRIORITY_META[b.priority].rank;
-    return rows.sort((a, b) => {
-      if (sort === "priority") return rank(b) - rank(a) || b.createdAt.localeCompare(a.createdAt);
-      if (sort === "updated") return b.lastActivityAt.localeCompare(a.lastActivityAt);
-      return b.createdAt.localeCompare(a.createdAt);
-    });
-  }, [view.items, scope, status, priority, tagId, person, needle, sort, viewerId]);
+  const filtered = useMemo(() => filterItems(view.items, filters, viewerId, sort), [view.items, filters, viewerId, sort]);
+  const narrowed = hasNarrowingFilters(filters);
 
   const nothingYet = view.items.length === 0;
   const scopeLabel = scope === "all" ? "every update" : scope === "none" ? "no update" : (milestonesById.get(scope)?.name ?? "this update");
@@ -188,7 +168,7 @@ export function ForumPage({ initial, members, studioSlug, projectSlug }: { initi
               type="button"
               role="tab"
               aria-selected={scope === s.id}
-              onClick={() => setScope(s.id)}
+              onClick={() => set("scope")(s.id)}
               className={cn(
                 "flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-medium",
                 scope === s.id ? "border-accent bg-accent-soft text-fg" : "border-border-strong text-fg-muted hover:bg-surface-3 hover:text-fg",
@@ -211,25 +191,30 @@ export function ForumPage({ initial, members, studioSlug, projectSlug }: { initi
                 ["all", "All"],
               ] as const
             ).map(([value, label]) => (
-              <button key={value} type="button" onClick={() => setStatus(value)} className={cn("h-7 rounded px-3 font-medium", status === value ? "bg-surface-4 text-fg" : "text-fg-muted hover:text-fg")} aria-pressed={status === value}>
+              <button key={value} type="button" onClick={() => set("status")(value)} className={cn("h-7 rounded px-3 font-medium", status === value ? "bg-surface-4 text-fg" : "text-fg-muted hover:text-fg")} aria-pressed={status === value}>
                 {label}
               </button>
             ))}
           </div>
           <div className="relative min-w-40 flex-1 sm:max-w-64">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-fg-subtle" aria-hidden />
-            <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${nouns}…`} aria-label={`Search ${nouns}`} className="pl-7" />
+            <Input type="search" value={filters.query} onChange={(e) => set("query")(e.target.value)} placeholder={`Search ${nouns}…`} aria-label={`Search ${nouns}`} className="pl-7" />
           </div>
-          <Select<ItemPriority | "any"> aria-label="Priority" value={priority} onValueChange={setPriority} className="h-8 w-auto min-w-32" options={[{ value: "any", label: "Any priority" }, ...ITEM_PRIORITY_ORDER.map((p) => ({ value: p, label: priorityLabel(forum.kind, p), icon: <ItemPriorityIcon kind={forum.kind} priority={p} /> }))]} />
-          {view.tags.length ? <Select<string> aria-label="Tag" value={tagId} onValueChange={setTagId} className="h-8 w-auto min-w-28" options={[{ value: "any", label: "Any tag" }, ...view.tags.map((t) => ({ value: t.id, label: t.name }))]} /> : null}
-          <Select<string>
-            aria-label="Person"
-            value={person}
-            onValueChange={setPerson}
-            className="h-8 w-auto min-w-32"
-            options={[{ value: "any", label: "Anyone" }, { value: "me", label: "Mine" }, ...members.map((m) => ({ value: m.id, label: m.displayName, icon: <UserAvatar user={m} size="xs" /> }))]}
-          />
-          <Select<Sort> aria-label="Sort" value={sort} onValueChange={setSort} className="h-8 w-auto min-w-28" options={[{ value: "newest", label: "Newest" }, { value: "priority", label: "Priority" }, { value: "updated", label: "Recently updated" }]} />
+          <Select<ItemPriority | "any"> aria-label="Priority" value={filters.priority} onValueChange={set("priority")} className="h-8 w-auto min-w-32" options={[{ value: "any", label: "Any priority" }, ...ITEM_PRIORITY_ORDER.map((p) => ({ value: p, label: priorityLabel(forum.kind, p), icon: <ItemPriorityIcon kind={forum.kind} priority={p} /> }))]} />
+          {view.tags.length ? <Select<string> aria-label="Tag" value={filters.tagId} onValueChange={set("tagId")} className="h-8 w-auto min-w-28" options={[{ value: "any", label: "Any tag" }, ...view.tags.map((t) => ({ value: t.id, label: t.name }))]} /> : null}
+          <PersonFilter label="Assigned to" value={filters.assignee} onChange={set("assignee")} members={members} viewerId={viewerId} unassigned />
+          <PersonFilter label="Reported by" value={filters.reporter} onChange={set("reporter")} members={members} viewerId={viewerId} />
+          <Tooltip content={`${capitalize(nouns)} you're assigned to, verify or reported`}>
+            <button
+              type="button"
+              aria-pressed={filters.mine}
+              onClick={() => set("mine")(!filters.mine)}
+              className={cn("h-8 rounded-md border px-3 text-[13px] font-medium", filters.mine ? "border-accent bg-accent-soft text-fg" : "border-border-strong/70 bg-surface-3/60 text-fg-muted hover:border-border-strong hover:text-fg")}
+            >
+              Mine
+            </button>
+          </Tooltip>
+          <Select<ItemSort> aria-label="Sort" value={sort} onValueChange={setSort} className="h-8 w-auto min-w-28" options={[{ value: "newest", label: "Newest" }, { value: "priority", label: "Priority" }, { value: "due", label: "Due date" }, { value: "updated", label: "Recently updated" }]} />
         </div>
 
         {/* The list */}
@@ -245,7 +230,14 @@ export function ForumPage({ initial, members, studioSlug, projectSlug }: { initi
             <EmptyState
               icon={<span className="text-2xl">{forum.icon}</span>}
               title={status === "open" ? `No open ${nouns} for ${scopeLabel}` : status === "resolved" ? `No resolved ${nouns} here` : `No ${nouns} match`}
-              description={needle || priority !== "any" || tagId !== "any" || person !== "any" ? "Try clearing a filter." : status === "open" ? "Nothing waiting to be done or verified." : undefined}
+              description={narrowed ? "Try clearing a filter." : status === "open" ? "Nothing waiting to be done or verified." : undefined}
+              action={
+                narrowed ? (
+                  <Button variant="secondary" onClick={() => setFilters((f) => ({ ...DEFAULT_ITEM_FILTERS, scope: f.scope, status: f.status }))}>
+                    Clear filters
+                  </Button>
+                ) : null
+              }
             />
           ) : (
             <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface-2">
@@ -300,6 +292,8 @@ function ItemRow({
   onOpen: () => void;
 }) {
   const assignee = item.assigneeId ? membersById.get(item.assigneeId) : undefined;
+  // Former members and unknown people show nothing in the list.
+  const reporter = item.reportedById ? membersById.get(item.reportedById) : undefined;
   const tags = item.tagIds.map((id) => tagsById.get(id)).filter((t): t is { id: string; name: string; color: string } => Boolean(t));
   return (
     <button type="button" onClick={onOpen} className="flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-surface-3 focus-visible:bg-surface-3 focus-visible:outline-none md:items-center">
@@ -313,6 +307,7 @@ function ItemRow({
           {tags.map((t) => (
             <LabelChip key={t.id} label={t} />
           ))}
+          {item.dueAt ? <DueChip dueAt={item.dueAt} done={isResolvedItem(item.status)} /> : null}
           {showUpdate && milestoneName ? <span>{milestoneName}</span> : null}
           {item.counts.attachments ? (
             <span className="inline-flex items-center gap-0.5">
@@ -325,6 +320,7 @@ function ItemRow({
             </span>
           ) : null}
           <span>{timeAgo(item.createdAt)}</span>
+          <CreatorMark person={reporter} verb="Reported" />
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
@@ -342,6 +338,65 @@ function ItemRow({
         <ItemStatusPill kind={kind} status={item.status} resolution={item.resolution} size="sm" className="hidden md:inline-flex" />
       </div>
     </button>
+  );
+}
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/**
+ * A people filter: a trigger showing who is chosen, opening a searchable single-choice menu with
+ * Anyone, Me (and Unassigned, for assignees) above the members.
+ */
+function PersonFilter<V extends AssigneeFilter | ReporterFilter>({
+  label,
+  value,
+  onChange,
+  members,
+  viewerId,
+  unassigned,
+}: {
+  label: string;
+  value: V;
+  onChange: (value: V) => void;
+  members: MemberDTO[];
+  viewerId: string;
+  /** Offer "Unassigned" (assignee filters). */
+  unassigned?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const special = value === "any" || value === "none" || value === "me";
+  const person = value === "me" ? members.find((m) => m.id === viewerId) : special ? undefined : members.find((m) => m.id === value);
+  const summary = value === "any" ? "Anyone" : value === "none" ? "Unassigned" : value === "me" ? "Me" : (person?.displayName ?? "Former member");
+  const choose = (next: string) => {
+    onChange(next as V);
+    setOpen(false);
+  };
+  const choices = [
+    { id: "any", label: "Anyone", selected: value === "any", onSelect: () => choose("any") },
+    ...(unassigned ? [{ id: "none", label: "Unassigned", selected: value === "none", onSelect: () => choose("none") }] : []),
+    { id: "me", label: "Me", selected: value === "me", onSelect: () => choose("me"), icon: members.find((m) => m.id === viewerId) ? <UserAvatar user={members.find((m) => m.id === viewerId)!} size="xs" /> : undefined },
+  ];
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${label}: ${summary}`}
+          className={cn(
+            "inline-flex h-8 min-w-0 max-w-full items-center gap-1.5 rounded-md border px-2.5 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring sm:max-w-56",
+            value === "any" ? "border-border-strong/70 bg-surface-3/60 hover:border-border-strong" : "border-accent bg-accent-soft",
+          )}
+        >
+          <span className="shrink-0 text-fg-subtle">{label}</span>
+          {person ? <UserAvatar user={person} size="xs" /> : value === "none" ? <UserRound className="size-4 shrink-0 text-fg-subtle" aria-hidden /> : null}
+          <span className="min-w-0 truncate">{summary}</span>
+          <ChevronDown className="size-4 shrink-0 text-fg-subtle" aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="flex w-64 flex-col p-2" onOpenAutoFocus={(e) => window.matchMedia("(pointer: coarse)").matches && e.preventDefault()}>
+        <PeopleMenu people={members} selectedIds={!special && person ? [person.id] : []} single label={label} choices={choices} onToggle={(id, on) => choose(on ? id : "any")} />
+      </PopoverContent>
+    </Popover>
   );
 }
 

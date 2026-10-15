@@ -10,9 +10,10 @@ import { errorMessage, rpc } from "@/lib/rpc-client";
 import type { ScheduleCardDTO, ScheduleDeliverableDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { CreatorMark } from "../domain/creator-mark";
 import { TipAnchor } from "../tutorial/tutorial";
 import { Button } from "../ui/button";
-import { Agenda } from "./agenda";
+import { Agenda, useMembersById } from "./agenda";
 import { ScheduleItemDialog, type ScheduleSelection } from "./schedule-item-dialog";
 import { addDays, calendarEntries, DAY, isDueSoon, isOverdue, openTargetOf, sameDay, shiftIso, startOfDay, useBoardSchedule, type OpenTarget } from "./schedule-utils";
 
@@ -97,6 +98,7 @@ export function TimelineView({
   const from = useMemo(() => startOfDay(anchor), [anchor]);
   const to = useMemo(() => addDays(from, days), [from, days]);
   const schedule = useBoardSchedule(projectId, boardId, from, to);
+  const members = useMembersById();
   const canEditAny = Boolean(schedule.data?.cards.some((c) => c.canEdit));
   const [selection, setSelection] = useState<ScheduleSelection | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -341,11 +343,12 @@ export function TimelineView({
                 <div key={key} className={cn("absolute flex w-full border-b border-border/50", d ? "bg-surface/20" : "bg-surface/40")} style={{ top: row.top, height: ROW_H }}>
                   <div className="sticky left-0 z-10 flex shrink-0 items-center gap-1.5 border-r border-border bg-surface px-2 text-[12.5px]" style={{ width: "var(--tl-label)" }}>
                     {d ? (
-                      <span className="flex min-w-0 items-center gap-1.5 pl-5">
+                      <span className="flex min-w-0 flex-1 items-center gap-1.5 pl-5">
                         <span className="size-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
                         <span className="shrink-0 font-mono text-[10.5px] text-fg-subtle">D{d.number}</span>
                         <span className="truncate">{d.name}</span>
                         {blocked ? <Lock className="size-3 shrink-0 text-state-review" aria-label="blocked" /> : null}
+                        <CreatorMark person={members.get(d.createdById ?? "")} avatarOnly className="ml-auto" />
                       </span>
                     ) : (
                       <>
@@ -366,6 +369,7 @@ export function TimelineView({
                           <span className="shrink-0 font-mono text-[10.5px] text-fg-subtle">{card.key}</span>
                           <span className="truncate font-medium">{card.title}</span>
                         </button>
+                        <CreatorMark person={members.get(card.createdById ?? "")} avatarOnly className="ml-auto" />
                       </>
                     )}
                   </div>

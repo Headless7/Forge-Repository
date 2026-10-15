@@ -1,13 +1,14 @@
 import "server-only";
 import crypto from "node:crypto";
 import { and, arrayContains, asc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { itemDeadlineRecipients } from "@/lib/forum-meta";
 import { DISCORD_DIGEST_HOUR_UTC, DISCORD_EVENT_META, DISCORD_EVENTS, isDiscordEvent, type DiscordEventType } from "@/lib/discord";
 import { roleHas } from "@/lib/permissions";
 import { requireProject, requireStudio } from "../access";
 import { hmac, safeEqual } from "../auth/crypto";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
-import { boardColumns, boards, cardAssignees, cardReviewers, cards, deliverables, discordConnections, discordDeliveries, discordRoutes, projects, studios, users } from "../db/schema";
+import { boardColumns, boards, cardAssignees, cardReviewers, cards, deliverables, discordConnections, discordDeliveries, discordRoutes, forumItems, forums, projects, studios, users } from "../db/schema";
 import { appOrigin, env } from "../env";
 import { conflict, invalid, notFound } from "../errors";
 import { audit } from "./activity";
@@ -562,7 +563,7 @@ async function digestMessage(route: RouteRow, event: DiscordEventPayload, projec
   const at = new Date(event.at);
   const horizon = new Date(at.getTime() + 2 * DAY_MS);
   const liveCard = and(eq(cards.projectId, project.id), isNull(cards.archivedAt), isNull(boards.archivedAt), isNull(boardColumns.archivedAt), route.boardId ? eq(cards.boardId, route.boardId) : sql`true`);
-  const [cardRows, deliverableRows] = await Promise.all([
+  const [cardRows, deliverableRows, itemRows] = await Promise.all([
     db
       .select({ id: cards.id, number: cards.number, title: cards.title, dueAt: cards.dueAt, boardNumber: boards.number })
       .from(cards)
@@ -576,24 +577,39 @@ async function digestMessage(route: RouteRow, event: DiscordEventPayload, projec
       .innerJoin(boards, eq(boards.id, cards.boardId))
       .innerJoin(boardColumns, eq(boardColumns.id, cards.columnId))
       .where(and(liveCard, isNull(deliverables.archivedAt), isNotNull(deliverables.dueAt), lte(deliverables.dueAt, horizon), ne(deliverables.state, "APPROVED"))),
+    // Forum items aren't on a board: they show in project-wide feeds only.
+    route.boardId
+      ? Promise.resolve([])
+      : db
+          .select({ id: forumItems.id, number: forumItems.number, title: forumItems.title, dueAt: forumItems.dueAt, status: forumItems.status, assigneeId: forumItems.assigneeId, reviewerId: forumItems.reviewerId, prefix: forums.keyPrefix, slug: forums.slug })
+          .from(forumItems)
+          .innerJoin(forums, eq(forums.id, forumItems.forumId))
+          .where(and(eq(forumItems.projectId, project.id), isNull(forums.archivedAt), inArray(forumItems.status, ["OPEN", "IN_PROGRESS", "FIXED"]), isNotNull(forumItems.dueAt), lte(forumItems.dueAt, horizon))),
   ]);
   const base = projectLink(project.studioSlug, project.slug);
   const items = [
-    ...cardRows.map((c) => ({ cardId: c.id, due: c.dueAt!, text: `${project.key}-${c.number} ${c.title}`, url: `${base}/b/${c.boardNumber}?card=${project.key}-${c.number}` })),
-    ...deliverableRows.map((d) => ({ cardId: d.id, due: d.dueAt!, text: `${project.key}-${d.number} ${d.title} · ${d.name}`, url: `${base}/b/${d.boardNumber}?card=${project.key}-${d.number}&d=${d.dNumber}` })),
+    ...cardRows.map((c) => ({ cardId: c.id, due: c.dueAt!, text: `${project.key}-${c.number} ${c.title}`, url: `${base}/b/${c.boardNumber}?card=${project.key}-${c.number}`, personId: null as string | null })),
+    ...deliverableRows.map((d) => ({ cardId: d.id, due: d.dueAt!, text: `${project.key}-${d.number} ${d.title} · ${d.name}`, url: `${base}/b/${d.boardNumber}?card=${project.key}-${d.number}&d=${d.dNumber}`, personId: null as string | null })),
+    // The person an item waits on (the reminders' rule): its assignee, or its reviewer once it's done.
+    ...itemRows.map((i) => ({ cardId: i.id, due: i.dueAt!, text: `${project.key}-${i.prefix}${i.number} ${i.title}`, url: `${base}/f/${i.slug}?item=${i.number}`, personId: itemDeadlineRecipients(i)[0] ?? null })),
   ].sort((a, b) => a.due.getTime() - b.due.getTime());
   if (!items.length) return { skip: "Nothing overdue or due soon." };
   const shown = items.slice(0, 10);
   const more = items.length - shown.length;
-  // Who's on each card (names only; they never ping).
-  const people = shown.length
-    ? await db
-        .select({ cardId: cardAssignees.cardId, name: users.displayName })
-        .from(cardAssignees)
-        .innerJoin(users, eq(users.id, cardAssignees.userId))
-        .where(inArray(cardAssignees.cardId, [...new Set(shown.map((i) => i.cardId))]))
-        .orderBy(asc(cardAssignees.createdAt))
-    : [];
+  // Who's on each card or item (names only; they never ping).
+  const itemPeople = shown.flatMap((i) => (i.personId ? [{ cardId: i.cardId, userId: i.personId }] : []));
+  const [cardPeople, itemNames] = await Promise.all([
+    shown.length
+      ? db
+          .select({ cardId: cardAssignees.cardId, name: users.displayName })
+          .from(cardAssignees)
+          .innerJoin(users, eq(users.id, cardAssignees.userId))
+          .where(inArray(cardAssignees.cardId, [...new Set(shown.map((i) => i.cardId))]))
+          .orderBy(asc(cardAssignees.createdAt))
+      : Promise.resolve([]),
+    itemPeople.length ? db.select({ id: users.id, name: users.displayName }).from(users).where(inArray(users.id, [...new Set(itemPeople.map((p) => p.userId))])) : Promise.resolve([]),
+  ]);
+  const people = [...cardPeople, ...itemPeople.flatMap((p) => itemNames.filter((u) => u.id === p.userId).map((u) => ({ cardId: p.cardId, name: u.name })))];
   const line = (i: (typeof items)[number]) => {
     const late = i.due < at;
     const when = discordTime(i.due.toISOString(), "R");

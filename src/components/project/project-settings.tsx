@@ -368,7 +368,7 @@ function Workflow({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
         </label>
         <div>
           <p className="text-[13px] font-medium">Default reviewers</p>
-          <p className="mb-2 text-[12px] text-fg-muted">Added to every new card. With no reviewer set, all managers are asked when work is submitted.</p>
+          <p className="mb-2 text-[12px] text-fg-muted">Added to every new card. With no reviewer set, nobody is notified when work is submitted: it waits in the review queue until a manager picks it up.</p>
           {reviewerCandidates.length > 5 ? <PeopleSearch value={reviewerQuery} onChange={setReviewerQuery} autoFocus={false} className="mb-2 max-w-xs" /> : null}
           <div className="flex flex-wrap gap-1.5">
             {reviewers.map((m) => {

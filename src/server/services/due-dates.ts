@@ -1,15 +1,17 @@
 /**
- * Deadline reminders for cards and deliverables, sent by the server on a schedule — nobody needs
- * the site open. Each person hears once per deadline and kind: the dedupe key includes the
+ * Deadline reminders for cards, deliverables and forum items, sent by the server on a schedule —
+ * nobody needs the site open. Each person hears once per deadline and kind: the dedupe key includes the
  * deadline, so moving it earns a fresh reminder, while repeated runs (retries, several workers,
  * catching up after downtime) never repeat one. Approved or archived work and archived projects
- * get none (nor do cards on an archived column or board), and recipients are worked out when
- * sending, so reassignment is respected.
+ * get none (nor do cards on an archived column or board, or items in an archived forum), and
+ * recipients are worked out when sending, so reassignment is respected. Only named people are
+ * reminded: work nobody is assigned to reminds nobody.
  */
-import { and, eq, gt, isNull, lte, ne } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lte, ne } from "drizzle-orm";
+import { itemDeadlineRecipients, itemKey } from "@/lib/forum-meta";
 import { now } from "../clock";
 import { db } from "../db";
-import { boardColumns, boards, cards, deliverables, projects } from "../db/schema";
+import { boardColumns, boards, cards, deliverables, forumItems, forums, projects } from "../db/schema";
 import { Effects } from "./effects";
 import { notify } from "./notifications";
 import { loadCardWork, type CardWork } from "./workflow";
@@ -107,6 +109,38 @@ export async function runDueDateReminders(at: Date = now()): Promise<number> {
         dueAt: due.toISOString(),
       },
       dedupeKey: `${kind}:deliverable:${d.id}:${due.toISOString()}`,
+    });
+    sent += notified.length;
+    fx.notify(notified);
+  }
+
+  const dueItems = await db
+    .select({ item: forumItems, forum: forums, project: projects })
+    .from(forumItems)
+    .innerJoin(forums, eq(forums.id, forumItems.forumId))
+    .innerJoin(projects, eq(projects.id, forumItems.projectId))
+    .where(
+      and(
+        isNull(forums.archivedAt),
+        isNull(projects.archivedAt),
+        inArray(forumItems.status, ["OPEN", "IN_PROGRESS", "FIXED"]),
+        gt(forumItems.dueAt, since),
+        lte(forumItems.dueAt, soon),
+      ),
+    )
+    .limit(500);
+  for (const { item, forum, project } of dueItems) {
+    const due = item.dueAt!;
+    const kind = due.getTime() > at.getTime() ? "DUE_SOON" : "OVERDUE";
+    const notified = await notify(db, {
+      recipientIds: itemDeadlineRecipients(item),
+      actorId: null,
+      type: kind,
+      studioId: project.studioId,
+      projectId: project.id,
+      itemId: item.id,
+      data: { itemKey: itemKey(project.key, forum.keyPrefix, item.number), itemTitle: item.title, itemNoun: forum.itemLabel, forumName: forum.name, projectName: project.name, dueAt: due.toISOString() },
+      dedupeKey: `${kind}:item:${item.id}:${due.toISOString()}`,
     });
     sent += notified.length;
     fx.notify(notified);

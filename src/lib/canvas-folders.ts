@@ -198,3 +198,72 @@ export function folderTree<F extends FolderLike, I extends FolderItemLike & { po
   };
   return build(null, new Set());
 }
+
+// ── Keeping the canvas tidy ─────────────────────────────────────────────────
+
+/** Space kept between neighbouring cards and folders when something is placed for you. */
+export const LAYOUT_GAP = 24;
+
+export function rectsOverlap(a: Rect, b: Rect, gap = 0): boolean {
+  return a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
+}
+
+export function boundsOf(rects: readonly Rect[]): Rect | null {
+  if (!rects.length) return null;
+  const x = Math.min(...rects.map((r) => r.x));
+  const y = Math.min(...rects.map((r) => r.y));
+  return { x, y, w: Math.max(...rects.map((r) => r.x + r.w)) - x, h: Math.max(...rects.map((r) => r.y + r.h)) - y };
+}
+
+/**
+ * The nearest spot to `rect` where it overlaps none of `obstacles` (keeping `gap` clear), searched
+ * on a grid around it; to the right and below win ties, so things settle into reading order.
+ * Returns the rect's own spot when it's already clear.
+ */
+export function freeSpot(rect: Rect, obstacles: readonly Rect[], gap = LAYOUT_GAP, step = 24, radius = 60): { x: number; y: number } {
+  const clear = (x: number, y: number) => obstacles.every((o) => !rectsOverlap({ x, y, w: rect.w, h: rect.h }, o, gap));
+  if (clear(rect.x, rect.y)) return { x: rect.x, y: rect.y };
+  const offsets: Array<{ dx: number; dy: number; cost: number }> = [];
+  for (let i = -radius; i <= radius; i++) {
+    for (let j = -radius; j <= radius; j++) {
+      if (!i && !j) continue;
+      // Distance, nudged so right/down are preferred over left/up at equal distance.
+      offsets.push({ dx: i * step, dy: j * step, cost: Math.hypot(i, j) + (i < 0 ? 0.35 : 0) + (j < 0 ? 0.25 : 0) });
+    }
+  }
+  offsets.sort((a, b) => a.cost - b.cost);
+  for (const o of offsets) if (clear(rect.x + o.dx, rect.y + o.dy)) return { x: rect.x + o.dx, y: rect.y + o.dy };
+  return { x: rect.x, y: rect.y };
+}
+
+/**
+ * Lays blocks out in rows from `origin`, left to right, wrapping at about the width of a square
+ * grid; each block keeps its size. Returns each block's new top-left corner, in order.
+ */
+export function packBlocks(sizes: ReadonlyArray<{ w: number; h: number }>, origin: { x: number; y: number }, gap = LAYOUT_GAP): Array<{ x: number; y: number }> {
+  if (!sizes.length) return [];
+  const columns = Math.max(1, Math.ceil(Math.sqrt(sizes.length)));
+  const out: Array<{ x: number; y: number }> = [];
+  let y = origin.y;
+  for (let start = 0; start < sizes.length; start += columns) {
+    const row = sizes.slice(start, start + columns);
+    let x = origin.x;
+    for (const s of row) {
+      out.push({ x, y });
+      x += s.w + gap;
+    }
+    y += Math.max(...row.map((s) => s.h)) + gap;
+  }
+  return out;
+}
+
+/** `name`, or `name 2`, `name 3` … when a folder next to it (or around it) already has that name. */
+export function uniqueFolderName(name: string, taken: Iterable<string>): string {
+  const used = new Set([...taken].map((n) => n.trim().toLowerCase()));
+  if (!used.has(name.trim().toLowerCase())) return name;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${name} ${i}`;
+    if (!used.has(candidate.toLowerCase())) return candidate.slice(0, FOLDER_NAME_MAX);
+  }
+  return name;
+}

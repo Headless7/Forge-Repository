@@ -86,6 +86,7 @@ describe("Discord direct messages", () => {
     const f = await setupStudio();
     const reviewerDiscord = await link(f.manager.id);
     const card = await cardFor(f, "@everyone Boss **arena**", { assigneeIds: [f.member.id] });
+    await cardService.setReviewers(f.manager.actor, { cardId: card.id, add: [f.manager.id] });
     const version = await media.createVersion(f.member.actor, { cardId: card.id });
     await upload(f.member.actor, card.id, { name: "v1.png", type: "image/png", buffer: await pngBuffer() }, "version", version.id);
     await reviews.submitForReview(f.member.actor, { deliverableId: await primaryDeliverable(card.id), note: "secret note text" });

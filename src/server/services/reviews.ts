@@ -1,6 +1,5 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { deliverableTeam } from "@/lib/deliverables";
-import { roleHas } from "@/lib/permissions";
 import type { CardDetailDTO, CardState } from "@/lib/types";
 import { assertDeliverable, requireCard, requireDeliverable, type DeliverableAccess } from "../access";
 import { now } from "../clock";
@@ -14,7 +13,6 @@ import type { Actor } from "./context";
 import { recomputeCardRollup } from "./deliverables";
 import { queueDiscordEvent } from "./discord";
 import { Effects } from "./effects";
-import { listProjectMembers } from "./members-query";
 import { NotificationBatch } from "./notifications";
 import { addDependencyNotifications, dependencyChanges, loadCardWork, type CardWork } from "./workflow";
 
@@ -48,10 +46,8 @@ async function setState(tx: Tx, ctx: DeliverableAccess, state: CardState, actorI
 async function reviewerRecipients(tx: Tx, ctx: DeliverableAccess): Promise<string[]> {
   if (ctx.deliverable.reviewerId) return [ctx.deliverable.reviewerId];
   const explicit = await tx.select({ userId: cardReviewers.userId }).from(cardReviewers).where(eq(cardReviewers.cardId, ctx.card.id));
-  if (explicit.length) return explicit.map((r) => r.userId);
-  // No named reviewers: everyone who can review in this project is asked.
-  const members = await listProjectMembers(ctx.access.project, tx);
-  return members.filter((m) => roleHas(m.role, "card.review")).map((m) => m.id);
+  // No named reviewer: nobody is pinged. The work still waits in the review queues (home, /reviews).
+  return explicit.map((r) => r.userId);
 }
 
 /** Who works on this deliverable (its own team, or the card's assignees when it inherits). */

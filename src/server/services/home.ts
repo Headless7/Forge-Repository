@@ -23,7 +23,8 @@ export interface AttentionItem {
 
 /** A deliverable the viewer works on (responsible, contributor, or a card assignee when it inherits). */
 export interface MyDeliverableItem {
-  deliverable: { id: string; number: number; name: string; state: CardState; required: boolean };
+  /** `createdById`: who created the deliverable (null when unknown). */
+  deliverable: { id: string; number: number; name: string; state: CardState; required: boolean; createdById: string | null };
   card: { id: string; key: string; title: string };
   project: ProjectRef;
   board: BoardRef | null;
@@ -125,7 +126,7 @@ export async function myDeliverables(userId: string, projectIds: string[], proje
     const names = new Map(work.deliverables.map((x) => [x.id, x.name]));
     const project = projectRef(card.projectId);
     items.push({
-      deliverable: { id: d.id, number: d.number, name: d.name, state: d.state, required: d.required },
+      deliverable: { id: d.id, number: d.number, name: d.name, state: d.state, required: d.required, createdById: d.createdById },
       card: { id: card.id, key: `${project.key}-${card.number}`, title: card.title },
       project,
       board: boardRef(card.boardId),

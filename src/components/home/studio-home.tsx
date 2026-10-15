@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, CalendarClock, CircleAlert, Clock, Eye, FolderPlus, Lock } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { qk, useRpcMutation } from "@/lib/queries";
 import { rpc } from "@/lib/rpc-client";
@@ -12,6 +12,7 @@ import { cn, formatShortDate, timeAgo } from "@/lib/utils";
 import { describeActivity } from "../domain/activity-text";
 import { UserAvatar } from "../domain/avatar";
 import { ChecklistDue } from "../domain/checklist-due";
+import { CreatorMark } from "../domain/creator-mark";
 import { StatePill } from "../domain/state";
 import { CreateProjectDialog } from "../shell/create-project-dialog";
 import { useShell } from "../shell/shell-context";
@@ -95,6 +96,10 @@ export function StudioHome({ initial }: { initial: Home }) {
   const { user, studio, can } = useShell();
   const [createOpen, setCreateOpen] = useState(false);
   const { data } = useQuery({ queryKey: qk.home(studio.id), queryFn: () => rpc("studio.home", { studioId: studio.id }), initialData: initial, staleTime: 20_000 });
+  // Who created each card and deliverable (the members page's cache; people who left aren't in it).
+  const members = useQuery({ queryKey: qk.members(studio.id), queryFn: () => rpc("member.list", { studioId: studio.id }), staleTime: 60_000 });
+  const membersById = useMemo(() => new Map((members.data ?? []).map((m) => [m.id, m])), [members.data]);
+  const creator = (id: string | null) => (id ? membersById.get(id) : undefined);
   /** Opens the card on its board (project links without a board are redirected there too). */
   const cardHref = (projectSlug: string, key: string, board?: { number: number } | null) =>
     `/${studio.slug}/${projectSlug}${board ? `/b/${board.number}` : ""}?card=${encodeURIComponent(key)}`;
@@ -172,10 +177,13 @@ export function StudioHome({ initial }: { initial: Home }) {
                         )}
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-[13.5px] font-medium">{card.title}</p>
-                          <p className="truncate text-[11.5px] text-fg-subtle">
-                            <span className="font-mono">{card.key}</span> · {project.name}
-                            {boardSuffix(board)}
-                            {card.counts.unresolvedFeedback ? <span className="text-state-changes"> · {card.counts.unresolvedFeedback} unresolved</span> : null}
+                          <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-fg-subtle">
+                            <span className="truncate">
+                              <span className="font-mono">{card.key}</span> · {project.name}
+                              {boardSuffix(board)}
+                              {card.counts.unresolvedFeedback ? <span className="text-state-changes"> · {card.counts.unresolvedFeedback} unresolved</span> : null}
+                            </span>
+                            <CreatorMark person={creator(card.createdById)} />
                           </p>
                         </div>
                         <span className={cn("hidden items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-semibold sm:inline-flex", meta.className)}>
@@ -228,6 +236,7 @@ export function StudioHome({ initial }: { initial: Home }) {
                                 <Lock className="size-3" /> waiting on {item.waitingOn.join(", ")}
                               </span>
                             ) : null}
+                            <CreatorMark person={creator(item.deliverable.createdById)} />
                           </p>
                         </div>
                         <StatePill state={item.deliverable.state} size="sm" />
@@ -251,7 +260,10 @@ export function StudioHome({ initial }: { initial: Home }) {
                   <Link key={card.id} href={cardHref(project.slug, card.key, board)} className="flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-surface-2 p-2 hover:border-border-strong">
                     {card.cover?.thumbUrl ? <img src={card.cover.thumbUrl} alt="" className="h-9 w-14 shrink-0 rounded object-cover" /> : <span className="flex h-9 w-14 shrink-0 items-center justify-center rounded bg-surface-4">{project.icon}</span>}
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-[13px] font-medium">{card.title}</p>
+                      <p className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-[13px] font-medium">{card.title}</span>
+                        <CreatorMark person={creator(card.createdById)} avatarOnly />
+                      </p>
                       <p className="truncate text-[11px] text-fg-subtle">
                         viewed{" "}
                         {/* "54 seconds ago" can tick over between the server's HTML and the browser taking over. */}

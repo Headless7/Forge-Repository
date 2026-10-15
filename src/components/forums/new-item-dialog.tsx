@@ -16,7 +16,7 @@ import { Input, Label, Textarea } from "../ui/input";
 import { useUploads } from "../upload/upload-manager";
 import { ItemPriorityIcon } from "./item-badges";
 import { ITEM_MEDIA_ACCEPT, itemMediaFiles, itemUploadTarget, pastedItemMedia, withinItemLimits } from "./item-media";
-import { PersonPicker, TagPicker } from "./pickers";
+import { DueDateField, PersonPicker, TagPicker } from "./pickers";
 
 interface Picked {
   id: string;
@@ -56,6 +56,7 @@ export function NewItemDialog({
   const [assigneeId, setAssigneeId] = useState<string | null>(null);
   const [reviewerId, setReviewerId] = useState<string | null>(forum.settings.defaultReviewerId);
   const [tagIds, setTagIds] = useState<string[]>([]);
+  const [dueAt, setDueAt] = useState<string | null>(null);
   const [files, setFiles] = useState<Picked[]>([]);
   const input = useRef<HTMLInputElement>(null);
 
@@ -71,6 +72,7 @@ export function NewItemDialog({
     setAssigneeId(null);
     setReviewerId(forum.settings.defaultReviewerId);
     setTagIds([]);
+    setDueAt(null);
     setFiles([]);
   };
 
@@ -98,7 +100,7 @@ export function NewItemDialog({
 
   const submit = () => {
     if (!title.trim()) return;
-    create.mutate({ forumId: forum.id, title: title.trim(), description: description.trim() || undefined, priority, milestoneId, assigneeId, reviewerId, tagIds });
+    create.mutate({ forumId: forum.id, title: title.trim(), description: description.trim() || undefined, priority, milestoneId, assigneeId, reviewerId, tagIds, dueAt });
   };
 
   return (
@@ -167,6 +169,10 @@ export function NewItemDialog({
               <div className="rounded-md border border-border-strong/70 bg-surface-3/60 px-2.5 py-1 text-[13px]">
                 <PersonPicker label="Reviewer" value={reviewerId} members={members} canEdit={canAssign} emptyLabel="Any manager" onChange={setReviewerId} />
               </div>
+            </div>
+            <div>
+              <Label>Due (optional)</Label>
+              <DueDateField value={dueAt} onChange={setDueAt} canEdit className="[&_input]:h-8" />
             </div>
           </div>
           <div>

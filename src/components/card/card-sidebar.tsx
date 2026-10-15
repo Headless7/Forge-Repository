@@ -438,7 +438,7 @@ export function CardSidebar({ onApprove, onRequestChanges, onSubmit, onUploadVer
 
       <section className="grid gap-1 px-1 text-[12px] text-fg-subtle">
         <p className="flex items-center gap-1.5">
-          Created by {creator ? <UserAvatar user={creator} size="xs" /> : null} {creator?.displayName ?? "someone"} · {formatDateTime(card.createdAt)}
+          Created by {creator ? <UserAvatar user={creator} size="xs" /> : null} {creator ? `@${creator.username}` : "Former member"} · {formatDateTime(card.createdAt)}
         </p>
         <p>Updated {timeAgo(card.updatedAt)}</p>
       </section>

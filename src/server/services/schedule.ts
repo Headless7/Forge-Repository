@@ -142,6 +142,7 @@ export async function loadSchedule(actor: Actor, scope: Scope, from: string, to:
         ownDueAt: iso(d.dueAt),
         blockedBy: cardLinks.filter((l) => l.type === "DEPENDENCY" && l.toId === d.id && states.get(l.fromId) !== "APPROVED").map((l) => l.fromId),
         mine: team.includes(me) || reviewing,
+        createdById: d.createdById,
       };
     });
     const mine = assigneeIds.includes(me) || deliverableDtos.some((d) => d.mine);
@@ -160,6 +161,7 @@ export async function loadSchedule(actor: Actor, scope: Scope, from: string, to:
       assigneeIds,
       canEdit: computeCardPermissions(access, card, assigneeIds).canEdit,
       mine,
+      createdById: card.createdById,
       deliverables: deliverableDtos,
       links: cardLinks.map((l) => ({ fromId: l.fromId, toId: l.toId, type: l.type })),
     });

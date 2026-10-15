@@ -6,9 +6,10 @@ import { CARD_STATE_META } from "@/lib/card-meta";
 import type { ScheduleChecklistItemDTO, ScheduleDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { CreatorMark } from "../domain/creator-mark";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/menu";
 import { TipAnchor } from "../tutorial/tutorial";
-import { Agenda } from "./agenda";
+import { Agenda, creatorIdOf, useMembersById } from "./agenda";
 import { ScheduleItemDialog, type ScheduleSelection } from "./schedule-item-dialog";
 import { addDays, calendarEntries, dateKey, formatTime, openTargetOf, openTargetOfItem, sameDay, startOfDay, startOfWeek, useBoardSchedule, useStudioSchedule, type CalendarEntry, type OpenTarget } from "./schedule-utils";
 import { RangeBar } from "./timeline";
@@ -26,8 +27,9 @@ function gridRange(anchor: Date, mode: Mode) {
 }
 
 type OpenItem = (item: ScheduleChecklistItemDTO) => void;
+type Members = ReturnType<typeof useMembersById>;
 
-function Chip({ entry, onSelect, onOpenItem }: { entry: CalendarEntry; onSelect: (s: ScheduleSelection) => void; onOpenItem: OpenItem }) {
+function Chip({ entry, onSelect, onOpenItem, members }: { entry: CalendarEntry; onSelect: (s: ScheduleSelection) => void; onOpenItem: OpenItem; members: Members }) {
   if (entry.item) {
     const item = entry.item;
     return (
@@ -63,12 +65,15 @@ function Chip({ entry, onSelect, onOpenItem }: { entry: CalendarEntry; onSelect:
       {/* Narrow days show the title; the key joins it when there's room. */}
       <span className="hidden shrink-0 font-mono text-[10px] text-fg-subtle @min-[150px]:inline">{entry.ref}</span>
       <span className="truncate">{entry.title}</span>
+      {/* Who created it, once the day is wide enough to spare the room. */}
+      <CreatorMark person={members.get(creatorIdOf(entry) ?? "")} avatarOnly className="ml-auto hidden @min-[120px]:inline-flex" />
     </button>
   );
 }
 
 /** The grid itself, given entries. Days show up to three items, then "+N more". */
 function CalendarGrid({ entries, from, to, mode, onSelect, onOpenItem }: { entries: CalendarEntry[]; from: Date; to: Date; mode: Mode; onSelect: (s: ScheduleSelection) => void; onOpenItem: OpenItem }) {
+  const members = useMembersById();
   const byDay = useMemo(() => {
     const map = new Map<string, CalendarEntry[]>();
     for (const e of entries) map.set(dateKey(e.at), [...(map.get(dateKey(e.at)) ?? []), e]);
@@ -93,7 +98,7 @@ function CalendarGrid({ entries, from, to, mode, onSelect, onOpenItem }: { entri
           <div key={dateKey(d)} role="gridcell" aria-label={d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })} className={cn("@container flex min-h-24 min-w-0 flex-col gap-0.5 border-b border-r border-border p-1", outside && "bg-surface/40", mode === "week" && "min-h-64")}>
             <span className={cn("mb-0.5 inline-flex size-6 items-center justify-center self-end rounded-full text-[11.5px] tabular-nums", sameDay(d, today) ? "bg-accent font-bold text-white" : outside ? "text-fg-subtle/60" : "text-fg-muted")}>{d.getDate()}</span>
             {items.slice(0, limit).map((e) => (
-              <Chip key={e.key} entry={e} onSelect={onSelect} onOpenItem={onOpenItem} />
+              <Chip key={e.key} entry={e} onSelect={onSelect} onOpenItem={onOpenItem} members={members} />
             ))}
             {items.length > limit ? (
               <Popover>
@@ -105,7 +110,7 @@ function CalendarGrid({ entries, from, to, mode, onSelect, onOpenItem }: { entri
                 <PopoverContent align="start" className="@container grid w-72 gap-1 p-2">
                   <p className="px-1 text-[12px] font-semibold">{d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>
                   {items.map((e) => (
-                    <Chip key={e.key} entry={e} onSelect={onSelect} onOpenItem={onOpenItem} />
+                    <Chip key={e.key} entry={e} onSelect={onSelect} onOpenItem={onOpenItem} members={members} />
                   ))}
                 </PopoverContent>
               </Popover>

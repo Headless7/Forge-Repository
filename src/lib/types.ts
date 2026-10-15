@@ -251,6 +251,8 @@ export interface DashboardItemDTO {
   /** Responsible people and contributors (or the card's assignees when it inherits). */
   people: string[];
   reviewerIds: string[];
+  /** Who created the deliverable (null when unknown). */
+  createdById: string | null;
   /** Why it's on this list: "waiting on Model", "in review for 3 days", "no activity for 20 days". */
   note: string | null;
 }
@@ -343,6 +345,8 @@ export interface ScheduleDeliverableDTO {
   blockedBy: string[];
   /** The viewer is responsible for, contributes to, or reviews it. */
   mine: boolean;
+  /** Who created it (null when unknown). */
+  createdById: string | null;
 }
 
 export interface ScheduleCardDTO {
@@ -361,6 +365,8 @@ export interface ScheduleCardDTO {
   canEdit: boolean;
   /** The viewer is assigned to the card or works on one of its deliverables. */
   mine: boolean;
+  /** Who created the card (null when unknown). */
+  createdById: string | null;
   deliverables: ScheduleDeliverableDTO[];
   links: Array<{ fromId: string; toId: string; type: DeliverableLinkType }>;
 }
@@ -819,6 +825,8 @@ export interface ForumItemSummaryDTO {
   assigneeId: string | null;
   reviewerId: string | null;
   reportedById: string | null;
+  /** When it should be done by (null: no deadline). */
+  dueAt: string | null;
   tagIds: string[];
   counts: { attachments: number; comments: number };
   /** The first picture or clip, for the list. */

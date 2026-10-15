@@ -5,6 +5,7 @@ import type { UserDTO } from "@/lib/types";
 import { cn, initials } from "@/lib/utils";
 
 const sizes = {
+  "2xs": "size-4 text-[8px]",
   xs: "size-5 text-[9px]",
   sm: "size-6 text-[10px]",
   md: "size-7 text-[11px]",

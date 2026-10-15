@@ -1,11 +1,27 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { CheckSquare, Flag, Play } from "lucide-react";
+import { useMemo } from "react";
 import { CARD_STATE_META } from "@/lib/card-meta";
+import { qk } from "@/lib/queries";
+import { rpc } from "@/lib/rpc-client";
 import type { ScheduleChecklistItemDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { CreatorMark } from "../domain/creator-mark";
+import { useShell } from "../shell/shell-context";
 import type { ScheduleSelection } from "./schedule-item-dialog";
 import { dateKey, formatDayHeading, formatTime, sameDay, startOfDay, type CalendarEntry } from "./schedule-utils";
+
+/** The studio's members by id (the members page's cache), to show who created scheduled work. People who left aren't in it. */
+export function useMembersById() {
+  const { studio } = useShell();
+  const members = useQuery({ queryKey: qk.members(studio.id), queryFn: () => rpc("member.list", { studioId: studio.id }), staleTime: 60_000 });
+  return useMemo(() => new Map((members.data ?? []).map((m) => [m.id, m])), [members.data]);
+}
+
+/** Who created an entry's deliverable, or its card. */
+export const creatorIdOf = (e: CalendarEntry) => (e.deliverable ? e.deliverable.createdById : (e.card?.createdById ?? null));
 
 /** Starts, deadlines, checklist items and milestones as a day-by-day list (phones, and anywhere a grid is too wide). */
 export function Agenda({
@@ -20,6 +36,7 @@ export function Agenda({
   onOpenItem?: (item: ScheduleChecklistItemDTO) => void;
   emptyText?: string;
 }) {
+  const members = useMembersById();
   if (!entries.length) return <p className="px-4 py-10 text-center text-[13px] text-fg-muted">{emptyText}</p>;
   const days: Array<{ day: Date; items: CalendarEntry[] }> = [];
   for (const e of entries) {
@@ -70,9 +87,12 @@ export function Agenda({
                     <span className="size-2.5 shrink-0 rounded-full" style={{ background: e.state ? CARD_STATE_META[e.state].color : undefined }} aria-hidden />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-medium">{e.title}</span>
-                      <span className="block truncate text-[11.5px] text-fg-subtle">
-                        <span className="font-mono">{e.ref}</span>
-                        {e.card ? ` · ${e.card.project.name} · ${e.card.board.name}` : ""}
+                      <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-fg-subtle">
+                        <span className="truncate">
+                          <span className="font-mono">{e.ref}</span>
+                          {e.card ? ` · ${e.card.project.name} · ${e.card.board.name}` : ""}
+                        </span>
+                        <CreatorMark person={members.get(creatorIdOf(e) ?? "")} />
                       </span>
                     </span>
                     <span className={cn("shrink-0 text-right text-[11.5px]", e.overdue ? "font-semibold text-danger" : "text-fg-muted")}>
