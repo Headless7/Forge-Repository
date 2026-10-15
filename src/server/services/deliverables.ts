@@ -14,6 +14,7 @@ import { logActivity } from "./activity";
 import { loadCardDetail } from "./card-dto";
 import { cardNotificationData, touchCard } from "./cards";
 import type { Actor } from "./context";
+import { removeEmptyGroups } from "./deliverable-groups";
 import { Effects } from "./effects";
 import { listProjectMembers } from "./members-query";
 import { inboxAudience, NotificationBatch } from "./notifications";
@@ -507,6 +508,8 @@ export async function setDeliverableArchived(actor: Actor, input: { deliverableI
       .update(deliverables)
       .set(input.archived ? { archivedAt: now(), archivedById: actor.userId } : { archivedAt: null, archivedById: null })
       .where(eq(deliverables.id, d.id));
+    // A folder keeps only active work; archiving the last of it removes the folder.
+    if (input.archived) await removeEmptyGroups(tx, ctx.card.id);
     await recomputeCardRollup(tx, ctx.card.id);
     await touchCard(tx, ctx.card.id, actor.userId);
     await logActivity(tx, {
@@ -557,17 +560,27 @@ export interface NodeLayout {
 export async function layoutDeliverables(actor: Actor, input: { cardId: string; positions: NodeLayout[] }) {
   const ctx = await requireCard(actor.userId, input.cardId);
   assertCard(ctx.perms, "canEdit", "You don't have permission to arrange this card's deliverables.");
-  const ids = input.positions.map((p) => p.id);
   const fx = new Effects();
   await db.transaction(async (tx) => {
+    await applyLayout(tx, ctx.card.id, input.positions);
+    fx.card(ctx.card.projectId, ctx.card.id, false);
+  });
+  fx.flush(actor.clientId);
+  return { ok: true };
+}
+
+/** Writes layout changes for this card's deliverables (the body of layoutDeliverables, reusable inside other changes). */
+export async function applyLayout(tx: Executor, cardId: string, positions: NodeLayout[]) {
+  const ids = positions.map((p) => p.id);
+  {
     const owned = await tx
       .select({ id: deliverables.id, archivedAt: deliverables.archivedAt, canvasW: deliverables.canvasW, canvasH: deliverables.canvasH })
       .from(deliverables)
-      .where(and(eq(deliverables.cardId, ctx.card.id), inArray(deliverables.id, ids)));
+      .where(and(eq(deliverables.cardId, cardId), inArray(deliverables.id, ids)));
     if (owned.length !== new Set(ids).size) throw notFound("Deliverable");
     if (owned.some((d) => d.archivedAt)) throw conflict("Archived deliverables can't be moved or resized. Restore them first.");
     const resized: Array<{ id: string; size: { w: number; h: number } }> = [];
-    for (const p of input.positions) {
+    for (const p of positions) {
       const patch: Partial<typeof deliverables.$inferInsert> = {};
       if (p.x !== undefined) patch.canvasX = Math.round(p.x * 10) / 10;
       if (p.y !== undefined) patch.canvasY = Math.round(p.y * 10) / 10;
@@ -586,7 +599,7 @@ export async function layoutDeliverables(actor: Actor, input: { cardId: string; 
       const attached = await tx
         .select()
         .from(deliverableLinks)
-        .where(and(eq(deliverableLinks.cardId, ctx.card.id), or(eq(deliverableLinks.fromId, id), eq(deliverableLinks.toId, id))));
+        .where(and(eq(deliverableLinks.cardId, cardId), or(eq(deliverableLinks.fromId, id), eq(deliverableLinks.toId, id))));
       for (const l of attached) {
         const patch: Partial<typeof deliverableLinks.$inferInsert> = {};
         if (l.fromId === id && l.fromPoint) {
@@ -600,10 +613,7 @@ export async function layoutDeliverables(actor: Actor, input: { cardId: string; 
         if (Object.keys(patch).length) await tx.update(deliverableLinks).set(patch).where(eq(deliverableLinks.id, l.id));
       }
     }
-    fx.card(ctx.card.projectId, ctx.card.id, false);
-  });
-  fx.flush(actor.clientId);
-  return { ok: true };
+  }
 }
 
 /** An arrow end's point, valid for the node's current size (null keeps the default side). */

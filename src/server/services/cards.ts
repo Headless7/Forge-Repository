@@ -24,6 +24,7 @@ import {
   cards,
   checklistItems,
   checklists,
+  deliverableGroups,
   deliverableLinks,
   deliverables,
   labels,
@@ -36,6 +37,7 @@ import { audit, logActivity } from "./activity";
 import { nextCardPosition } from "./board";
 import { loadCardDetail, summarizeCards } from "./card-dto";
 import type { Actor } from "./context";
+import { removeEmptyGroups } from "./deliverable-groups";
 import { createPrimaryDeliverable, recomputeCardRollup, recomputeDeliverableCover } from "./deliverables";
 import { Effects } from "./effects";
 import { filterProjectMembers } from "./members-query";
@@ -628,8 +630,21 @@ export async function duplicateCardInTx(
       }
     }
   }
-  // Deliverables: structure, layout and connections are copied; with attachments, each
+  // Deliverables: structure, layout, folders and connections are copied; with attachments, each
   // deliverable's current files become V1 of its copy (storage objects are shared).
+  const sourceGroups = await tx.select().from(deliverableGroups).where(eq(deliverableGroups.cardId, source.id)).orderBy(asc(deliverableGroups.createdAt));
+  const groupMap = new Map<string, string>();
+  for (const g of sourceGroups) {
+    const [ng] = await tx
+      .insert(deliverableGroups)
+      .values({ cardId: copyId, name: g.name, color: g.color, collapsed: g.collapsed, createdById: actor.userId, createdAt })
+      .returning();
+    groupMap.set(g.id, ng!.id);
+  }
+  for (const g of sourceGroups) {
+    const parentId = g.parentId ? (groupMap.get(g.parentId) ?? null) : null;
+    if (parentId) await tx.update(deliverableGroups).set({ parentId }).where(eq(deliverableGroups.id, groupMap.get(g.id)!));
+  }
   const sourceDeliverables = await tx
     .select()
     .from(deliverables)
@@ -656,6 +671,7 @@ export async function duplicateCardInTx(
         canvasW: d.canvasW,
         canvasH: d.canvasH,
         color: d.color,
+        groupId: d.groupId ? (groupMap.get(d.groupId) ?? null) : null,
         position: d.position,
         createdById: actor.userId,
         createdAt,
@@ -693,6 +709,8 @@ export async function duplicateCardInTx(
     const toId = idMap.get(l.toId);
     if (fromId && toId) await tx.insert(deliverableLinks).values({ cardId: copyId, fromId, toId, type: l.type, fromPoint: l.fromPoint, toPoint: l.toPoint, note: l.note, createdById: actor.userId });
   }
+  // Archived deliverables weren't copied: a folder that only held those has nothing in it here.
+  await removeEmptyGroups(tx, copyId);
   if (options.include.attachments) {
     const loose = await tx
       .select()

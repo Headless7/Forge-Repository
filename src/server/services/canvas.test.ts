@@ -5,11 +5,14 @@
  */
 import { eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
+import { DEFAULT_FOLDER_NAME } from "@/lib/canvas-folders";
 import { availablePoints, clampSize, NODE_DEFAULT, NODE_MIN, pointLabel, pointsAlong, remapPoint } from "@/lib/canvas-points";
+import { ACCENT_COLORS } from "@/lib/column-icons";
 import { db } from "@/server/db";
-import { deliverableLinks, deliverables as deliverablesTable } from "@/server/db/schema";
+import { deliverableGroups, deliverableLinks, deliverables as deliverablesTable } from "@/server/db/schema";
 import { expectAppError, primaryDeliverable, setupStudio, type Fixture } from "@/test/helpers";
 import * as cardService from "./cards";
+import * as groups from "./deliverable-groups";
 import * as deliverables from "./deliverables";
 
 describe("connection points", () => {
@@ -118,6 +121,96 @@ describe("canvas layout", () => {
     await cardService.setCardArchived(f.manager.actor, { cardId, archived: true });
     await expectAppError(deliverables.layoutDeliverables(f.manager.actor, { cardId, positions: [{ id: a, x: 5 }] }), "FORBIDDEN");
     await cardService.setCardArchived(f.manager.actor, { cardId, archived: false });
+  });
+});
+
+describe("canvas folders", () => {
+  const groupRows = async () => db.select().from(deliverableGroups).where(eq(deliverableGroups.cardId, cardId));
+
+  it("groups deliverables, nests folders, keeps positions absolute and removes folders left empty", async () => {
+    let detail = await groups.createGroup(f.manager.actor, { cardId, name: "  UI  ", deliverableIds: [a, b, b], positions: [{ id: b, x: 500, y: 20 }] });
+    const ui = detail.deliverableGroups.find((g) => g.name === "UI")!;
+    expect(ui).toMatchObject({ parentId: null, collapsed: false, color: null, createdById: f.manager.id });
+    expect(detail.deliverables.find((d) => d.id === a)!.groupId).toBe(ui.id);
+    expect(detail.deliverables.find((d) => d.id === b)).toMatchObject({ groupId: ui.id, canvasX: 500, canvasY: 20 });
+    // A folder inside UI around A, named after nothing in particular.
+    detail = await groups.createGroup(f.manager.actor, { cardId, parentId: ui.id, deliverableIds: [a] });
+    const inner = detail.deliverableGroups.find((g) => g.parentId === ui.id)!;
+    expect(inner.name).toBe(DEFAULT_FOLDER_NAME);
+    expect(detail.deliverables.find((d) => d.id === a)!.groupId).toBe(inner.id);
+    // A folder never ends up inside itself.
+    await expectAppError(groups.moveToGroup(f.manager.actor, { cardId, groupIds: [ui.id], targetGroupId: inner.id }), "CONFLICT");
+    await expectAppError(groups.moveToGroup(f.manager.actor, { cardId, groupIds: [ui.id], targetGroupId: ui.id }), "CONFLICT");
+    await expectAppError(groups.createGroup(f.manager.actor, { cardId, parentId: inner.id, groupIds: [ui.id], deliverableIds: [] }), "CONFLICT");
+    await expectAppError(groups.createGroup(f.manager.actor, { cardId, deliverableIds: [] }), "VALIDATION");
+    await expectAppError(groups.moveToGroup(f.manager.actor, { cardId, deliverableIds: [a], targetGroupId: "00000000-0000-0000-0000-000000000000" }), "NOT_FOUND");
+    // Rename, colour, collapse.
+    detail = await groups.updateGroup(f.manager.actor, { groupId: inner.id, name: "Buttons", color: ACCENT_COLORS[0], collapsed: true });
+    expect(detail.deliverableGroups.find((g) => g.id === inner.id)).toMatchObject({ name: "Buttons", color: ACCENT_COLORS[0], collapsed: true });
+    await expectAppError(groups.updateGroup(f.manager.actor, { groupId: inner.id, color: "#000000" }), "VALIDATION");
+    await expectAppError(groups.updateGroup(f.manager.actor, { groupId: inner.id, name: "   " }), "VALIDATION");
+    // Moving A out of Buttons (to the top level) leaves Buttons empty, so it goes; UI keeps B.
+    detail = await groups.moveToGroup(f.manager.actor, { cardId, deliverableIds: [a], targetGroupId: null, positions: [{ id: a, x: -40, y: -40 }] });
+    expect(detail.deliverableGroups.map((g) => g.id)).toEqual([ui.id]);
+    expect(detail.deliverables.find((d) => d.id === a)).toMatchObject({ groupId: null, canvasX: -40, canvasY: -40 });
+    // Nesting a whole folder: UI goes into a new folder with C.
+    detail = await groups.createGroup(f.manager.actor, { cardId, name: "Everything", deliverableIds: [c], groupIds: [ui.id] });
+    const outer = detail.deliverableGroups.find((g) => g.name === "Everything")!;
+    expect(detail.deliverableGroups.find((g) => g.id === ui.id)!.parentId).toBe(outer.id);
+    // Ungrouping UI lifts B into Everything; ungrouping Everything puts B and C back at the top level.
+    detail = await groups.ungroup(f.manager.actor, { groupId: ui.id });
+    expect(detail.deliverables.find((d) => d.id === b)!.groupId).toBe(outer.id);
+    detail = await groups.ungroup(f.manager.actor, { groupId: outer.id });
+    expect(detail.deliverableGroups).toEqual([]);
+    expect(detail.deliverables.every((d) => d.groupId === null)).toBe(true);
+    expect(await groupRows()).toEqual([]);
+  });
+
+  it("removes a folder once its last deliverable is archived, and restores that deliverable at the top level", async () => {
+    const detail = await groups.createGroup(f.manager.actor, { cardId, name: "Audio", deliverableIds: [c] });
+    expect(detail.deliverableGroups.map((g) => g.name)).toEqual(["Audio"]);
+    const archived = await deliverables.setDeliverableArchived(f.manager.actor, { deliverableId: c, archived: true });
+    expect(archived.deliverableGroups).toEqual([]);
+    const restored = await deliverables.setDeliverableArchived(f.manager.actor, { deliverableId: c, archived: false });
+    expect(restored.deliverables.find((d) => d.id === c)!.groupId).toBeNull();
+    // Archived work can't be filed.
+    await deliverables.setDeliverableArchived(f.manager.actor, { deliverableId: c, archived: true });
+    await expectAppError(groups.createGroup(f.manager.actor, { cardId, deliverableIds: [a, c] }), "CONFLICT");
+    await deliverables.setDeliverableArchived(f.manager.actor, { deliverableId: c, archived: false });
+    // Cleaning up folders made along the way.
+    for (const g of await groupRows()) await groups.ungroup(f.manager.actor, { groupId: g.id });
+  });
+
+  it("copies folders with the card", async () => {
+    let detail = await groups.createGroup(f.manager.actor, { cardId, name: "UI", deliverableIds: [a, b] });
+    const ui = detail.deliverableGroups.find((g) => g.name === "UI")!;
+    detail = await groups.createGroup(f.manager.actor, { cardId, name: "Icons", parentId: ui.id, deliverableIds: [a], color: ACCENT_COLORS[2] });
+    const copy = await cardService.duplicateCard(f.manager.actor, { cardId, include: { assignees: false, labels: false, checklists: false, attachments: false } });
+    const copied = await cardService.getCardDetail(f.manager.actor, copy.id);
+    expect(copied.deliverableGroups).toHaveLength(2);
+    const copiedUi = copied.deliverableGroups.find((g) => g.name === "UI")!;
+    const copiedIcons = copied.deliverableGroups.find((g) => g.name === "Icons")!;
+    expect(copiedUi.parentId).toBeNull();
+    expect(copiedIcons).toMatchObject({ parentId: copiedUi.id, color: ACCENT_COLORS[2] });
+    expect(copied.deliverables.find((d) => d.number === 1)!.groupId).toBe(copiedIcons.id);
+    expect(copied.deliverables.find((d) => d.number === 2)!.groupId).toBe(copiedUi.id);
+    expect(copied.deliverables.find((d) => d.number === 3)!.groupId).toBeNull();
+    for (const g of [copiedIcons, copiedUi]) await groups.ungroup(f.manager.actor, { groupId: g.id });
+    for (const g of await groupRows()) await groups.ungroup(f.manager.actor, { groupId: g.id });
+  });
+
+  it("is arranging the canvas: the same people who can move nodes, and nobody on an archived card", async () => {
+    await expectAppError(groups.createGroup(f.viewer.actor, { cardId, deliverableIds: [a, b] }), "FORBIDDEN");
+    await expectAppError(groups.createGroup(f.member2.actor, { cardId, deliverableIds: [a, b] }), "FORBIDDEN");
+    const detail = await groups.createGroup(f.member.actor, { cardId, deliverableIds: [a, b] });
+    const g = detail.deliverableGroups[0]!;
+    await expectAppError(groups.updateGroup(f.viewer.actor, { groupId: g.id, collapsed: true }), "FORBIDDEN");
+    await expectAppError(groups.ungroup(f.viewer.actor, { groupId: g.id }), "FORBIDDEN");
+    await expectAppError(groups.updateGroup(f.manager.actor, { groupId: "00000000-0000-0000-0000-000000000000", collapsed: true }), "NOT_FOUND");
+    await cardService.setCardArchived(f.manager.actor, { cardId, archived: true });
+    await expectAppError(groups.updateGroup(f.manager.actor, { groupId: g.id, collapsed: true }), "FORBIDDEN");
+    await cardService.setCardArchived(f.manager.actor, { cardId, archived: false });
+    await groups.ungroup(f.manager.actor, { groupId: g.id });
   });
 });
 

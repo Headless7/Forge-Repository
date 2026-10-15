@@ -1,12 +1,13 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ChevronRight, Layers, List, Lock, MessageSquareWarning, Network, Plus } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Folder, Layers, List, Lock, MessageSquareWarning, Network, Plus } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { folderSummary, folderTree, type FolderTreeNode } from "@/lib/canvas-folders";
 import { useCardMutation } from "@/lib/queries";
 import { rpc, errorMessage } from "@/lib/rpc-client";
-import type { DeliverableDTO, DeliverableLinkType } from "@/lib/types";
+import type { DeliverableDTO, DeliverableGroupDTO, DeliverableLinkType } from "@/lib/types";
 import { roleHas } from "@/lib/permissions";
 import { cn, formatShortDate } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -219,7 +220,7 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
   );
 }
 
-function DeliverableRow({ d, index, total, canEdit, onMove }: { d: DeliverableDTO; index: number; total: number; canEdit: boolean; onMove: (d: DeliverableDTO, dir: -1 | 1) => void }) {
+function DeliverableRow({ d, first, last, canEdit, onMove }: { d: DeliverableDTO; first: boolean; last: boolean; canEdit: boolean; onMove: (d: DeliverableDTO, dir: -1 | 1) => void }) {
   const { openDeliverable, deliverables } = useWorkspace();
   const kind = d.kinds.find((k) => k !== "FILE") ?? d.kinds[0];
   const KindIcon = kind ? KIND_ICONS[kind] : Layers;
@@ -261,15 +262,67 @@ function DeliverableRow({ d, index, total, canEdit, onMove }: { d: DeliverableDT
       {canEdit ? (
         // Always visible (no hover on touch screens); dragging isn't needed to reorder.
         <span className="flex flex-col">
-          <button type="button" aria-label={`Move ${d.name} up`} disabled={index === 0} onClick={() => onMove(d, -1)} className="flex size-7 items-center justify-center rounded text-fg-subtle hover:bg-surface-4 hover:text-fg disabled:opacity-30">
+          <button type="button" aria-label={`Move ${d.name} up`} disabled={first} onClick={() => onMove(d, -1)} className="flex size-7 items-center justify-center rounded text-fg-subtle hover:bg-surface-4 hover:text-fg disabled:opacity-30">
             <ArrowUp className="size-3.5" />
           </button>
-          <button type="button" aria-label={`Move ${d.name} down`} disabled={index === total - 1} onClick={() => onMove(d, 1)} className="flex size-7 items-center justify-center rounded text-fg-subtle hover:bg-surface-4 hover:text-fg disabled:opacity-30">
+          <button type="button" aria-label={`Move ${d.name} down`} disabled={last} onClick={() => onMove(d, 1)} className="flex size-7 items-center justify-center rounded text-fg-subtle hover:bg-surface-4 hover:text-fg disabled:opacity-30">
             <ArrowDown className="size-3.5" />
           </button>
         </span>
       ) : null}
     </li>
+  );
+}
+
+type TreeNode = FolderTreeNode<DeliverableGroupDTO, DeliverableDTO>;
+
+/** Deliverables inside a tree node, in list order. */
+function flatten(node: TreeNode): DeliverableDTO[] {
+  return node.kind === "item" ? [node.item] : node.children.flatMap(flatten);
+}
+
+/** The list view's folders: a section per folder (collapsible here, independently of the canvas), nested like the canvas. */
+function FolderSection({ node, canEdit, onMove }: { node: Extract<TreeNode, { kind: "folder" }>; canEdit: boolean; onMove: (d: DeliverableDTO, neighbour: TreeNode, dir: -1 | 1) => void }) {
+  const [open, setOpen] = useState(!node.folder.collapsed);
+  const inside = flatten(node);
+  return (
+    <li className="rounded-lg border border-dashed border-border-strong/80 p-1.5" style={node.folder.color ? { borderColor: node.folder.color, backgroundColor: `color-mix(in oklab, ${node.folder.color} 6%, transparent)` } : undefined}>
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex min-h-8 w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-surface-3">
+        {open ? <ChevronDown className="size-4 shrink-0 text-fg-subtle" /> : <ChevronRight className="size-4 shrink-0 text-fg-subtle" />}
+        <Folder className="size-4 shrink-0" style={{ color: node.folder.color ?? "var(--fg-muted)" }} aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{node.folder.name}</span>
+        <span className="shrink-0 text-[11px] text-fg-muted">{folderSummary(inside.length, inside.map((d) => d.state))}</span>
+      </button>
+      {open ? (
+        <ul className="mt-1 grid gap-1.5 pl-2 sm:pl-4" aria-label={`Inside ${node.folder.name}`}>
+          <ListTree nodes={node.children} canEdit={canEdit} onMove={onMove} />
+        </ul>
+      ) : null}
+    </li>
+  );
+}
+
+function ListTree({ nodes, canEdit, onMove }: { nodes: TreeNode[]; canEdit: boolean; onMove: (d: DeliverableDTO, neighbour: TreeNode, dir: -1 | 1) => void }) {
+  return (
+    <>
+      {nodes.map((node, i) =>
+        node.kind === "item" ? (
+          <DeliverableRow
+            key={node.item.id}
+            d={node.item}
+            first={i === 0}
+            last={i === nodes.length - 1}
+            canEdit={canEdit}
+            onMove={(d, dir) => {
+              const neighbour = nodes[i + dir];
+              if (neighbour) onMove(d, neighbour, dir);
+            }}
+          />
+        ) : (
+          <FolderSection key={node.folder.id} node={node} canEdit={canEdit} onMove={onMove} />
+        ),
+      )}
+    </>
   );
 }
 
@@ -294,7 +347,13 @@ export function DeliverablesPanel() {
   const updateLink = useCardMutation("deliverable.updateLink", card.id, card.projectId);
   const updateDeliverable = useCardMutation("deliverable.update", card.id, card.projectId);
   const archiveDeliverable = useCardMutation("deliverable.archive", card.id, card.projectId);
+  const createGroup = useCardMutation("deliverable.group.create", card.id, card.projectId);
+  const updateGroup = useCardMutation("deliverable.group.update", card.id, card.projectId);
+  const ungroup = useCardMutation("deliverable.group.ungroup", card.id, card.projectId);
+  const moveToGroup = useCardMutation("deliverable.group.move", card.id, card.projectId);
   const archived = card.deliverables.filter((d) => d.archivedAt);
+  const folders = card.deliverableGroups;
+  const tree = useMemo(() => folderTree(folders, deliverables), [folders, deliverables]);
 
   const actions: CanvasActions = {
     layout: (changes) =>
@@ -315,13 +374,27 @@ export function DeliverablesPanel() {
     setPoints: (linkId, points) => updateLink.mutate({ linkId, ...points }),
     rename: (deliverableId, name) => updateDeliverable.mutate({ deliverableId, name }),
     archive: (deliverableId, archived) => archiveDeliverable.mutateAsync({ deliverableId, archived }),
+    createFolder: (input) =>
+      createGroup.mutateAsync({ cardId: card.id, ...input }).then((detail) => {
+        tutorial.trigger("card.folders");
+        return detail;
+      }),
+    updateFolder: (groupId, patch) => updateGroup.mutateAsync({ groupId, ...patch }),
+    toggleFolder: (groupId, collapsed) => {
+      // Saved for people who can edit; for everyone else the canvas keeps its own view.
+      if (canEdit) updateGroup.mutate({ groupId, collapsed });
+      tutorial.trigger("card.folders");
+    },
+    ungroup: (groupId) => ungroup.mutateAsync({ groupId }),
+    moveToFolder: (input) => moveToGroup.mutateAsync({ cardId: card.id, ...input }),
   };
 
-  const onMove = (d: DeliverableDTO, dir: -1 | 1) => {
-    const i = deliverables.findIndex((x) => x.id === d.id);
-    const neighbour = deliverables[i + dir];
-    if (!neighbour) return;
-    rpc("deliverable.move", dir === -1 ? { deliverableId: d.id, beforeId: neighbour.id } : { deliverableId: d.id, afterId: neighbour.id })
+  // List order moves past the neighbour in the list — a whole folder when that's what's next.
+  const onMove = (d: DeliverableDTO, neighbour: TreeNode, dir: -1 | 1) => {
+    const inside = flatten(neighbour);
+    const edge = dir === -1 ? inside[0] : inside.at(-1);
+    if (!edge) return;
+    rpc("deliverable.move", dir === -1 ? { deliverableId: d.id, beforeId: edge.id } : { deliverableId: d.id, afterId: edge.id })
       .then(refresh)
       .catch((error) => toast.error(errorMessage(error)));
   };
@@ -334,6 +407,7 @@ export function DeliverablesPanel() {
         </TipAnchor>
         <span className="rounded-full bg-surface-4 px-1.5 text-[11px] font-medium text-fg-muted">{deliverables.length}</span>
         <DeliverableProgress progress={card.progress} className="min-w-40 flex-1" detailed />
+        <TipAnchor tip="card.folders" facts={{ canEdit, folderCount: folders.length }}>
         <TipAnchor tip="card.canvas" facts={{ deliverableCount: deliverables.length }}>
         <div role="radiogroup" aria-label="Deliverable view" className="flex h-7 items-center rounded-md border border-border-strong bg-surface-3/60 p-0.5">
           {(
@@ -355,6 +429,7 @@ export function DeliverablesPanel() {
           ))}
         </div>
         </TipAnchor>
+        </TipAnchor>
         {canEdit ? (
           <Button size="sm" variant="secondary" onClick={() => setAdding(true)}>
             <Plus /> Add deliverable
@@ -364,13 +439,11 @@ export function DeliverablesPanel() {
 
       {view === "canvas" ? (
         <div className="h-[min(62vh,560px)] min-h-[340px] overflow-hidden rounded-xl border border-border bg-surface-2/40">
-          <DeliverableCanvas deliverables={deliverables} links={card.deliverableLinks} canEdit={canEdit} actions={actions} onOpen={openDeliverable} />
+          <DeliverableCanvas deliverables={deliverables} folders={folders} links={card.deliverableLinks} canEdit={canEdit} actions={actions} onOpen={openDeliverable} />
         </div>
       ) : (
         <ul className="grid gap-1.5" aria-label="Deliverables list">
-          {deliverables.map((d, i) => (
-            <DeliverableRow key={d.id} d={d} index={i} total={deliverables.length} canEdit={canEdit} onMove={onMove} />
-          ))}
+          <ListTree nodes={tree} canEdit={canEdit} onMove={onMove} />
         </ul>
       )}
       {archived.length ? (

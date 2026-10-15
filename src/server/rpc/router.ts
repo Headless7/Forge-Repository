@@ -38,6 +38,7 @@ import {
   displayNameSchema,
 } from "@/lib/validation";
 import { BOARD_ICONS } from "@/lib/board-icons";
+import { FOLDER_NAME_MAX } from "@/lib/canvas-folders";
 import { DISCORD_EVENTS } from "@/lib/discord";
 import { COLUMN_ICONS } from "@/lib/column-icons";
 import * as accounts from "../services/accounts";
@@ -48,6 +49,7 @@ import * as forums from "../services/forums";
 import * as cards from "../services/cards";
 import * as checklists from "../services/checklists";
 import * as comments from "../services/comments";
+import * as deliverableGroups from "../services/deliverable-groups";
 import * as deliverables from "../services/deliverables";
 import { getStudioHome } from "../services/home";
 import * as labels from "../services/labels";
@@ -84,6 +86,18 @@ const dashboardFilters = z.object({
 });
 /** A deliverable-canvas connection point, e.g. "r-50" (see lib/canvas-points). */
 const canvasPointSchema = z.string().regex(/^[trbl]-\d{1,2}$/, "Unknown connection point.");
+/** Canvas positions and sizes to save, one entry per node. */
+const layoutSchema = z
+  .array(
+    z.object({
+      id: idSchema,
+      x: z.number().finite().min(-100_000).max(100_000).optional(),
+      y: z.number().finite().min(-100_000).max(100_000).optional(),
+      w: z.number().finite().min(1).max(10_000).nullable().optional(),
+      h: z.number().finite().min(1).max(10_000).nullable().optional(),
+    }),
+  )
+  .max(200);
 /** A browser push subscription endpoint: an https capability URL issued by the browser's push service. */
 const pushEndpointSchema = z.string().url().max(2048).refine((v) => v.startsWith("https://"), "Unsupported push endpoint.");
 const text = (max: number) => z.string().max(max);
@@ -364,23 +378,49 @@ export const appRouter = {
     handler: ({ actor }, i) => media.setDeliverableCoverMode(actor, i),
   }),
   "deliverable.layout": proc({
-    input: z.object({
-      cardId: idSchema,
-      positions: z
-        .array(
-          z.object({
-            id: idSchema,
-            x: z.number().finite().min(-100_000).max(100_000).optional(),
-            y: z.number().finite().min(-100_000).max(100_000).optional(),
-            w: z.number().finite().min(1).max(10_000).nullable().optional(),
-            h: z.number().finite().min(1).max(10_000).nullable().optional(),
-          }),
-        )
-        .min(1)
-        .max(200),
-    }),
+    input: z.object({ cardId: idSchema, positions: layoutSchema.min(1) }),
     limit: { max: 600, windowMs: 60_000 },
     handler: ({ actor }, i) => deliverables.layoutDeliverables(actor, i),
+  }),
+
+  // ── Canvas folders ────────────────────────────────────────────────────────
+  "deliverable.group.create": proc({
+    input: z.object({
+      cardId: idSchema,
+      name: z.string().trim().max(FOLDER_NAME_MAX).optional(),
+      color: z.string().max(20).nullable().optional(),
+      parentId: idSchema.nullable().optional(),
+      deliverableIds: z.array(idSchema).max(200),
+      groupIds: z.array(idSchema).max(100).optional(),
+      positions: layoutSchema.optional(),
+    }),
+    limit: { max: 120, windowMs: 60_000 },
+    handler: ({ actor }, i) => deliverableGroups.createGroup(actor, i),
+  }),
+  "deliverable.group.update": proc({
+    input: z.object({
+      groupId: idSchema,
+      name: z.string().trim().min(1).max(FOLDER_NAME_MAX).optional(),
+      color: z.string().max(20).nullable().optional(),
+      collapsed: z.boolean().optional(),
+    }),
+    limit: { max: 300, windowMs: 60_000 },
+    handler: ({ actor }, i) => deliverableGroups.updateGroup(actor, i),
+  }),
+  "deliverable.group.ungroup": proc({
+    input: z.object({ groupId: idSchema }),
+    handler: ({ actor }, i) => deliverableGroups.ungroup(actor, i),
+  }),
+  "deliverable.group.move": proc({
+    input: z.object({
+      cardId: idSchema,
+      deliverableIds: z.array(idSchema).max(200).optional(),
+      groupIds: z.array(idSchema).max(100).optional(),
+      targetGroupId: idSchema.nullable(),
+      positions: layoutSchema.optional(),
+    }),
+    limit: { max: 300, windowMs: 60_000 },
+    handler: ({ actor }, i) => deliverableGroups.moveToGroup(actor, i),
   }),
   "deliverable.move": proc({
     input: z.object({ deliverableId: idSchema, beforeId: idSchema.nullable().optional(), afterId: idSchema.nullable().optional() }),

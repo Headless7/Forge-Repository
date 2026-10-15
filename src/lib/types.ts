@@ -632,6 +632,8 @@ export interface DeliverableDTO {
   coverPinnedId: string | null;
   /** Colour of its card (canvas tint and edge, list stripe); null = none. */
   color: string | null;
+  /** The canvas folder it sits in; null = the top level. */
+  groupId: string | null;
   versionCount: number;
   /** Current revision has at least one uploaded file. */
   hasFiles: boolean;
@@ -641,6 +643,20 @@ export interface DeliverableDTO {
   /** Prerequisites (dependency links) that aren't approved yet. */
   blockedBy: string[];
   permissions: DeliverablePermissions;
+}
+
+/** A folder on the deliverable canvas (see lib/canvas-folders). */
+export interface DeliverableGroupDTO {
+  id: string;
+  /** The folder it sits in; null = the top level. */
+  parentId: string | null;
+  name: string;
+  /** Frame colour (one of ACCENT_COLORS); null = neutral. */
+  color: string | null;
+  /** Drawn as one compact node with its contents hidden. */
+  collapsed: boolean;
+  createdById: string | null;
+  createdAt: string;
 }
 
 export interface DeliverableLinkDTO {
@@ -687,6 +703,8 @@ export interface CardDetailDTO extends CardSummaryDTO {
   archivedAt: string | null;
   deliverables: DeliverableDTO[];
   deliverableLinks: DeliverableLinkDTO[];
+  /** Canvas folders (every folder has something inside it). */
+  deliverableGroups: DeliverableGroupDTO[];
   productionEvents: ProductionEventDTO[];
   productionSnapshot: ProductionSnapshotEntry[];
   readiness: ReadinessDTO;

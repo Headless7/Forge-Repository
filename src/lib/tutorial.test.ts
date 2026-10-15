@@ -12,6 +12,7 @@ const full: { [K in TipId]: TipFacts[K] } = {
   "card.workspace": {},
   "card.deliverables": { deliverableCount: 3 },
   "card.canvas": { deliverableCount: 3 },
+  "card.folders": { canEdit: true, folderCount: 1 },
   "card.revisions": { revisionCount: 2 },
   "card.feedback": { canComment: true, media: "image" },
   "card.upload-vs-submit": { canSubmit: true, state: "IN_PROGRESS" },

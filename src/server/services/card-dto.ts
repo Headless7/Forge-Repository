@@ -27,6 +27,7 @@ import {
   commentMentions,
   commentReactions,
   comments,
+  deliverableGroups,
   deliverableLinks,
   deliverables,
   mediaAnnotations,
@@ -316,7 +317,7 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
   const projectKeys = new Map([[card.projectId, access.project.key]]);
 
   const [summary] = await summarizeCards([card], access.userId, projectKeys);
-  const [versionRows, attachmentRows, commentRows, reviewRows, checklistRows, itemRows, reviewerRows, watcherRows, deliverableFacts, linkRows, eventRows] =
+  const [versionRows, attachmentRows, commentRows, reviewRows, checklistRows, itemRows, reviewerRows, watcherRows, deliverableFacts, linkRows, eventRows, groupRows] =
     await Promise.all([
       db.select().from(assetVersions).where(eq(assetVersions.cardId, card.id)).orderBy(asc(assetVersions.versionNumber), asc(assetVersions.createdAt)),
       db
@@ -333,6 +334,7 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
       loadDeliverableFacts([card.id]),
       db.select().from(deliverableLinks).where(eq(deliverableLinks.cardId, card.id)).orderBy(asc(deliverableLinks.createdAt)),
       db.select().from(productionEvents).where(eq(productionEvents.cardId, card.id)).orderBy(asc(productionEvents.createdAt)),
+      db.select().from(deliverableGroups).where(eq(deliverableGroups.cardId, card.id)).orderBy(asc(deliverableGroups.createdAt)),
     ]);
 
   const commentIds = commentRows.map((c) => c.id);
@@ -503,6 +505,7 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
         coverMode: d.coverMode,
         coverPinnedId: d.coverPinnedId,
         color: d.color,
+        groupId: d.groupId,
         versionCount: f.versionCount,
         hasFiles: f.hasFiles,
         kinds: [...new Set(currentFiles.map((a) => a.kind))].filter((k) => PREVIEWABLE.has(k) || k === "FILE"),
@@ -538,6 +541,15 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
       note: l.note,
       createdById: l.createdById,
       createdAt: l.createdAt.toISOString(),
+    })),
+    deliverableGroups: groupRows.map((g) => ({
+      id: g.id,
+      parentId: g.parentId,
+      name: g.name,
+      color: g.color,
+      collapsed: g.collapsed,
+      createdById: g.createdById,
+      createdAt: g.createdAt.toISOString(),
     })),
     productionEvents: eventRows.map((e) => ({
       id: e.id,

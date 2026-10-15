@@ -61,7 +61,9 @@ export const deliverables = pgTable(
     coverPinnedId: uuid().references((): AnyPgColumn => attachments.id, { onDelete: "set null" }),
     /** Colour of its card on the canvas and in the list (one of lib/column-icons ACCENT_COLORS); null = none. */
     color: text(),
-    /** Position on the card's deliverable canvas. */
+    /** The canvas folder it sits in; null = the top level (see deliverableGroups). */
+    groupId: uuid().references((): AnyPgColumn => deliverableGroups.id, { onDelete: "set null" }),
+    /** Position on the card's deliverable canvas (always absolute, whatever folder it's in). */
     canvasX: real().notNull().default(0),
     canvasY: real().notNull().default(0),
     /** Node size on the canvas; null = the default size (see lib/canvas-points). */
@@ -79,7 +81,35 @@ export const deliverables = pgTable(
     uniqueIndex("deliverables_card_number_uq").on(t.cardId, t.number),
     index("deliverables_card_idx").on(t.cardId, t.position),
     index("deliverables_owner_idx").on(t.ownerId),
+    index("deliverables_group_idx").on(t.groupId),
   ],
+);
+
+/**
+ * A folder on a card's deliverable canvas: a named frame drawn around the deliverables (and
+ * folders) inside it, nesting to any depth. Folders only organise — they carry no review state,
+ * files or history — and their frame is drawn around their contents, so they hold no geometry of
+ * their own. A folder with nothing left inside is removed.
+ */
+export const deliverableGroups = pgTable(
+  "deliverable_groups",
+  {
+    id: pk(),
+    cardId: uuid()
+      .notNull()
+      .references((): AnyPgColumn => cards.id, { onDelete: "cascade" }),
+    /** The folder this one sits in; null = the top level. */
+    parentId: uuid().references((): AnyPgColumn => deliverableGroups.id, { onDelete: "set null" }),
+    name: text().notNull(),
+    /** Frame colour (one of lib/column-icons ACCENT_COLORS); null = neutral. */
+    color: text(),
+    /** Drawn as one compact node with its contents hidden. */
+    collapsed: boolean().notNull().default(false),
+    createdById: uuid().references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("deliverable_groups_card_idx").on(t.cardId), index("deliverable_groups_parent_idx").on(t.parentId)],
 );
 
 export { DELIVERABLE_LINK_TYPES, PRODUCTION_STATUSES };

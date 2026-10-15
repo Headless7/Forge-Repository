@@ -39,6 +39,8 @@ export interface TipFacts {
   "card.workspace": None;
   "card.deliverables": { deliverableCount: number };
   "card.canvas": { deliverableCount: number };
+  /** Once the canvas has a folder (made by this person, or collapsed/expanded by them). */
+  "card.folders": { canEdit: boolean; folderCount: number };
   "card.revisions": { revisionCount: number };
   "card.feedback": { canComment: boolean; media: "image" | "timed" | "other" };
   "card.upload-vs-submit": { canSubmit: boolean; state: CardState };
@@ -137,6 +139,17 @@ export const TIPS: { [K in TipId]: TipDefinition<TipFacts[K]> } = {
     title: () => "Dependencies and associations",
     body: () => "An arrow is a dependency: the deliverable it points to stays blocked until the other is approved. A plain line is an association — related work that doesn't block anything.",
     eligible: (f) => f.deliverableCount > 1,
+    side: "bottom",
+    align: "end",
+  },
+  "card.folders": {
+    version: 1,
+    title: () => "Folders keep the canvas tidy",
+    body: (f) =>
+      f.canEdit
+        ? "A folder is a frame around related deliverables, and folders can sit inside folders — drop a deliverable onto another to make one, and drag a deliverable into a folder (or out past its edge) to move it. Collapsing a folder hides what's inside, and arrows then point at the folder."
+        : "A folder is a frame around related deliverables, and folders can sit inside folders. Collapsing a folder hides what's inside, and arrows then point at the folder.",
+    eligible: (f) => f.folderCount > 0,
     side: "bottom",
     align: "end",
   },
