@@ -3,6 +3,7 @@
 import { Check, Film, ImageOff, ImagePlus, Images, Loader2, RotateCcw, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { useCardMutation } from "@/lib/queries";
+import { descriptionImageIds } from "@/lib/description-images";
 import type { AttachmentDTO, DeliverableDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
@@ -15,18 +16,32 @@ const COVER_FILE_TYPES = "image/png,image/jpeg,image/webp,image/gif,video/mp4,vi
 
 const coverable = (a: AttachmentDTO) => (a.kind === "IMAGE" || a.kind === "VIDEO") && (a.status === "READY" || a.status === "PROCESSING");
 
-/** Images and videos on this card that can be its cover (not ones uploaded as a deliverable's cover). */
-function coverChoices(attachments: AttachmentDTO[]) {
-  return attachments.filter((a) => coverable(a) && ["CARD", "VERSION", "COVER"].includes(a.purpose) && !(a.purpose === "COVER" && a.deliverableId));
+type ChoiceGroup = { label: string; items: AttachmentDTO[] };
+
+/** Images shown in a description (its text decides: images taken out of it aren't offered). */
+function descriptionChoices(attachments: AttachmentDTO[], text: string, deliverableId: string | null) {
+  const shown = descriptionImageIds(text);
+  return shown.map((id) => attachments.find((a) => a.id === id && a.purpose === "DESCRIPTION" && a.deliverableId === deliverableId && coverable(a))).filter((a): a is AttachmentDTO => Boolean(a));
 }
 
-/** A deliverable's own images and videos: from any of its revisions, or uploaded as its cover. */
-function deliverableCoverChoices(attachments: AttachmentDTO[], deliverableId: string) {
-  return attachments.filter((a) => coverable(a) && a.deliverableId === deliverableId && ["VERSION", "COVER"].includes(a.purpose));
+/** Images and videos on this card that can be its cover (not ones uploaded as a deliverable's cover or in its description). */
+function coverChoices(attachments: AttachmentDTO[], description: string): ChoiceGroup[] {
+  return [
+    { label: "Files", items: attachments.filter((a) => coverable(a) && ["CARD", "VERSION", "COVER"].includes(a.purpose) && !(a.purpose === "COVER" && a.deliverableId)) },
+    { label: "From the description", items: descriptionChoices(attachments, description, null) },
+  ].filter((g) => g.items.length);
 }
 
-/** A grid of images and videos to pick the cover from. */
-function CoverChooser({ label, choices, currentId, onPick, onDone }: { label: string; choices: AttachmentDTO[]; currentId: string | null; onPick: (attachmentId: string) => void; onDone: () => void }) {
+/** A deliverable's own images and videos: from any of its revisions, its description, or uploaded as its cover. */
+function deliverableCoverChoices(attachments: AttachmentDTO[], d: Pick<DeliverableDTO, "id" | "description">): ChoiceGroup[] {
+  return [
+    { label: "Its files", items: attachments.filter((a) => coverable(a) && a.deliverableId === d.id && ["VERSION", "COVER"].includes(a.purpose)) },
+    { label: "From its description", items: descriptionChoices(attachments, d.description, d.id) },
+  ].filter((g) => g.items.length);
+}
+
+/** A grid of images and videos to pick the cover from, grouped by where they come from. */
+function CoverChooser({ label, groups, currentId, onPick, onDone }: { label: string; groups: ChoiceGroup[]; currentId: string | null; onPick: (attachmentId: string) => void; onDone: () => void }) {
   return (
     <div className="rounded-lg border border-border bg-surface-3/50 p-2" role="group" aria-label="Choose a cover">
       <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -35,32 +50,45 @@ function CoverChooser({ label, choices, currentId, onPick, onDone }: { label: st
           Done
         </Button>
       </div>
-      <ul className="grid max-h-56 grid-cols-3 gap-1.5 overflow-y-auto">
-        {choices.map((a) => {
-          const current = currentId === a.id;
-          return (
-            <li key={a.id}>
-              <button
-                type="button"
-                aria-label={`Use ${a.filename} as the cover`}
-                aria-pressed={current}
-                title={a.filename}
-                onClick={() => onPick(a.id)}
-                className={cn("relative block w-full overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:ring-ring", current ? "border-accent" : "border-border hover:border-border-strong")}
-              >
-                <Thumb file={a} className="aspect-video w-full rounded-none border-0" />
-                {current ? (
-                  <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-accent text-accent-fg">
-                    <Check className="size-3" />
-                  </span>
-                ) : null}
-                <span className="block truncate px-1 py-0.5 text-left text-[10.5px] text-fg-muted">{a.filename}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+      <div className="grid max-h-64 gap-2 overflow-y-auto">
+        {groups.map((g) => (
+          <div key={g.label}>
+            {groups.length > 1 ? <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-fg-subtle">{g.label}</p> : null}
+            <ChoiceGrid choices={g.items} currentId={currentId} onPick={onPick} />
+          </div>
+        ))}
+      </div>
     </div>
+  );
+}
+
+function ChoiceGrid({ choices, currentId, onPick }: { choices: AttachmentDTO[]; currentId: string | null; onPick: (attachmentId: string) => void }) {
+  return (
+    <ul className="grid grid-cols-3 gap-1.5">
+      {choices.map((a) => {
+        const current = currentId === a.id;
+        return (
+          <li key={a.id}>
+            <button
+              type="button"
+              aria-label={`Use ${a.filename} as the cover`}
+              aria-pressed={current}
+              title={a.filename}
+              onClick={() => onPick(a.id)}
+              className={cn("relative block w-full overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:ring-ring", current ? "border-accent" : "border-border hover:border-border-strong")}
+            >
+              <Thumb file={a} className="aspect-video w-full rounded-none border-0" />
+              {current ? (
+                <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-accent text-accent-fg">
+                  <Check className="size-3" />
+                </span>
+              ) : null}
+              <span className="block truncate px-1 py-0.5 text-left text-[10.5px] text-fg-muted">{a.filename}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -94,7 +122,7 @@ export function CoverControl() {
   const setCover = useCardMutation("attachment.setCover", card.id, card.projectId);
   const setMode = useCardMutation("card.setCoverMode", card.id, card.projectId);
   const canEdit = card.permissions.canEdit;
-  const choices = coverChoices(card.attachments);
+  const choices = coverChoices(card.attachments, card.description);
   const pinned = card.coverPinnedId ? card.attachments.find((a) => a.id === card.coverPinnedId) : undefined;
   const pinnedShown = card.coverMode === "MANUAL" && card.cover?.attachmentId === card.coverPinnedId;
 
@@ -167,7 +195,7 @@ export function CoverControl() {
       {choosing && canEdit ? (
         <CoverChooser
           label="Images and videos on this card"
-          choices={choices}
+          groups={choices}
           currentId={card.cover?.attachmentId ?? null}
           onPick={(attachmentId) => setCover.mutate({ cardId: card.id, attachmentId })}
           onDone={() => setChoosing(false)}
@@ -193,7 +221,7 @@ export function DeliverableCoverControl({ deliverable: d, compact }: { deliverab
   const setCover = useCardMutation("deliverable.setCover", card.id, card.projectId);
   const setMode = useCardMutation("deliverable.setCoverMode", card.id, card.projectId);
   const canEdit = card.permissions.canEdit && !d.archivedAt;
-  const choices = deliverableCoverChoices(card.attachments, d.id);
+  const choices = deliverableCoverChoices(card.attachments, d);
   const pinned = d.coverPinnedId ? card.attachments.find((a) => a.id === d.coverPinnedId) : undefined;
   const pinnedShown = d.coverMode === "MANUAL" && d.cover?.attachmentId === d.coverPinnedId;
 
@@ -265,7 +293,7 @@ export function DeliverableCoverControl({ deliverable: d, compact }: { deliverab
       {choosing && canEdit ? (
         <CoverChooser
           label={`Images and videos of ${d.name}`}
-          choices={choices}
+          groups={choices}
           currentId={d.cover?.attachmentId ?? null}
           onPick={(attachmentId) => setCover.mutate({ deliverableId: d.id, attachmentId })}
           onDone={() => setChoosing(false)}

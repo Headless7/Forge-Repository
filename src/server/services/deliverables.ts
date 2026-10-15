@@ -8,7 +8,7 @@ import type { CardDetailDTO, DeliverableLinkType } from "@/lib/types";
 import { assertCard, loadContributors, requireCard, requireDeliverable, type CardAccess, type CardRow } from "../access";
 import { now } from "../clock";
 import { db, type Executor, type Tx } from "../db";
-import { attachments, cards, deliverableContributors, deliverableLinks, deliverables } from "../db/schema";
+import { attachments, canvasLinks, cards, deliverableContributors, deliverableLinks, deliverables } from "../db/schema";
 import { conflict, forbidden, invalid, notFound } from "../errors";
 import { logActivity } from "./activity";
 import { loadCardDetail } from "./card-dto";
@@ -16,6 +16,8 @@ import { cardNotificationData, touchCard } from "./cards";
 import type { Actor } from "./context";
 import { removeEmptyGroups } from "./deliverable-groups";
 import { Effects } from "./effects";
+import { syncDescriptionImages } from "./media";
+import { placeOnCanvas } from "./canvas-links";
 import { listProjectMembers } from "./members-query";
 import { inboxAudience, NotificationBatch } from "./notifications";
 import { addDependencyNotifications, dependencyChanges, loadCardWork, type CardWork } from "./workflow";
@@ -312,6 +314,8 @@ export async function createDeliverable(
       .where(eq(deliverables.cardId, ctx.card.id))
       .orderBy(desc(deliverables.position))
       .limit(1);
+    // Where it was asked for (beside the last one by default), moved to the nearest spot that covers nothing.
+    const at = await placeOnCanvas(tx, ctx.card.id, NODE_DEFAULT, null, { x: input.canvasX ?? (last ? last.x + 300 : 0), y: input.canvasY ?? (last ? last.y : 0) });
     const [row] = await tx
       .insert(deliverables)
       .values({
@@ -326,8 +330,8 @@ export async function createDeliverable(
         reviewerId: input.reviewerId ?? null,
         startAt: input.startAt ? new Date(input.startAt) : null,
         dueAt: input.dueAt ? new Date(input.dueAt) : null,
-        canvasX: input.canvasX ?? (last ? last.x + 300 : 0),
-        canvasY: input.canvasY ?? (last ? last.y : 0),
+        canvasX: at.x,
+        canvasY: at.y,
         position: (last?.position ?? 0) + POSITION_GAP,
         createdById: actor.userId,
         createdAt: now(),
@@ -456,6 +460,8 @@ export async function updateDeliverable(actor: Actor, input: DeliverableInput & 
     await assertPeople(ctx, actor.userId, before, next, tx);
     if (Object.keys(patch).length) await tx.update(deliverables).set(patch).where(eq(deliverables.id, d.id));
     if (contributorIds !== ctx.contributorIds) await setContributors(tx, d.id, contributorIds, actor.userId);
+    // Images the description no longer shows are archived (a cover that was one falls back to automatic).
+    if (patch.description !== undefined) await syncDescriptionImages(tx, ctx.card.id, d.id, patch.description);
     if (patch.required !== undefined) await recomputeCardRollup(tx, ctx.card.id);
     await touchCard(tx, ctx.card.id, actor.userId);
     await logActivity(tx, {
@@ -569,9 +575,24 @@ export async function layoutDeliverables(actor: Actor, input: { cardId: string; 
   return { ok: true };
 }
 
-/** Writes layout changes for this card's deliverables (the body of layoutDeliverables, reusable inside other changes). */
+/**
+ * Writes layout changes for this card's deliverables and links (the body of layoutDeliverables,
+ * reusable inside other changes). Links only move: they have a fixed size.
+ */
 export async function applyLayout(tx: Executor, cardId: string, positions: NodeLayout[]) {
+  const all = [...new Set(positions.map((p) => p.id))];
+  const linkRows = all.length ? await tx.select({ id: canvasLinks.id }).from(canvasLinks).where(and(eq(canvasLinks.cardId, cardId), inArray(canvasLinks.id, all))) : [];
+  const linkIds = new Set(linkRows.map((l) => l.id));
+  for (const p of positions) {
+    if (!linkIds.has(p.id)) continue;
+    const patch: Partial<typeof canvasLinks.$inferInsert> = {};
+    if (p.x !== undefined) patch.canvasX = Math.round(p.x * 10) / 10;
+    if (p.y !== undefined) patch.canvasY = Math.round(p.y * 10) / 10;
+    if (Object.keys(patch).length) await tx.update(canvasLinks).set(patch).where(eq(canvasLinks.id, p.id));
+  }
+  positions = positions.filter((p) => !linkIds.has(p.id));
   const ids = positions.map((p) => p.id);
+  if (!ids.length) return;
   {
     const owned = await tx
       .select({ id: deliverables.id, archivedAt: deliverables.archivedAt, canvasW: deliverables.canvasW, canvasH: deliverables.canvasH })

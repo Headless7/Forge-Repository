@@ -1,12 +1,12 @@
 "use client";
 
 import { Pencil, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useCardMutation } from "@/lib/queries";
 import { errorMessage, RpcError } from "@/lib/rpc-client";
 import { RichText } from "../comments/rich-text";
 import { Button } from "../ui/button";
-import { Textarea } from "../ui/input";
+import { DescriptionTextarea, releaseUnusedImages, useCoverFromDescription, useDescriptionImageUploads, useImageRenderer } from "./description-images";
 import { useWorkspace } from "./workspace-context";
 
 /**
@@ -22,12 +22,22 @@ export function Description() {
   const [conflict, setConflict] = useState<string | null>(null);
   /** Any other failure (permission, validation, server): explained here, the draft kept. */
   const [failure, setFailure] = useState<string | null>(null);
+  const images = useDescriptionImageUploads(useMemo(() => ({ id: card.id, projectId: card.projectId, title: card.title, deliverableId: null }), [card.id, card.projectId, card.title]), setDraft);
+  const cover = useCoverFromDescription(card.id, card.projectId);
+  const renderImage = useImageRenderer({
+    attachments: card.attachments,
+    coverId: card.coverMode === "MANUAL" ? (card.cover?.attachmentId ?? null) : null,
+    canEdit: card.permissions.canEdit,
+    onUseAsCover: (id) => cover.forCard(id),
+    coverLabel: "Use as card cover",
+  });
   const save = useCardMutation("card.update", card.id, card.projectId, {
     silent: true, // explained in the editor (one message, not also a toast)
     onMutate: () => setFailure(null),
     onSuccess: () => {
       setEditing(false);
       setConflict(null);
+      images.uploaded.current.clear();
     },
     onError: (error) => {
       if (error instanceof RpcError && error.code === "CONFLICT") {
@@ -46,6 +56,11 @@ export function Description() {
     setFailure(null);
     setEditing(true);
   };
+  const cancel = () => {
+    // Images added during this edit and never saved don't linger.
+    releaseUnusedImages(images.uploaded.current, card.description);
+    setEditing(false);
+  };
 
   if (!editing) {
     return (
@@ -60,11 +75,11 @@ export function Description() {
         </div>
         {card.description.trim() ? (
           <div role={canEdit ? "button" : undefined} tabIndex={canEdit ? 0 : undefined} onDoubleClick={canEdit ? start : undefined} onKeyDown={(e) => canEdit && e.key === "Enter" && start()}>
-            <RichText text={card.description} mentions={mentionSet} className="text-fg" />
+            <RichText text={card.description} mentions={mentionSet} className="text-fg" renderImage={renderImage} />
           </div>
         ) : canEdit ? (
           <button type="button" onClick={start} className="w-full rounded-lg border border-dashed border-border-strong px-3 py-3 text-left text-[13px] text-fg-subtle hover:border-fg-subtle hover:text-fg-muted">
-            Add a description — references, requirements, links…
+            Add a description — references, requirements, links, images…
           </button>
         ) : (
           <p className="text-[13px] text-fg-subtle">No description.</p>
@@ -103,18 +118,21 @@ export function Description() {
           </div>
         </div>
       ) : null}
-      <Textarea
+      <DescriptionTextarea
         autoFocus
         autoGrow
         maxRows={24}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={setDraft}
+        onImages={images.start}
+        busy={images.busy}
         onKeyDown={(e) => {
           e.stopPropagation();
-          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) save.mutate({ cardId: card.id, description: draft, base: { description: base } });
-          if (e.key === "Escape") setEditing(false);
+          if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !images.busy) save.mutate({ cardId: card.id, description: draft, base: { description: base } });
+          if (e.key === "Escape") cancel();
         }}
-        placeholder="Supports **bold**, *italic*, `code`, - lists, links and @mentions"
+        placeholder="Supports **bold**, *italic*, `code`, - lists, links, @mentions and images"
+        aria-label="Card description"
         className="min-h-32"
         aria-describedby={failure ? "description-save-error" : undefined}
       />
@@ -128,10 +146,10 @@ export function Description() {
         </p>
       ) : null}
       <div className="mt-2 flex items-center gap-2">
-        <Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate({ cardId: card.id, description: draft, base: { description: base } })}>
+        <Button size="sm" variant="primary" disabled={images.busy > 0} loading={save.isPending} onClick={() => save.mutate({ cardId: card.id, description: draft, base: { description: base } })}>
           Save
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+        <Button size="sm" variant="ghost" onClick={cancel}>
           Cancel
         </Button>
         <span className="ml-auto text-[11px] text-fg-subtle">Ctrl+Enter to save · Esc to cancel</span>

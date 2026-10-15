@@ -13,6 +13,8 @@ export const qk = {
   card: (cardId: string) => ["card", cardId] as const,
   cardByNumber: (projectId: string, number: number) => ["card-number", projectId, number] as const,
   cardActivity: (cardId: string) => ["card-activity", cardId] as const,
+  /** What a card can link to (the project's active cards and deliverables). */
+  linkCandidates: (cardId: string) => ["link-candidates", cardId] as const,
   notifications: () => ["notifications"] as const,
   unread: () => ["notifications", "unread"] as const,
   projects: (studioId: string) => ["projects", studioId] as const,

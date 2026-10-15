@@ -96,6 +96,15 @@ export interface WorkspaceValue {
   registerFeedbackComposer: (focus: () => void) => void;
   comments: CommentActions;
   scrollTo: (section: "feedback" | "discussion" | "history" | "media" | "deliverables") => void;
+  /** Opens a linked card (or one of its deliverables) — on its own board when that's another one — keeping the way back. */
+  openLinked: (target: LinkTarget) => void;
+}
+
+/** Where a link leads: a card by key and board, and optionally one of its deliverables. */
+export interface LinkTarget {
+  key: string;
+  boardNumber: number;
+  deliverableNumber?: number | null;
 }
 
 export const WorkspaceContext = createContext<WorkspaceValue | null>(null);

@@ -31,6 +31,8 @@ export type FolderNodeData = {
   /** Active deliverables inside, at any depth. */
   count: number;
   states: CardState[];
+  /** Links to other cards inside, at any depth. */
+  links: number;
   selected: boolean;
   canEdit: boolean;
   /** Something being dragged would land in here. */
@@ -54,7 +56,7 @@ function frameStyle(color: string | null, strength: number) {
  * own nodes above it); collapsed, one compact card standing in for everything inside.
  */
 export const FolderNodeView = memo(function FolderNodeView({ data }: NodeProps<FolderNode>) {
-  const { folder: f, collapsed, count, states, selected, dropping, onToggle } = data;
+  const { folder: f, collapsed, count, states, links, selected, dropping, onToggle } = data;
   const Toggle = (
     <button
       type="button"
@@ -86,7 +88,7 @@ export const FolderNodeView = memo(function FolderNodeView({ data }: NodeProps<F
           <p className="truncate text-[12.5px] font-semibold leading-tight" title={f.name}>
             {f.name}
           </p>
-          <p className="mt-0.5 truncate text-[11px] text-fg-muted">{folderSummary(count, states)}</p>
+          <p className="mt-0.5 truncate text-[11px] text-fg-muted">{folderSummary(count, states, links)}</p>
         </div>
         {/* A flag of each state inside, so a collapsed folder still shows where work stands. */}
         <span className="flex shrink-0 items-center gap-0.5" aria-hidden>
@@ -121,8 +123,8 @@ export const FolderNodeView = memo(function FolderNodeView({ data }: NodeProps<F
         <span className="min-w-0 flex-1 truncate" title={f.name}>
           {f.name}
         </span>
-        <span className="shrink-0 rounded-full bg-surface-4 px-1.5 text-[10.5px] font-medium text-fg-muted" title={folderSummary(count, states)}>
-          {count}
+        <span className="shrink-0 rounded-full bg-surface-4 px-1.5 text-[10.5px] font-medium text-fg-muted" title={folderSummary(count, states, links)}>
+          {count + links}
         </span>
         {Toggle}
       </div>

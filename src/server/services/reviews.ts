@@ -4,7 +4,7 @@ import type { CardDetailDTO, CardState } from "@/lib/types";
 import { assertDeliverable, requireCard, requireDeliverable, type DeliverableAccess } from "../access";
 import { now } from "../clock";
 import { db, type Executor, type Tx } from "../db";
-import { assetVersions, cardReviewers, cards, comments, deliverables, reviews } from "../db/schema";
+import { assetVersions, attachments, cardReviewers, cards, comments, deliverables, reviews } from "../db/schema";
 import { conflict, invalid } from "../errors";
 import { logActivity } from "./activity";
 import { loadCardDetail } from "./card-dto";
@@ -101,6 +101,14 @@ export async function submitForReview(
     const version = await currentVersion(tx, ctx, input.versionId);
     if (version?.status === "APPROVED" && ctx.deliverable.state === "APPROVED") {
       throw invalid(`V${version.versionNumber} is already approved. Upload a new revision to submit again.`);
+    }
+    if (version) {
+      // A revision whose files were all taken out has nothing to review.
+      const [files] = await tx
+        .select({ n: sql<number>`count(*)`.mapWith(Number) })
+        .from(attachments)
+        .where(and(eq(attachments.versionId, version.id), isNull(attachments.archivedAt), isNull(attachments.demoOfId), inArray(attachments.status, ["READY", "PROCESSING", "PENDING"])));
+      if (!files?.n) throw invalid(`V${version.versionNumber} has no files. Add files to it before submitting it for review.`);
     }
     const at = now();
     if (version) {

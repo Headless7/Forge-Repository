@@ -21,6 +21,7 @@ import { Kbd, Skeleton } from "../ui/controls";
 import { Dialog, DialogContent, DialogFooter, keepOpenForToasts } from "../ui/dialog";
 import { Tooltip } from "../ui/menu";
 import { useUploads } from "../upload/upload-manager";
+import { CardLinksSection } from "./card-links";
 import { CardSidebar } from "./card-sidebar";
 import { CardTabs } from "./card-tabs";
 import { Checklists } from "./checklists";
@@ -28,10 +29,10 @@ import { DeliverableBreadcrumb, DeliverableHeader } from "./deliverable-header";
 import { resetFolderView } from "./folder-view";
 import { AddDeliverableDialog, DeliverablesPanel } from "./deliverables-panel";
 import { Description } from "./description";
-import { FeedbackPanel, MediaSection, UploadVersionDialog } from "./media-section";
+import { FeedbackPanel, MediaSection, openRevision, UploadVersionDialog } from "./media-section";
 import { ReferenceFiles } from "./reference-files";
 import { ApproveDialog, FeedbackSummary, RequestChangesDialog, ReviewBanner, SubmitDialog, useReviewDialogs } from "./review-panel";
-import { buildScope, useWorkspace, WorkspaceContext, type CommentActions, type PendingAnnotation, type TimelineHandle, type WorkspaceValue } from "./workspace-context";
+import { buildScope, useWorkspace, WorkspaceContext, type CommentActions, type LinkTarget, type PendingAnnotation, type TimelineHandle, type WorkspaceValue } from "./workspace-context";
 
 function TitleEditor({ card }: { card: CardDetailDTO }) {
   const [value, setValue] = useState(card.title);
@@ -177,6 +178,9 @@ export function CardModal({
   focusCommentId,
   onClose,
   onNavigate,
+  onOpenLinked,
+  onBackFromLink,
+  from,
 }: {
   cardKey: string;
   queue: string[] | null;
@@ -184,6 +188,12 @@ export function CardModal({
   focusCommentId: string | null;
   onClose: () => void;
   onNavigate: (key: string) => void;
+  /** Opens a linked card (or one of its deliverables), keeping the way back. */
+  onOpenLinked: (target: LinkTarget) => void;
+  /** Goes back to the card this one was opened from (a step back, not a new link). */
+  onBackFromLink: (from: { key: string; boardNumber: number }) => void;
+  /** The card this one was opened from through a link. */
+  from: { key: string; boardNumber: number } | null;
 }) {
   const board = useBoard();
   const queryClient = useQueryClient();
@@ -235,8 +245,10 @@ export function CardModal({
   useEffect(() => {
     if (!card || tipsFor.current === card.id) return;
     tipsFor.current = card.id;
-    tutorial.trigger(["card.workspace", "card.review-decision", "card.resolve-feedback", "card.deliverables", "card.canvas", "card.pending-changes", "production.stages"]);
-  }, [card, tutorial]);
+    const tips = ["card.workspace", "card.review-decision", "card.resolve-feedback", "card.deliverables", "card.canvas", "card.pending-changes", "production.stages"] as const;
+    // Arrived by following a link: that's what's worth explaining first.
+    tutorial.trigger(from ? ["card.links", ...tips] : [...tips]);
+  }, [card, tutorial, from]);
 
   // ── Deliverable scope ──────────────────────────────────────────────────────
   const deliverables = useMemo<DeliverableDTO[]>(() => (card ? card.deliverables.filter((d) => !d.archivedAt) : []), [card]);
@@ -468,9 +480,10 @@ export function CardModal({
             },
             comments,
             scrollTo: (section) => document.getElementById(section)?.scrollIntoView({ block: "start", behavior: "smooth" }),
+            openLinked: onOpenLinked,
           }
         : null,
-    [card, deliverables, multi, scope, openDeliverable, members, board.membersById, board.board.viewer.userId, projectId, versionId, setVersionId, attachmentId, activeCommentId, focusComment, pending, comments],
+    [card, deliverables, multi, scope, openDeliverable, members, board.membersById, board.board.viewer.userId, projectId, versionId, setVersionId, attachmentId, activeCommentId, focusComment, pending, comments, onOpenLinked],
   );
 
   // Review queue navigation
@@ -489,8 +502,10 @@ export function CardModal({
     { enabled: Boolean(queueList) },
   );
 
-  const openUpload = (files?: File[]) => {
+  const [uploadMode, setUploadMode] = useState<"add" | "new">("new");
+  const openUpload = (files?: File[], mode: "add" | "new" = "new") => {
     setUploadFiles(files);
+    setUploadMode(mode);
     setUploadOpen(true);
   };
 
@@ -562,7 +577,7 @@ export function CardModal({
             if (!card || !e.dataTransfer.files.length || e.defaultPrevented) return;
             e.preventDefault();
             const files = [...e.dataTransfer.files];
-            if (scope?.permissions.canUpload) openUpload(files);
+            if (scope?.permissions.canUpload) openUpload(files, openRevision(scope) ? "add" : "new");
             else if (!scope && multi) setPickerFiles(files);
             else toast.error("You don't have permission to upload here.");
           }}
@@ -588,6 +603,13 @@ export function CardModal({
           </VisuallyHidden.Root>
 
           <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:px-5">
+            {from ? (
+              <Tooltip content={`Back to ${from.key}, where you followed the link`}>
+                <Button size="xs" variant="secondary" onClick={() => onBackFromLink(from)} aria-label={`Back to ${from.key}`}>
+                  <ArrowLeft /> {from.key}
+                </Button>
+              </Tooltip>
+            ) : null}
             <Tooltip content="Copy link to this card">
               <button type="button" onClick={copyLink} className="inline-flex h-6 items-center gap-1 rounded-md bg-surface-3 px-2 font-mono text-[11.5px] text-fg-muted hover:text-fg">
                 {card?.key ?? cardKey}
@@ -697,6 +719,8 @@ export function CardModal({
                     {mode !== "deliverable" ? (
                       <>
                         <Description />
+                        {/* A simple card has no canvas: its links are listed here (the overview shows them on the canvas). */}
+                        {mode === "simple" ? <CardLinksSection /> : null}
                         <Checklists />
                         <ReferenceFiles />
                       </>
@@ -722,7 +746,7 @@ export function CardModal({
                   <ApproveDialog open={dialog === "approve"} onOpenChange={(o) => setDialog(o ? "approve" : null)} onDone={() => setDecided(true)} />
                   <RequestChangesDialog open={dialog === "changes"} onOpenChange={(o) => setDialog(o ? "changes" : null)} onDone={() => setDecided(true)} />
                   <SubmitDialog open={dialog === "submit"} onOpenChange={(o) => setDialog(o ? "submit" : null)} />
-                  <UploadVersionDialog key={`${scope.deliverable.id}-${uploadFiles?.length ?? 0}`} open={uploadOpen} onOpenChange={setUploadOpen} initialFiles={uploadFiles} />
+                  <UploadVersionDialog key={`${scope.deliverable.id}-${uploadFiles?.length ?? 0}-${uploadMode}`} open={uploadOpen} onOpenChange={setUploadOpen} initialFiles={uploadFiles} initialMode={uploadMode} />
                 </>
               ) : null}
               <DeliverablePicker files={pickerFiles} onClose={() => setPickerFiles(null)} />

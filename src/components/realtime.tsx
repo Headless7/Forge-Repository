@@ -3,6 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { qk } from "@/lib/queries";
+import type { CardDetailDTO } from "@/lib/types";
 import { getClientId } from "@/lib/rpc-client";
 
 type Status = "connecting" | "live" | "offline";
@@ -62,6 +63,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     let disposed = false;
     let hadConnection = false;
 
+    /** Cards that show a changed card live (they link to it, or it links to them) refresh with it. */
+    const refreshLinked = (changed: ReadonlySet<string>) => {
+      if (!changed.size) return;
+      for (const [key, data] of queryClient.getQueriesData<CardDetailDTO>({ queryKey: ["card"] })) {
+        if (!data || typeof data !== "object" || !("canvasLinks" in data) || changed.has(data.id)) continue;
+        const shown = [...data.canvasLinks.map((l) => l.card.id), ...data.linkedFrom.map((b) => b.card.id)];
+        if (shown.some((id) => changed.has(id))) void queryClient.invalidateQueries({ queryKey: key });
+      }
+    };
+
     const flush = () => {
       const p = pending.current;
       p.timer = null;
@@ -72,6 +83,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         void queryClient.invalidateQueries({ queryKey: qk.card(id) });
         void queryClient.invalidateQueries({ queryKey: qk.cardActivity(id) });
       }
+      refreshLinked(p.cards);
       for (const id of p.forums) void queryClient.invalidateQueries({ queryKey: qk.forums(id) });
       for (const id of p.items) {
         void queryClient.invalidateQueries({ queryKey: qk.item(id) });
@@ -119,6 +131,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         if (own) {
           for (const id of event.cardIds) void queryClient.invalidateQueries({ queryKey: qk.cardActivity(id) });
           for (const id of event.itemIds ?? []) void queryClient.invalidateQueries({ queryKey: qk.itemActivity(id) });
+          // Our change to one card is news to the cards that show it.
+          refreshLinked(new Set(event.cardIds));
         }
         schedule();
       });

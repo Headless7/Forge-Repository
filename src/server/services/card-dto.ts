@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { blockedBy, computeProgress, computeReadiness, type DeliverableFacts, type LinkFacts } from "@/lib/deliverables";
 import type {
   AttachmentDTO,
@@ -35,6 +35,7 @@ import {
   reviews,
 } from "../db/schema";
 import { storage } from "../storage";
+import { loadCardLinks, loadNeededShares } from "./canvas-links";
 
 export type AttachmentRow = typeof attachments.$inferSelect;
 
@@ -172,7 +173,8 @@ export async function summarizeCards(
   const ids = cardRows.map((c) => c.id);
   const coverIds = cardRows.map((c) => c.coverAttachmentId).filter((id): id is string => Boolean(id));
 
-  const [assignees, labelRows, commentAgg, attachmentAgg, checklistAgg, versionAgg, covers, views, deliverableFacts] = await Promise.all([
+  const recordedIds = cardRows.filter((c) => c.productionStatus !== "TODO").map((c) => c.id);
+  const [assignees, labelRows, commentAgg, attachmentAgg, checklistAgg, versionAgg, covers, views, deliverableFacts, neededShares] = await Promise.all([
     db.select({ cardId: cardAssignees.cardId, userId: cardAssignees.userId }).from(cardAssignees).where(inArray(cardAssignees.cardId, ids)).orderBy(asc(cardAssignees.createdAt)),
     db.select({ cardId: cardLabels.cardId, labelId: cardLabels.labelId }).from(cardLabels).where(inArray(cardLabels.cardId, ids)),
     db
@@ -223,6 +225,8 @@ export async function summarizeCards(
       .from(cardViews)
       .where(and(eq(cardViews.userId, viewerId), inArray(cardViews.cardId, ids))),
     loadDeliverableFacts(ids),
+    // Recorded cards flag shared work they needed that has changed since (pending changes).
+    loadNeededShares(recordedIds, projectKeys),
   ]);
 
   const group = <T extends { cardId: string }, V>(rows: T[], pick: (r: T) => V) => {
@@ -260,7 +264,7 @@ export async function summarizeCards(
       const facts = deliverableFacts.get(card.id)!;
       const recorded = card.productionStatus !== "TODO";
       const readiness = recorded
-        ? computeReadiness({ deliverables: facts.facts, links: facts.links, snapshot: card.productionSnapshot, recorded, versionNumbers: new Map() })
+        ? computeReadiness({ deliverables: facts.facts, links: facts.links, snapshot: card.productionSnapshot, recorded, versionNumbers: neededShares.versionNumbers, shared: neededShares.byCard.get(card.id) })
         : null;
       return {
         id: card.id,
@@ -317,7 +321,7 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
   const projectKeys = new Map([[card.projectId, access.project.key]]);
 
   const [summary] = await summarizeCards([card], access.userId, projectKeys);
-  const [versionRows, attachmentRows, commentRows, reviewRows, checklistRows, itemRows, reviewerRows, watcherRows, deliverableFacts, linkRows, eventRows, groupRows] =
+  const [versionRows, attachmentRows, commentRows, reviewRows, checklistRows, itemRows, reviewerRows, watcherRows, deliverableFacts, linkRows, eventRows, groupRows, cardLinks, removedRows] =
     await Promise.all([
       db.select().from(assetVersions).where(eq(assetVersions.cardId, card.id)).orderBy(asc(assetVersions.versionNumber), asc(assetVersions.createdAt)),
       db
@@ -335,6 +339,13 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
       db.select().from(deliverableLinks).where(eq(deliverableLinks.cardId, card.id)).orderBy(asc(deliverableLinks.createdAt)),
       db.select().from(productionEvents).where(eq(productionEvents.cardId, card.id)).orderBy(asc(productionEvents.createdAt)),
       db.select().from(deliverableGroups).where(eq(deliverableGroups.cardId, card.id)).orderBy(asc(deliverableGroups.createdAt)),
+      loadCardLinks(cardAccess),
+      // Files taken out of a revision: their names, for feedback left on them and for putting them back.
+      db
+        .select({ id: attachments.id, filename: attachments.filename, versionId: attachments.versionId, deliverableId: attachments.deliverableId, kind: attachments.kind, archivedAt: attachments.archivedAt })
+        .from(attachments)
+        .where(and(eq(attachments.cardId, card.id), eq(attachments.purpose, "VERSION"), isNotNull(attachments.archivedAt), isNull(attachments.demoOfId)))
+        .orderBy(asc(attachments.archivedAt)),
     ]);
 
   const commentIds = commentRows.map((c) => c.id);
@@ -559,13 +570,23 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
       snapshot: e.snapshot,
       createdAt: e.createdAt.toISOString(),
     })),
+    canvasLinks: cardLinks.links,
+    linkedFrom: cardLinks.linkedFrom,
     productionSnapshot: card.productionSnapshot,
-    readiness: computeReadiness({ deliverables: facts.facts, links: facts.links, snapshot: card.productionSnapshot, recorded, versionNumbers }),
+    readiness: computeReadiness({
+      deliverables: facts.facts,
+      links: facts.links,
+      snapshot: card.productionSnapshot,
+      recorded,
+      versionNumbers: new Map([...versionNumbers, ...cardLinks.versionNumbers]),
+      shared: cardLinks.needed,
+    }),
     completedAt: card.completedAt?.toISOString() ?? null,
     publishedAt: card.publishedAt?.toISOString() ?? null,
     versions,
     coverPinnedId: card.coverPinnedId,
     attachments: attachmentDTOs,
+    removedFiles: removedRows.map((r) => ({ id: r.id, filename: r.filename, kind: r.kind, versionId: r.versionId, deliverableId: r.deliverableId, removedAt: r.archivedAt!.toISOString() })),
     comments: visibleRoots,
     reviews: reviewDTOs,
     checklists: checklistDTOs,

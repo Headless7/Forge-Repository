@@ -370,6 +370,8 @@ export function SubmitDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   const noNewVersion = scope.state === "CHANGES_REQUESTED" && lastDecision?.versionId === scope.currentVersionId && scope.currentVersionId;
   const unresolved = allFeedback(scope.comments).filter((c) => !c.resolvedAt).length;
   const blocked = scope.deliverable.blockedBy.length;
+  // A revision whose files were all taken out has nothing to review.
+  const empty = current ? !card.attachments.some((a) => current.attachmentIds.includes(a.id) && !a.demoOfId && a.status !== "FAILED") : false;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title={multi ? `Submit ${scope.deliverable.name} for review` : "Submit for review"} description={card.title}>
@@ -394,6 +396,11 @@ export function SubmitDialog({ open, onOpenChange }: { open: boolean; onOpenChan
             ))}
           </div>
         ) : null}
+        {empty ? (
+          <p role="alert" className="mb-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[12.5px]">
+            V{current?.number} has no files, so there&apos;s nothing to review. Add files to it first{scope.versions.length > 1 ? ", or pick another revision" : ""}.
+          </p>
+        ) : null}
         {noNewVersion ? (
           <p className="mb-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[12.5px]">
             Changes were requested on V{current?.number}. Consider uploading a new version first — you can still resubmit the same one.
@@ -410,7 +417,7 @@ export function SubmitDialog({ open, onOpenChange }: { open: boolean; onOpenChan
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="primary" loading={submit.isPending} onClick={() => submit.mutate({ deliverableId: scope.deliverable.id, versionId, note })}>
+          <Button variant="primary" disabled={empty} loading={submit.isPending} onClick={() => submit.mutate({ deliverableId: scope.deliverable.id, versionId, note })}>
             <Send /> Submit{current ? ` V${current.number}` : ""} for review
           </Button>
         </DialogFooter>

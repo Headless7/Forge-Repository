@@ -12,6 +12,7 @@ import {
   uuid,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import type { ProductionSnapshotEntry } from "@/lib/types";
 import { users } from "./auth";
 import { cards } from "./cards";
@@ -113,6 +114,48 @@ export const deliverableGroups = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [index("deliverable_groups_card_idx").on(t.cardId), index("deliverable_groups_parent_idx").on(t.parentId)],
+);
+
+/**
+ * A link object on a card's deliverable canvas (and in its list): it points at another card of the
+ * same project, or at one deliverable of it. A link to a deliverable shares that deliverable here:
+ * the work, its files, reviews and history stay on its own card, and this card shows it live.
+ * `needed` makes this card wait for it: it can't be completed until the shared work is approved.
+ */
+export const canvasLinks = pgTable(
+  "canvas_links",
+  {
+    id: pk(),
+    /** The card whose canvas the link sits on. */
+    cardId: uuid()
+      .notNull()
+      .references((): AnyPgColumn => cards.id, { onDelete: "cascade" }),
+    projectId: uuid()
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** The card it points at (always set, also for a shared deliverable: that deliverable's card). */
+    targetCardId: uuid()
+      .notNull()
+      .references((): AnyPgColumn => cards.id, { onDelete: "cascade" }),
+    /** The shared deliverable; null = the whole card. */
+    targetDeliverableId: uuid().references((): AnyPgColumn => deliverables.id, { onDelete: "cascade" }),
+    /** A shared deliverable this card can't be completed without (it must be approved first). */
+    needed: boolean().notNull().default(false),
+    /** The canvas folder it sits in; null = the top level. */
+    groupId: uuid().references((): AnyPgColumn => deliverableGroups.id, { onDelete: "set null" }),
+    canvasX: real().notNull().default(0),
+    canvasY: real().notNull().default(0),
+    createdById: uuid().references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("canvas_links_card_idx").on(t.cardId),
+    index("canvas_links_target_card_idx").on(t.targetCardId),
+    index("canvas_links_target_deliverable_idx").on(t.targetDeliverableId),
+    index("canvas_links_group_idx").on(t.groupId),
+    uniqueIndex("canvas_links_card_uq").on(t.cardId, t.targetCardId).where(sql`${t.targetDeliverableId} is null`),
+    uniqueIndex("canvas_links_deliverable_uq").on(t.cardId, t.targetDeliverableId).where(sql`${t.targetDeliverableId} is not null`),
+  ],
 );
 
 export { DELIVERABLE_LINK_TYPES, PRODUCTION_STATUSES };

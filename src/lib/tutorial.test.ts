@@ -13,6 +13,7 @@ const full: { [K in TipId]: TipFacts[K] } = {
   "card.deliverables": { deliverableCount: 3 },
   "card.canvas": { deliverableCount: 3 },
   "card.folders": { canEdit: true, folderCount: 1 },
+  "card.links": { canEdit: true, linkCount: 1 },
   "card.revisions": { revisionCount: 2 },
   "card.feedback": { canComment: true, media: "image" },
   "card.upload-vs-submit": { canSubmit: true, state: "IN_PROGRESS" },
@@ -80,6 +81,11 @@ describe("tutorial tip definitions", () => {
     expect(eligible("board.boards", { boardCount: 1 })).toBe(false);
     expect(eligible("account.discord-profile", { connected: false })).toBe(false);
     expect(eligible("board.my-work", { worksOnCount: 0 })).toBe(false);
+    // Links: only once a card has some, and only editors are told they can mark one as needed.
+    expect(eligible("card.links", { canEdit: true, linkCount: 0 })).toBe(false);
+    expect(eligible("card.links", { canEdit: false, linkCount: 2 })).toBe(true);
+    expect(body("card.links", { canEdit: false, linkCount: 2 })).not.toMatch(/if you mark/);
+    expect(body("card.links", { canEdit: true, linkCount: 2 })).toMatch(/if you mark it as needed/);
     expect(eligible("card.pending-changes", { pendingCount: 0, status: "PUBLISHED", canPublish: true })).toBe(false);
     expect(eligible("production.stages", { place: "card", relevant: false })).toBe(false);
     expect(eligible("production.stages", { place: "board", relevant: false })).toBe(true);

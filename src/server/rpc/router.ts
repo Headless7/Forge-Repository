@@ -46,6 +46,7 @@ import * as archive from "../services/archive";
 import { listAuditLog, listCardActivity, listItemActivity, listProjectActivity } from "../services/activity";
 import * as board from "../services/board";
 import * as forums from "../services/forums";
+import * as canvasLinks from "../services/canvas-links";
 import * as cards from "../services/cards";
 import * as checklists from "../services/checklists";
 import * as comments from "../services/comments";
@@ -391,6 +392,7 @@ export const appRouter = {
       color: z.string().max(20).nullable().optional(),
       parentId: idSchema.nullable().optional(),
       deliverableIds: z.array(idSchema).max(200),
+      linkIds: z.array(idSchema).max(200).optional(),
       groupIds: z.array(idSchema).max(100).optional(),
       positions: layoutSchema.optional(),
     }),
@@ -414,12 +416,40 @@ export const appRouter = {
     input: z.object({
       cardId: idSchema,
       deliverableIds: z.array(idSchema).max(200).optional(),
+      linkIds: z.array(idSchema).max(200).optional(),
       groupIds: z.array(idSchema).max(100).optional(),
       targetGroupId: idSchema.nullable(),
       positions: layoutSchema.optional(),
     }),
     limit: { max: 300, windowMs: 60_000 },
     handler: ({ actor }, i) => deliverableGroups.moveToGroup(actor, i),
+  }),
+
+  // ── Links between cards (canvas link objects; shared deliverables) ────────
+  "link.candidates": proc({
+    input: z.object({ cardId: idSchema }),
+    handler: ({ actor }, i) => canvasLinks.linkCandidates(actor, i),
+  }),
+  "link.create": proc({
+    input: z.object({
+      cardId: idSchema,
+      targetCardId: idSchema,
+      targetDeliverableId: idSchema.nullable().optional(),
+      needed: z.boolean().optional(),
+      groupId: idSchema.nullable().optional(),
+      x: z.number().finite().min(-100_000).max(100_000).optional(),
+      y: z.number().finite().min(-100_000).max(100_000).optional(),
+    }),
+    limit: { max: 120, windowMs: 60_000 },
+    handler: ({ actor }, i) => canvasLinks.createLink(actor, i),
+  }),
+  "link.setNeeded": proc({
+    input: z.object({ linkId: idSchema, needed: z.boolean() }),
+    handler: ({ actor }, i) => canvasLinks.setLinkNeeded(actor, i),
+  }),
+  "link.remove": proc({
+    input: z.object({ linkId: idSchema }),
+    handler: ({ actor }, i) => canvasLinks.removeLink(actor, i),
   }),
   "deliverable.move": proc({
     input: z.object({ deliverableId: idSchema, beforeId: idSchema.nullable().optional(), afterId: idSchema.nullable().optional() }),
@@ -494,7 +524,7 @@ export const appRouter = {
         filename: z.string().min(1).max(255),
         size: z.number().int().positive(),
         contentType: z.string().max(200),
-        purpose: z.enum(["version", "attachment", "comment", "resource", "cover", "checklist", "item", "demo"]),
+        purpose: z.enum(["version", "attachment", "comment", "resource", "cover", "checklist", "item", "demo", "description"]),
         versionId: idSchema.nullable().optional(),
         deliverableId: idSchema.nullable().optional(),
         checklistItemId: idSchema.nullable().optional(),
@@ -514,6 +544,8 @@ export const appRouter = {
           height: z.number().int().min(1).max(20_000).optional(),
         })
         .optional(),
+      /** Added to a revision that already had files (for its history). */
+      addedToRevision: z.boolean().optional(),
     }),
     handler: ({ actor }, i) => media.completeUpload(actor, i),
   }),
@@ -521,7 +553,7 @@ export const appRouter = {
     input: z.object({
       cardId: idSchema,
       url: z.url().max(2000),
-      purpose: z.enum(["version", "attachment", "comment", "cover"]),
+      purpose: z.enum(["version", "attachment", "comment", "cover", "description"]),
       versionId: idSchema.nullable().optional(),
       deliverableId: idSchema.nullable().optional(),
     }),

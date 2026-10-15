@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from "react";
+import { IMAGE_TOKEN } from "@/lib/description-images";
 import { discordVideoLink, type DiscordVideoLink } from "@/lib/discord-links";
 import { cn } from "@/lib/utils";
 import { DiscordVideo } from "./discord-video";
@@ -79,8 +80,14 @@ function discordVideosIn(lines: string[]): DiscordVideoLink[] {
   return out;
 }
 
-export function RichText({ text, mentions, className }: { text: string; mentions?: ReadonlySet<string>; className?: string }) {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
+/**
+ * `renderImage`: draws a description image marker (`![name](image:id)`, see lib/description-images)
+ * as its own block. Without it, markers stay as text.
+ */
+export function RichText({ text, mentions, className, renderImage }: { text: string; mentions?: ReadonlySet<string>; className?: string; renderImage?: (id: string, name: string, key: string) => ReactNode }) {
+  let lines = text.replace(/\r\n/g, "\n").split("\n");
+  // Each image marker becomes a line of its own, so it's drawn as a block between the text around it.
+  if (renderImage) lines = lines.flatMap((line) => line.replace(IMAGE_TOKEN, (token) => `\n\u0000${token}\n`).split("\n"));
   const blocks: ReactNode[] = [];
   let paragraph: string[] = [];
   let list: string[] = [];
@@ -136,6 +143,14 @@ export function RichText({ text, mentions, className }: { text: string; mentions
   };
 
   for (const line of lines) {
+    if (renderImage && line.startsWith("\u0000")) {
+      flushParagraph();
+      flushList();
+      flushQuote();
+      const [, name, id] = new RegExp(IMAGE_TOKEN.source, "i").exec(line.slice(1)) ?? [];
+      if (id) blocks.push(renderImage(id.toLowerCase(), name ?? "", `img${blocks.length}`));
+      continue;
+    }
     const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
     const quoted = /^\s*>\s?(.*)$/.exec(line);
     if (bullet) {

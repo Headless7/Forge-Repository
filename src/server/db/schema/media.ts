@@ -38,8 +38,12 @@ export const assetVersions = pgTable(
 );
 
 export const ATTACHMENT_KINDS = ["IMAGE", "VIDEO", "AUDIO", "ROBLOX", "FILE"] as const;
-/** COVER: uploaded only to be the card's board cover (no revision, no review). CHECKLIST: a checklist item's reference image. ITEM: a screenshot or clip on a forum item (a bug report, a QA check). */
-export const ATTACHMENT_PURPOSES = ["VERSION", "CARD", "COMMENT", "RESOURCE", "COVER", "CHECKLIST", "ITEM"] as const;
+/**
+ * COVER: uploaded only to be the card's board cover (no revision, no review). CHECKLIST: a checklist item's reference image.
+ * ITEM: a screenshot or clip on a forum item (a bug report, a QA check). DESCRIPTION: an image shown in a description (the
+ * deliverable's when deliverableId is set, else the card's); archived once the description no longer shows it.
+ */
+export const ATTACHMENT_PURPOSES = ["VERSION", "CARD", "COMMENT", "RESOURCE", "COVER", "CHECKLIST", "ITEM", "DESCRIPTION"] as const;
 export const ATTACHMENT_STATUSES = ["PENDING", "PROCESSING", "READY", "FAILED"] as const;
 
 /**

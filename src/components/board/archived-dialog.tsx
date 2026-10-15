@@ -167,10 +167,11 @@ export function ArchivedItems({ projectId, canDelete, canRestoreColumns }: { pro
         kind: "attachment" as const,
         id: a.id,
         title: a.filename,
-        meta: `${a.cardKey}${a.deliverableName ? ` · ${a.deliverableName}` : ""} · archived ${timeAgo(a.archivedAt)}`,
+        meta: `${a.cardKey}${a.deliverableName ? ` · ${a.deliverableName}` : ""}${a.origin === "description" ? " · image taken out of a description" : a.origin ? ` · removed from ${a.origin}` : ""} · archived ${timeAgo(a.archivedAt)}`,
         bytes: a.bytes,
         locked: a.sharedResource ? "used as a Roblox resource by other models" : undefined,
-        restore: () => restoreFile.mutate({ attachmentId: a.id }),
+        // A description shows the images its text names: one taken out comes back by adding it there again, not from here.
+        restore: a.origin === "description" ? undefined : () => restoreFile.mutate({ attachmentId: a.id }),
         restoring: restoreFile.isPending && restoreFile.variables?.attachmentId === a.id,
       })),
     };

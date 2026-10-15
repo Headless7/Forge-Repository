@@ -46,6 +46,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Share2,
   Trash2,
   Ungroup,
   X,
@@ -87,8 +88,10 @@ import {
   remapPoint,
   type Side,
 } from "@/lib/canvas-points";
+import { LINK_NODE, linkName } from "@/lib/canvas-links";
 import { CARD_STATE_META } from "@/lib/card-meta";
-import type { CardDetailDTO, CardState, DeliverableDTO, DeliverableGroupDTO, DeliverableLinkDTO, DeliverableLinkType, MemberDTO } from "@/lib/types";
+import { plainDescription } from "@/lib/description-images";
+import type { CanvasLinkDTO, CardDetailDTO, CardState, DeliverableDTO, DeliverableGroupDTO, DeliverableLinkDTO, DeliverableLinkType, MemberDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { CreatorMark } from "../domain/creator-mark";
 import { KIND_ICONS } from "../domain/production";
@@ -113,10 +116,13 @@ import {
   type FolderNode,
   type FolderNodeData,
 } from "./canvas-folders";
+import { linkTarget, sharedWith, useLinkActions } from "./card-links";
+import { LinkNodeView, LinkPanel, type LinkNode, type LinkNodeData } from "./canvas-link-node";
 import { DeliverableCoverControl } from "./cover-control";
 import { DeliverableColorPicker } from "./deliverable-color";
 import { DeliverableWork } from "./deliverable-work";
 import { useCollapsedFolders } from "./folder-view";
+import { useTutorial } from "../tutorial/tutorial";
 import { useWorkspace } from "./workspace-context";
 
 /** Canvas viewport per card, so returning from a deliverable lands where you left. */
@@ -139,12 +145,20 @@ type DeliverableNodeData = {
   points: string[];
   /** Something being dragged would be grouped with this one. */
   dropping: boolean;
+  /** Other cards it's shared with (they show it live). */
+  sharedWith: number;
   onOpen: (id: string) => void;
   onResize: (id: string, params: ResizeParams) => void;
   onResizeEnd: (id: string, params: ResizeParams) => void;
 };
 type DeliverableNode = Node<DeliverableNodeData, "deliverable">;
-type CanvasNode = DeliverableNode | FolderNode;
+type CanvasNode = DeliverableNode | FolderNode | LinkNode;
+/**
+ * Anything placed on the canvas outside a folder's frame: a deliverable or a link. Both keep
+ * absolute positions and can sit in folders; only deliverables resize and connect.
+ */
+type CanvasItem = { id: string; kind: "deliverable" | "link"; canvasX: number; canvasY: number; canvasW: number | null; canvasH: number | null; groupId: string | null; name: string };
+type Geo = Pick<CanvasItem, "id" | "canvasX" | "canvasY" | "canvasW" | "canvasH"> & { kind?: CanvasItem["kind"] };
 /** A folder as this person sees it: collapsed or not is their own view (see folder-view). */
 type ViewFolder = DeliverableGroupDTO & { collapsed: boolean };
 type LinkEdgeData = { link: DeliverableLinkDTO; satisfied: boolean; onSelect: (id: string) => void; selected: boolean };
@@ -164,7 +178,7 @@ interface DragSession {
 }
 /** A node at the top of a drag (its contents travel with it). */
 interface Dragged {
-  kind: "deliverable" | "folder";
+  kind: "deliverable" | "link" | "folder";
   id: string;
   /** The folder it was in. */
   parent: string | null;
@@ -172,7 +186,7 @@ interface Dragged {
 }
 /** Enough to put things back: where they were, and in which folder. */
 interface Snapshot {
-  parents: Array<{ kind: "deliverable" | "folder"; id: string; parent: string | null }>;
+  parents: Array<{ kind: "deliverable" | "link" | "folder"; id: string; parent: string | null }>;
   positions: Map<string, Point>;
 }
 
@@ -200,7 +214,7 @@ const DeliverableNodeView = memo(function DeliverableNodeView({ data }: NodeProp
   const kind = d.kinds.find((k) => k !== "FILE") ?? d.kinds[0];
   const KindIcon = kind ? KIND_ICONS[kind] : null;
   const attention = d.state === "NEEDS_REVIEW" ? "ring-2 ring-state-review/60" : d.state === "CHANGES_REQUESTED" ? "ring-2 ring-state-changes/60" : "";
-  const description = d.description.trim();
+  const description = plainDescription(d.description).trim();
   return (
     <div
       onDoubleClick={() => onOpen(d.id)}
@@ -272,6 +286,11 @@ const DeliverableNodeView = memo(function DeliverableNodeView({ data }: NodeProp
       <div className="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1 text-[10.5px] text-fg-muted">
         <DeliverableWork d={d} className="min-w-0 flex-1 text-[10.5px]" />
         {!d.hasFiles ? <span className="shrink-0 text-fg-subtle">no files</span> : null}
+        {data.sharedWith ? (
+          <span className="inline-flex shrink-0 items-center gap-0.5 text-fg-muted" title={`Shared with ${data.sharedWith} other card${data.sharedWith === 1 ? "" : "s"}`}>
+            <Share2 className="size-3" /> {data.sharedWith}
+          </span>
+        ) : null}
         <CreatorMark person={creator} avatarOnly />
         {blockedNames.length ? (
           <span className="inline-flex shrink-0 items-center gap-0.5 text-state-review" title={`Waiting on ${blockedNames.join(", ")}`}>
@@ -326,7 +345,7 @@ function LinkEdgeView({ id, sourceX, sourceY, targetX, targetY, sourcePosition, 
   );
 }
 
-const nodeTypes = { deliverable: DeliverableNodeView, folder: FolderNodeView };
+const nodeTypes = { deliverable: DeliverableNodeView, folder: FolderNodeView, link: LinkNodeView };
 const edgeTypes = { link: LinkEdgeView };
 
 export interface NodeLayoutChange {
@@ -347,15 +366,15 @@ export interface CanvasActions {
   rename: (deliverableId: string, name: string) => void;
   /** Archive (or restore) a deliverable; settles once saved and rejects if it couldn't be. */
   archive: (deliverableId: string, archived: boolean) => Promise<unknown>;
-  /** Make a folder around deliverables and folders (positions sent are saved with it). Resolves with the card. */
-  createFolder: (input: { name?: string; parentId: string | null; deliverableIds: string[]; groupIds?: string[]; positions?: NodeLayoutChange[] }) => Promise<CardDetailDTO>;
+  /** Make a folder around deliverables, links and folders (positions sent are saved with it). Resolves with the card. */
+  createFolder: (input: { name?: string; parentId: string | null; deliverableIds: string[]; linkIds?: string[]; groupIds?: string[]; positions?: NodeLayoutChange[] }) => Promise<CardDetailDTO>;
   updateFolder: (groupId: string, patch: { name?: string; color?: string | null }) => Promise<unknown>;
   /** Someone collapsed or expanded a folder (their own view; nothing is saved). */
   toggleFolder: (groupId: string, collapsed: boolean) => void;
   /** Dissolve a folder: what's inside moves up a level. */
   ungroup: (groupId: string) => Promise<unknown>;
-  /** Move deliverables and folders into a folder (null = the top level). Resolves with the card. */
-  moveToFolder: (input: { deliverableIds?: string[]; groupIds?: string[]; targetGroupId: string | null; positions?: NodeLayoutChange[] }) => Promise<CardDetailDTO>;
+  /** Move deliverables, links and folders into a folder (null = the top level). Resolves with the card. */
+  moveToFolder: (input: { deliverableIds?: string[]; linkIds?: string[]; groupIds?: string[]; targetGroupId: string | null; positions?: NodeLayoutChange[] }) => Promise<CardDetailDTO>;
 }
 
 function ConnectDialog({
@@ -507,18 +526,25 @@ function Canvas({
   deliverables,
   folders,
   links,
+  canvasLinks,
   canEdit,
   actions,
   onOpen,
+  focusLinkId,
 }: {
   deliverables: DeliverableDTO[];
   folders: DeliverableGroupDTO[];
   links: DeliverableLinkDTO[];
+  /** Links to other cards (and shared deliverables) placed here. */
+  canvasLinks: CanvasLinkDTO[];
   canEdit: boolean;
   actions: CanvasActions;
   onOpen: (id: string) => void;
+  /** A link just added from outside the canvas: selected and brought into view once it's here. */
+  focusLinkId?: string | null;
 }) {
-  const { card, membersById } = useWorkspace();
+  const { card, membersById, openLinked } = useWorkspace();
+  const linkActions = useLinkActions();
   const flow = useReactFlow();
   // Local layout while dragging/resizing (and until the saved values come back). Positions are
   // absolute canvas coordinates whatever folder a node is in.
@@ -559,7 +585,26 @@ function Canvas({
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [pendingConnection, setPendingConnection] = useState<{ fromId: string; toId: string; fromPoint: string | null; toPoint: string | null } | null>(null);
   const byId = useMemo(() => new Map(deliverables.map((d) => [d.id, d])), [deliverables]);
-  const names = useMemo(() => new Map(deliverables.map((d) => [d.id, d.name])), [deliverables]);
+  const linkById = useMemo(() => new Map(canvasLinks.map((l) => [l.id, l])), [canvasLinks]);
+  /** Everything placed on the canvas (deliverables and links), for geometry, folders and dragging. */
+  const canvasItems = useMemo<CanvasItem[]>(
+    () => [
+      ...deliverables.map((d) => ({ id: d.id, kind: "deliverable" as const, canvasX: d.canvasX, canvasY: d.canvasY, canvasW: d.canvasW, canvasH: d.canvasH, groupId: d.groupId, name: d.name })),
+      ...canvasLinks.map((l) => ({ id: l.id, kind: "link" as const, canvasX: l.canvasX, canvasY: l.canvasY, canvasW: LINK_NODE.w, canvasH: null, groupId: l.groupId, name: linkName(l) })),
+    ],
+    [deliverables, canvasLinks],
+  );
+  const itemById = useMemo(() => new Map(canvasItems.map((i) => [i.id, i])), [canvasItems]);
+  /** Splits node ids into deliverables and links (what the server calls them). */
+  const split = useCallback(
+    (ids: Iterable<string>) => {
+      const out = { deliverableIds: [] as string[], linkIds: [] as string[] };
+      for (const id of ids) (itemById.get(id)?.kind === "link" ? out.linkIds : out.deliverableIds).push(id);
+      return out;
+    },
+    [itemById],
+  );
+  const names = useMemo(() => new Map(canvasItems.map((d) => [d.id, d.name])), [canvasItems]);
   const activeIds = useMemo(() => new Set(deliverables.map((d) => d.id)), [deliverables]);
   const [colorMode] = useState<"light" | "dark">(() => (typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark"));
 
@@ -580,7 +625,7 @@ function Canvas({
       if (!m.size) return m;
       const next = new Map(m);
       for (const [id, p] of m) {
-        const d = byId.get(id);
+        const d = itemById.get(id);
         if (!d || (Math.abs(d.canvasX - p.x) < 1 && Math.abs(d.canvasY - p.y) < 1)) next.delete(id);
       }
       return next.size === m.size ? m : next;
@@ -594,57 +639,61 @@ function Canvas({
       }
       return next.size === m.size ? m : next;
     });
-  }, [byId]);
+  }, [byId, itemById]);
 
   /** The size geometry uses: while resizing, the live size; else saved; else as measured (auto height). */
   const sizeOf = useCallback(
-    (d: DeliverableDTO): Size => {
+    (d: Geo): Size => {
       const live = sizing.get(d.id);
       if (live) return { w: live.w, h: live.h };
       const seen = measured.get(d.id);
-      return { w: d.canvasW ?? NODE_DEFAULT.w, h: d.canvasH ?? (seen ? Math.round(seen.height) : NODE_DEFAULT.h) };
+      const fallback = d.kind === "link" ? LINK_NODE.h : NODE_DEFAULT.h;
+      return { w: d.canvasW ?? NODE_DEFAULT.w, h: d.canvasH ?? (seen ? Math.round(seen.height) : fallback) };
     },
     [sizing, measured],
   );
-  /** Where a deliverable is (absolute): resizing, else dragging, else saved. */
+  /** Where a deliverable or link is (absolute): resizing, else dragging, else saved. */
   const posOf = useCallback(
-    (d: DeliverableDTO): Point => {
+    (d: Geo): Point => {
       const live = sizing.get(d.id);
       if (live) return { x: live.x, y: live.y };
       return moving.get(d.id) ?? { x: d.canvasX, y: d.canvasY };
     },
     [sizing, moving],
   );
-  const groupOf = useCallback((d: DeliverableDTO) => (d.groupId && folderMap.has(d.groupId) ? d.groupId : null), [folderMap]);
+  const groupOf = useCallback((d: { groupId: string | null }) => (d.groupId && folderMap.has(d.groupId) ? d.groupId : null), [folderMap]);
 
   // Folder frames: the box around what's inside each. Frozen for the length of a drag (otherwise a
   // frame would follow the node being dragged out of it, and there'd be no "out").
-  const items = useMemo(() => deliverables.map((d) => ({ id: d.id, groupId: groupOf(d), rect: { ...posOf(d), ...sizeOf(d) } })), [deliverables, groupOf, posOf, sizeOf]);
+  const items = useMemo(() => canvasItems.map((d) => ({ id: d.id, groupId: groupOf(d), rect: { ...posOf(d), ...sizeOf(d) } })), [canvasItems, groupOf, posOf, sizeOf]);
   const liveFrames = useMemo(() => folderFrames(folderList, items), [folderList, items]);
   const [frozenFrames, setFrozenFrames] = useState<Map<string, Rect> | null>(null);
   const frames = frozenFrames ?? liveFrames;
   const framesRef = useRef(frames);
   framesRef.current = frames;
 
-  /** Active deliverables inside each folder, at any depth, and their states. */
+  /** Active deliverables (and links) inside each folder, at any depth, and the deliverables' states. */
   const contents = useMemo(() => {
-    const m = new Map<string, { count: number; states: CardState[] }>();
-    for (const f of folderList) m.set(f.id, { count: 0, states: [] });
-    for (const d of deliverables) {
-      let cursor = groupOf(d);
+    const m = new Map<string, { count: number; states: CardState[]; links: number }>();
+    for (const f of folderList) m.set(f.id, { count: 0, states: [], links: 0 });
+    const climb = (groupId: string | null, add: (entry: { count: number; states: CardState[]; links: number }) => void) => {
+      let cursor = groupId;
       const seen = new Set<string>();
       while (cursor && !seen.has(cursor)) {
         seen.add(cursor);
         const entry = m.get(cursor);
-        if (entry) {
-          entry.count += 1;
-          entry.states.push(d.state);
-        }
+        if (entry) add(entry);
         cursor = folderMap.get(cursor)?.parentId ?? null;
       }
-    }
+    };
+    for (const d of deliverables)
+      climb(groupOf(d), (entry) => {
+        entry.count += 1;
+        entry.states.push(d.state);
+      });
+    for (const l of canvasLinks) climb(groupOf(l), (entry) => (entry.links += 1));
     return m;
-  }, [folderList, deliverables, groupOf, folderMap]);
+  }, [folderList, deliverables, canvasLinks, groupOf, folderMap]);
 
   const [dropTarget, setDropTarget] = useState<DropTarget>(null);
   const dropRef = useRef<DropTarget>(null);
@@ -675,6 +724,15 @@ function Canvas({
     },
     [actions, setCollapsed],
   );
+  const tutorial = useTutorial();
+  /** Follows a link to its card (or shared deliverable); that card explains links under "Linked from". */
+  const openLink = useCallback(
+    (l: CanvasLinkDTO) => {
+      tutorial.trigger("card.links", { afterNavigation: true });
+      openLinked(linkTarget(l));
+    },
+    [openLinked, tutorial],
+  );
 
   const nodes: CanvasNode[] = useMemo(() => {
     const list: CanvasNode[] = [];
@@ -686,7 +744,7 @@ function Canvas({
       const origin = movingFolders.get(f.id) ?? frame;
       const parentFrame = f.parentId ? frames.get(f.parentId) : undefined;
       const nodeId = folderNodeId(f.id);
-      const inside = contents.get(f.id) ?? { count: 0, states: [] };
+      const inside = contents.get(f.id) ?? { count: 0, states: [], links: 0 };
       list.push({
         id: nodeId,
         type: "folder",
@@ -704,12 +762,39 @@ function Canvas({
           collapsed: f.collapsed,
           count: inside.count,
           states: inside.states,
+          links: inside.links,
           selected: selectedIds.has(nodeId),
           canEdit,
           dropping: dropTarget?.kind === "folder" && dropTarget.id === f.id,
           onToggle: toggleFolder,
         } satisfies FolderNodeData,
-        ariaLabel: `Folder ${f.name}, ${folderSummary(inside.count, inside.states)}${f.collapsed ? ", collapsed" : ""}`,
+        ariaLabel: `Folder ${f.name}, ${folderSummary(inside.count, inside.states, inside.links)}${f.collapsed ? ", collapsed" : ""}`,
+      });
+    }
+    for (const l of canvasLinks) {
+      const abs = posOf(itemById.get(l.id)!);
+      const parent = groupOf(l);
+      const parentFrame = parent ? frames.get(parent) : undefined;
+      list.push({
+        id: l.id,
+        type: "link",
+        position: { x: abs.x - (parentFrame?.x ?? 0), y: abs.y - (parentFrame?.y ?? 0) },
+        width: LINK_NODE.w,
+        measured: measured.get(l.id),
+        parentId: parentFrame && parent ? folderNodeId(parent) : undefined,
+        hidden: visibleFolderOf(folderMap, parent) !== null,
+        zIndex: 1,
+        selected: selectedIds.has(l.id),
+        data: {
+          link: l,
+          boardId: card.boardId,
+          selected: selectedIds.has(l.id),
+          dropping: dropTarget?.kind === "deliverable" && dropTarget.id === l.id,
+          onOpen: openLink,
+        } satisfies LinkNodeData,
+        draggable: canEdit,
+        connectable: false,
+        ariaLabel: l.deliverable ? `Shared deliverable ${l.deliverable.name} from ${l.card.key}, ${CARD_STATE_META[l.deliverable.state].label}` : `Linked card ${l.card.key} ${l.card.title}, ${CARD_STATE_META[l.card.state].label}`,
       });
     }
     for (const d of deliverables) {
@@ -739,6 +824,7 @@ function Canvas({
           fixedHeight: fixed,
           points: availablePoints(size),
           dropping: dropTarget?.kind === "deliverable" && dropTarget.id === d.id,
+          sharedWith: sharedWith(card.linkedFrom, d.id).length,
           onOpen,
           onResize: (id, p) => onResize(id, p, parent),
           onResizeEnd: (id, p) => onResizeEnd(id, p, parent),
@@ -749,7 +835,7 @@ function Canvas({
       });
     }
     return list;
-  }, [folderList, folderMap, frames, movingFolders, contents, selectedIds, canEdit, dropTarget, toggleFolder, deliverables, sizing, measured, names, membersById, onOpen, onResize, onResizeEnd, sizeOf, posOf, groupOf]);
+  }, [folderList, folderMap, frames, movingFolders, contents, selectedIds, canEdit, dropTarget, toggleFolder, deliverables, canvasLinks, itemById, card.boardId, card.linkedFrom, openLink, sizing, measured, names, membersById, onOpen, onResize, onResizeEnd, sizeOf, posOf, groupOf]);
 
   /** The node an arrow end attaches to: the deliverable, or the collapsed folder standing in for it. */
   const endpoint = useCallback(
@@ -790,10 +876,14 @@ function Canvas({
   );
 
   // The arrow points from where the drag started to where it ended (prerequisite → dependant).
-  const onConnect = useCallback((c: Connection) => {
-    if (!c.source || !c.target || c.source === c.target || isFolderNode(c.source) || isFolderNode(c.target)) return;
-    setPendingConnection({ fromId: c.source, toId: c.target, fromPoint: c.sourceHandle ?? null, toPoint: c.targetHandle ?? null });
-  }, []);
+  // Only deliverables connect (folders and links have no arrows of their own).
+  const onConnect = useCallback(
+    (c: Connection) => {
+      if (!c.source || !c.target || c.source === c.target || !byId.has(c.source) || !byId.has(c.target)) return;
+      setPendingConnection({ fromId: c.source, toId: c.target, fromPoint: c.sourceHandle ?? null, toPoint: c.targetHandle ?? null });
+    },
+    [byId],
+  );
 
   // Dragging an arrow end to another point of the same deliverable only moves where it attaches.
   const onReconnect = useCallback(
@@ -854,7 +944,7 @@ function Canvas({
     }));
     if (plan.newFolder) foldersH.push({ id: NEW_FOLDER_ID, parentId: plan.newFolder.parentId, collapsed: false });
     const byIdH = foldersById(foldersH);
-    const itemsH = deliverables.map((d) => {
+    const itemsH = canvasItems.map((d) => {
       const at = plan.positions.get(d.id) ?? posOf(d);
       return { id: d.id, groupId: plan.parentOf.has(d.id) ? plan.parentOf.get(d.id)! : groupOf(d), rect: { ...at, ...sizeOf(d) } };
     });
@@ -872,7 +962,7 @@ function Canvas({
   const shiftItems = (plan: Plan, ids: Iterable<string>, dx: number, dy: number) => {
     if (!dx && !dy) return;
     for (const id of ids) {
-      const d = byId.get(id);
+      const d = itemById.get(id);
       if (!d) continue;
       const p = plan.positions.get(id) ?? posOf(d);
       plan.positions.set(id, { x: p.x + dx, y: p.y + dy });
@@ -895,11 +985,12 @@ function Canvas({
   };
 
   /**
-   * Plans a move of deliverables and folders into `target` (or into a new folder there with
-   * `newFolder`). `place` are the ones to position (default: all of them): packed together when
-   * `pack`, then put at `start` — when left out, beside the destination's contents (or where they
-   * are, when leaving for the top level); `null` keeps them where they are — or the nearest clear spot. Returns the deliverables that
-   * end up somewhere new, and where they were.
+   * Plans a move of deliverables (and links: `deliverableIds` are any placed items) and folders
+   * into `target` (or into a new folder there with `newFolder`). `place` are the ones to position
+   * (default: all of them): packed together when `pack`, then put at `start` — when left out,
+   * beside the destination's contents (or where they are, when leaving for the top level); `null`
+   * keeps them where they are — or the nearest clear spot. Returns the items that end up somewhere
+   * new, and where they were.
    */
   const planMove = (opts: {
     deliverableIds: string[];
@@ -969,7 +1060,7 @@ function Canvas({
     const positions = new Map<string, Point>();
     const before = new Map<string, Point>();
     for (const [id, p] of plan.positions) {
-      const d = byId.get(id);
+      const d = itemById.get(id);
       if (!d) continue;
       const was = posOf(d);
       if (Math.abs(was.x - p.x) > 0.5 || Math.abs(was.y - p.y) > 0.5) {
@@ -1001,14 +1092,14 @@ function Canvas({
           for (const id of desc.folderIds) excluded.add(id);
           for (const id of desc.itemIds) {
             excluded.add(id);
-            const d = byId.get(id);
+            const d = itemById.get(id);
             if (d) start.set(id, posOf(d));
           }
           const frame = frames.get(fid);
           if (frame) start.set(n.id, { x: frame.x, y: frame.y });
         } else {
           excluded.add(n.id);
-          const d = byId.get(n.id);
+          const d = itemById.get(n.id);
           if (d) start.set(n.id, posOf(d));
         }
       }
@@ -1019,7 +1110,7 @@ function Canvas({
       session.current = { frames, candidates, excluded, start, descendantItems };
       setFrozenFrames(frames);
     },
-    [folderList, items, byId, posOf, frames, folderMap],
+    [folderList, items, itemById, posOf, frames, folderMap],
   );
 
   const onNodeDrag = useCallback(
@@ -1056,11 +1147,11 @@ function Canvas({
       commitPositions(snapshot.positions);
       const positions = layoutOf(snapshot.positions);
       // Back to each one's previous folder (a folder removed since then means the top level).
-      const byParent = new Map<string | null, { deliverableIds: string[]; groupIds: string[] }>();
+      const byParent = new Map<string | null, { deliverableIds: string[]; linkIds: string[]; groupIds: string[] }>();
       for (const p of snapshot.parents) {
         const parent = p.parent && foldersRef.current.has(p.parent) ? p.parent : null;
-        const entry = byParent.get(parent) ?? { deliverableIds: [], groupIds: [] };
-        (p.kind === "folder" ? entry.groupIds : entry.deliverableIds).push(p.id);
+        const entry = byParent.get(parent) ?? { deliverableIds: [], linkIds: [], groupIds: [] };
+        (p.kind === "folder" ? entry.groupIds : p.kind === "link" ? entry.linkIds : entry.deliverableIds).push(p.id);
         byParent.set(parent, entry);
       }
       let chain: Promise<unknown> = Promise.resolve();
@@ -1086,11 +1177,11 @@ function Canvas({
   };
   const draggedNames = (dragged: Dragged[]) => dragged.map((d) => (d.kind === "folder" ? folderMap.get(d.id)?.name : names.get(d.id)) ?? "?");
 
-  /** Dropped onto a deliverable: a new folder (in that deliverable's folder) around it and what was dragged. */
+  /** Dropped onto a deliverable (or link): a new folder (in that one's folder) around it and what was dragged. */
   const groupOnto = (s: DragSession, targetId: string, dragged: Dragged[], finalPos: Map<string, Point>) => {
-    const target = byId.get(targetId);
+    const target = itemById.get(targetId);
     if (!target) return;
-    const draggedIds = dragged.filter((d) => d.kind === "deliverable").map((d) => d.id);
+    const draggedIds = dragged.filter((d) => d.kind !== "folder").map((d) => d.id);
     const groupIds = dragged.filter((d) => d.kind === "folder").map((d) => d.id);
     const deliverableIds = [targetId, ...draggedIds];
     // Beside the target rather than on top of it, clear of everything else; the new folder then
@@ -1111,7 +1202,7 @@ function Canvas({
     commitPositions(nudged);
     const name = nameFor(deliverableIds.map((id) => byId.get(id)).filter((d): d is DeliverableDTO => Boolean(d)), groupOf(target));
     actions
-      .createFolder({ name, parentId: groupOf(target), deliverableIds, groupIds, positions: layoutOf(nudged) })
+      .createFolder({ name, parentId: groupOf(target), ...split(deliverableIds), groupIds, positions: layoutOf(nudged) })
       .then((detail) => {
         const created = detail.deliverableGroups.find((g) => !folderMap.has(g.id));
         if (created) setSelectedIds(new Set([folderNodeId(created.id)]));
@@ -1131,19 +1222,19 @@ function Canvas({
 
   /** Dropped into a folder, or out of one onto the open canvas. */
   const moveDragged = (s: DragSession, target: string | null, dragged: Dragged[], dropped: Map<string, Point>) => {
-    const deliverableIds = dragged.filter((d) => d.kind === "deliverable").map((d) => d.id);
+    const deliverableIds = dragged.filter((d) => d.kind !== "folder").map((d) => d.id);
     const groupIds = dragged.filter((d) => d.kind === "folder").map((d) => d.id);
     // Where it was dropped, unless that covers something: then the nearest clear spot.
     const { positions: planned } = planMove({ deliverableIds, groupIds, target, positions: dropped, start: null });
     const finalPos = new Map([...dropped, ...planned]);
     const before = snapshotOf(s, dragged, finalPos.keys());
-    for (const id of planned.keys()) if (!before.positions.has(id)) before.positions.set(id, posOf(byId.get(id)!));
+    for (const id of planned.keys()) if (!before.positions.has(id)) before.positions.set(id, posOf(itemById.get(id)!));
     commitPositions(finalPos);
     const fromIds = new Set(dragged.map((d) => d.parent));
     const from = fromIds.size === 1 ? [...fromIds][0]! : null;
     const fromName = from ? folderMap.get(from)?.name : null;
     actions
-      .moveToFolder({ deliverableIds, groupIds, targetGroupId: target, positions: layoutOf(finalPos) })
+      .moveToFolder({ ...split(deliverableIds), groupIds, targetGroupId: target, positions: layoutOf(finalPos) })
       .then((detail) => {
         const removed = from && !detail.deliverableGroups.some((g) => g.id === from) ? fromName : null;
         const what = describe(draggedNames(dragged));
@@ -1180,8 +1271,8 @@ function Canvas({
           top.push({ kind: "folder", id: fid, parent: folderMap.get(fid)?.parentId ?? null, abs });
         } else {
           finalPos.set(n.id, abs);
-          const d = byId.get(n.id);
-          top.push({ kind: "deliverable", id: n.id, parent: d ? groupOf(d) : null, abs });
+          const d = itemById.get(n.id);
+          top.push({ kind: d?.kind ?? "deliverable", id: n.id, parent: d ? groupOf(d) : null, abs });
         }
       }
       const moved = [...finalPos].some(([id, p]) => {
@@ -1208,7 +1299,7 @@ function Canvas({
       if (canEdit && parents.size === 1) {
         const parent = [...parents][0]!;
         const { positions: planned } = planMove({
-          deliverableIds: top.filter((t) => t.kind === "deliverable").map((t) => t.id),
+          deliverableIds: top.filter((t) => t.kind !== "folder").map((t) => t.id),
           groupIds: top.filter((t) => t.kind === "folder").map((t) => t.id),
           target: parent,
           positions: finalPos,
@@ -1221,14 +1312,17 @@ function Canvas({
     },
     // groupOnto and moveDragged read the latest folders and names; they're rebuilt with this handler.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [absOf, folderMap, byId, groupOf, toFlow, canEdit, commitPositions, actions, names, posOf, sizeOf, restore],
+    [absOf, folderMap, byId, itemById, split, groupOf, toFlow, canEdit, commitPositions, actions, names, posOf, sizeOf, restore],
   );
 
   // ── Selection, folders without dragging, the context menu ──────────────────
 
   const selectedFolders = useMemo(() => [...selectedIds].filter(isFolderNode).map(folderIdOf).filter((id) => folderMap.has(id)), [selectedIds, folderMap]);
   const selectedDeliverables = useMemo(() => [...selectedIds].filter((id) => !isFolderNode(id) && byId.has(id)), [selectedIds, byId]);
-  const selectedCount = selectedFolders.length + selectedDeliverables.length;
+  const selectedLinks = useMemo(() => [...selectedIds].filter((id) => linkById.has(id)), [selectedIds, linkById]);
+  /** Selected deliverables and links: the things placed on the canvas. */
+  const selectedItems = useMemo(() => [...selectedDeliverables, ...selectedLinks], [selectedDeliverables, selectedLinks]);
+  const selectedCount = selectedFolders.length + selectedItems.length;
 
   const [renameKey, setRenameKey] = useState(0);
   const selectFolder = (id: string | undefined, rename = false) => {
@@ -1241,18 +1335,18 @@ function Canvas({
   /** A folder around whatever's selected (in their shared folder, else at the top level). */
   const groupSelection = () => {
     if (!canEdit || !selectedCount) return;
-    const parents = new Set<string | null>([...selectedDeliverables.map((id) => groupOf(byId.get(id)!)), ...selectedFolders.map((id) => folderMap.get(id)!.parentId)]);
+    const parents = new Set<string | null>([...selectedItems.map((id) => groupOf(itemById.get(id)!)), ...selectedFolders.map((id) => folderMap.get(id)!.parentId)]);
     const parentId = parents.size === 1 ? [...parents][0]! : null;
     // Folders already inside another selected folder travel with it.
     const groupIds = selectedFolders.filter((id) => !selectedFolders.some((other) => other !== id && folderAncestors(folderMap, id).includes(other)));
-    const deliverableIds = selectedDeliverables.filter((id) => !groupIds.some((g) => folderDescendants(folderList, items, g).itemIds.includes(id)));
+    const itemIds = selectedItems.filter((id) => !groupIds.some((g) => folderDescendants(folderList, items, g).itemIds.includes(id)));
     const name = nameFor(selectedDeliverables.map((id) => byId.get(id)!), parentId);
-    const what = describe([...deliverableIds.map((id) => names.get(id) ?? "?"), ...groupIds.map((id) => folderMap.get(id)?.name ?? "?")]);
+    const what = describe([...itemIds.map((id) => names.get(id) ?? "?"), ...groupIds.map((id) => folderMap.get(id)?.name ?? "?")]);
     // Gathered together where the selection starts, so the folder holds exactly what's in it.
-    const { positions, before } = planMove({ deliverableIds, groupIds, target: parentId, newFolder: true, pack: true });
+    const { positions, before } = planMove({ deliverableIds: itemIds, groupIds, target: parentId, newFolder: true, pack: true });
     commitPositions(positions);
     actions
-      .createFolder({ name, parentId, deliverableIds, groupIds, positions: layoutOf(positions) })
+      .createFolder({ name, parentId, ...split(itemIds), groupIds, positions: layoutOf(positions) })
       .then((detail) => {
         const created = detail.deliverableGroups.find((g) => !folderMap.has(g.id));
         selectFolder(created?.id);
@@ -1274,13 +1368,13 @@ function Canvas({
       })
       .catch(() => commitPositions(before));
   };
-  /** A new folder around one deliverable, where it is. */
-  const folderAround = (d: DeliverableDTO) => {
-    const name = nameFor([d], groupOf(d));
+  /** A new folder around one deliverable (or link), where it is. */
+  const folderAround = (d: { id: string; name: string; groupId: string | null }) => {
+    const name = nameFor(byId.has(d.id) ? [byId.get(d.id)!] : [], groupOf(d));
     const { positions } = planMove({ deliverableIds: [d.id], groupIds: [], target: groupOf(d), newFolder: true, place: { deliverableIds: [], groupIds: [] } });
     commitPositions(positions);
     actions
-      .createFolder({ name, parentId: groupOf(d), deliverableIds: [d.id], positions: layoutOf(positions) })
+      .createFolder({ name, parentId: groupOf(d), ...split([d.id]), positions: layoutOf(positions) })
       .then((detail) => {
         const created = detail.deliverableGroups.find((g) => !folderMap.has(g.id));
         selectFolder(created?.id, true);
@@ -1288,12 +1382,13 @@ function Canvas({
       })
       .catch(() => {});
   };
-  const moveOne = (item: { kind: "deliverable" | "folder"; id: string; name: string; parent: string | null }, target: string | null) => {
+  const moveOne = (item: { kind: "deliverable" | "link" | "folder"; id: string; name: string; parent: string | null }, target: string | null) => {
     if (target === item.parent) return;
     const fromName = item.parent ? folderMap.get(item.parent)?.name : null;
-    const ids = { deliverableIds: item.kind === "deliverable" ? [item.id] : [], groupIds: item.kind === "folder" ? [item.id] : [] };
+    const placed = { deliverableIds: item.kind !== "folder" ? [item.id] : [], groupIds: item.kind === "folder" ? [item.id] : [] };
+    const ids = { ...split(placed.deliverableIds), groupIds: placed.groupIds };
     // Next to what's already in the folder (or just outside the one it leaves), never on top of anything.
-    const { positions, before } = planMove({ ...ids, target });
+    const { positions, before } = planMove({ ...placed, target });
     commitPositions(positions);
     actions
       .moveToFolder({ ...ids, targetGroupId: target, positions: layoutOf(positions) })
@@ -1313,13 +1408,13 @@ function Canvas({
       })
       .catch(() => commitPositions(before));
   };
-  /** Several at once into a folder (or the top level), packed together beside what's there. */
-  const moveMany = (deliverableIds: string[], groupIds: string[], target: string | null) => {
+  /** Several at once (deliverables, links, folders) into a folder (or the top level), packed together beside what's there. */
+  const moveMany = (itemIds: string[], groupIds: string[], target: string | null) => {
     const okGroups = groupIds.filter((id) => !target || !folderContains(folderMap, id, target));
-    if (!deliverableIds.length && !okGroups.length) return Promise.resolve();
-    const { positions, before } = planMove({ deliverableIds, groupIds: okGroups, target, pack: true });
+    if (!itemIds.length && !okGroups.length) return Promise.resolve();
+    const { positions, before } = planMove({ deliverableIds: itemIds, groupIds: okGroups, target, pack: true });
     commitPositions(positions);
-    return actions.moveToFolder({ deliverableIds, groupIds: okGroups, targetGroupId: target, positions: layoutOf(positions) }).catch((e) => {
+    return actions.moveToFolder({ ...split(itemIds), groupIds: okGroups, targetGroupId: target, positions: layoutOf(positions) }).catch((e) => {
       commitPositions(before);
       throw e;
     });
@@ -1343,7 +1438,7 @@ function Canvas({
     const positions = new Map<string, Point>();
     const before = new Map<string, Point>();
     for (const [id, p] of plan.positions) {
-      const d = byId.get(id);
+      const d = itemById.get(id);
       if (!d) continue;
       const was = posOf(d);
       if (Math.abs(was.x - p.x) > 0.5 || Math.abs(was.y - p.y) > 0.5) {
@@ -1385,10 +1480,10 @@ function Canvas({
   const ungroupSelection = () => {
     if (!canEdit) return;
     for (const id of selectedFolders) ungroupFolder(folderMap.get(id)!);
-    for (const id of selectedDeliverables) {
-      const d = byId.get(id)!;
+    for (const id of selectedItems) {
+      const d = itemById.get(id)!;
       const parent = groupOf(d);
-      if (parent) moveOne({ kind: "deliverable", id, name: d.name, parent }, folderMap.get(parent)?.parentId ?? null);
+      if (parent) moveOne({ kind: d.kind, id, name: d.name, parent }, folderMap.get(parent)?.parentId ?? null);
     }
   };
 
@@ -1416,7 +1511,33 @@ function Canvas({
   const selected = selectedEdge ? links.find((l) => l.id === selectedEdge) : null;
   const selectedDeliverable = selectedCount === 1 && selectedDeliverables[0] ? byId.get(selectedDeliverables[0]) : null;
   const selectedFolder = selectedCount === 1 && selectedFolders[0] ? folderMap.get(selectedFolders[0]) : null;
+  const selectedLink = selectedCount === 1 && selectedLinks[0] ? linkById.get(selectedLinks[0]) : null;
   const [archiving, setArchiving] = useState<DeliverableDTO | null>(null);
+
+  /** A clear spot beside a link (in its folder), for a deliverable shared from the card it links. */
+  const spotBeside = (l: CanvasLinkDTO): Point => {
+    const w = world({ positions: new Map(), parentOf: new Map(), folderParent: new Map() });
+    const at = posOf(itemById.get(l.id)!);
+    const parent = groupOf(l);
+    const around = new Set(parent ? [parent, ...folderAncestors(folderMap, parent)] : []);
+    const spot = freeSpot({ x: at.x + LINK_NODE.w + LAYOUT_GAP, y: at.y, ...LINK_NODE }, obstaclesIn(w, new Set(), new Set(), around));
+    return { x: Math.round(spot.x), y: Math.round(spot.y) };
+  };
+  const shareFrom = (l: CanvasLinkDTO, deliverable: CanvasLinkDTO["card"]["deliverables"][number]) => {
+    const at = spotBeside(l);
+    void linkActions
+      .add({ targetCardId: l.card.id, targetDeliverableId: deliverable.id, groupId: groupOf(l), ...at }, `${quote(deliverable.name)} from ${l.card.key}`)
+      .then((made) => made && setSelectedIds(new Set([made.id])))
+      .catch(() => {});
+  };
+  const removeLink = (l: CanvasLinkDTO) => {
+    setSelectedIds((s) => {
+      const next = new Set(s);
+      next.delete(l.id);
+      return next;
+    });
+    void linkActions.remove(l).catch(() => {});
+  };
   const [archivePending, setArchivePending] = useState(false);
   const confirmArchive = () => {
     const d = archiving;
@@ -1445,13 +1566,13 @@ function Canvas({
     requestAnimationFrame(() => void flow.fitView({ padding: 0.25, maxZoom: 1.1 }));
   }, [deliverables.length, flow]);
 
-  // Bring newly added deliverables into view if they landed outside the visible area.
+  // Bring newly added deliverables and links into view if they landed outside the visible area.
   const knownIds = useRef<Set<string> | null>(null);
   useEffect(() => {
     const previous = knownIds.current;
-    knownIds.current = new Set(deliverables.map((d) => d.id));
+    knownIds.current = new Set(canvasItems.map((d) => d.id));
     if (!previous || !wrapper.current) return;
-    const added = deliverables.filter((d) => !previous.has(d.id));
+    const added = canvasItems.filter((d) => !previous.has(d.id));
     if (!added.length) return;
     const { x, y, zoom } = flow.getViewport();
     const { width, height } = wrapper.current.getBoundingClientRect();
@@ -1462,7 +1583,16 @@ function Canvas({
       return left < 0 || top < 0 || left + s.w * zoom > width || top + s.h * zoom > height;
     });
     if (hidden) requestAnimationFrame(() => void flow.fitView({ padding: 0.25, maxZoom: 1.1, duration: 300 }));
-  }, [deliverables, flow, sizeOf]);
+  }, [canvasItems, flow, sizeOf]);
+
+  // A link just added from the header: select it (its panel offers "needed", sharing, folders).
+  const focused = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusLinkId || focused.current === focusLinkId || !linkById.has(focusLinkId)) return;
+    focused.current = focusLinkId;
+    setSelectedIds(new Set([focusLinkId]));
+    setSelectedEdge(null);
+  }, [focusLinkId, linkById]);
 
   /** Size controls (no dragging needed): grow/shrink by a step, or back to the default size. */
   const resizeBy = (d: DeliverableDTO, dw: number, dh: number) => {
@@ -1481,7 +1611,7 @@ function Canvas({
     void actions.layout([{ id: d.id, w: null, h: null }]);
   };
 
-  const menuNode = menu ? (isFolderNode(menu.nodeId) ? { folder: folderMap.get(folderIdOf(menu.nodeId)) } : { deliverable: byId.get(menu.nodeId) }) : null;
+  const menuNode = menu ? (isFolderNode(menu.nodeId) ? { folder: folderMap.get(folderIdOf(menu.nodeId)) } : linkById.has(menu.nodeId) ? { link: linkById.get(menu.nodeId) } : { deliverable: byId.get(menu.nodeId) }) : null;
   const menuTargets = (except?: string | null) => folderChoices(folderList, folderMap, except);
 
   return (
@@ -1514,7 +1644,7 @@ function Canvas({
         onConnectEnd={() => setConnecting(false)}
         onMoveEnd={(_, viewport) => savedViewports.set(card.id, viewport)}
         onNodeClick={() => setSelectedEdge(null)}
-        onNodeDoubleClick={(_, node) => !isFolderNode(node.id) && onOpen(node.id)}
+        onNodeDoubleClick={(_, node) => byId.has(node.id) && onOpen(node.id)}
         onNodeContextMenu={(event, node) => openMenu(event, node.id)}
         onEdgeClick={(_, edge) => {
           setSelectedEdge(edge.id);
@@ -1528,11 +1658,22 @@ function Canvas({
         onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
         onConnect={onConnect}
-        isValidConnection={(c) => c.source !== c.target && !isFolderNode(c.source ?? "") && !isFolderNode(c.target ?? "")}
+        isValidConnection={(c) => c.source !== c.target && byId.has(c.source ?? "") && byId.has(c.target ?? "")}
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
         <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap pannable zoomable className="!hidden md:!block [@media(max-height:600px)]:!hidden" nodeColor={(n) => (n.type === "folder" ? ((n.data as FolderNodeData).folder.color ?? "var(--border-strong)") : CARD_STATE_META[(n.data as DeliverableNodeData).deliverable.state].color)} />
+        <MiniMap
+          pannable
+          zoomable
+          className="!hidden md:!block [@media(max-height:600px)]:!hidden"
+          nodeColor={(n) =>
+            n.type === "folder"
+              ? ((n.data as FolderNodeData).folder.color ?? "var(--border-strong)")
+              : n.type === "link"
+                ? "var(--fg-subtle)"
+                : CARD_STATE_META[(n.data as DeliverableNodeData).deliverable.state].color
+          }
+        />
         <Panel position="top-left" className="!m-2 rounded-md border border-border bg-surface-2/90 px-2 py-1 text-[11px] text-fg-muted backdrop-blur">
           <span className="inline-flex items-center gap-1">
             <span className="inline-block h-0.5 w-5 bg-state-review" /> requires (arrow → dependant)
@@ -1610,6 +1751,54 @@ function Canvas({
                         <DropdownMenuSeparator />
                         <DropdownMenuItem disabled={deliverables.length <= 1} onSelect={() => setArchiving(d)}>
                           <Archive /> Archive
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                  </>
+                );
+              })()
+            ) : menuNode && "link" in menuNode && menuNode.link ? (
+              (() => {
+                const l = menuNode.link;
+                const parent = groupOf(l);
+                const name = linkName(l);
+                return (
+                  <>
+                    <DropdownMenuItem onSelect={() => openLink(l)}>
+                      <ArrowRight /> Open {l.deliverable ? `on ${l.card.key}` : l.card.key}
+                    </DropdownMenuItem>
+                    {canEdit ? (
+                      <>
+                        {l.deliverable ? (
+                          <DropdownMenuItem onSelect={() => linkActions.setNeeded(l, !l.needed)}>
+                            <Lock /> {l.needed ? "Don't wait for it" : "Needed to complete this card"}
+                          </DropdownMenuItem>
+                        ) : null}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuNested
+                          label={
+                            <>
+                              <FolderInput /> Move to folder
+                            </>
+                          }
+                        >
+                          <DropdownMenuItem disabled={!parent} onSelect={() => moveOne({ kind: "link", id: l.id, name, parent }, null)}>
+                            No folder (top level)
+                          </DropdownMenuItem>
+                          {menuTargets().map((c) => (
+                            <DropdownMenuItem key={c.value} disabled={c.value === parent} onSelect={() => moveOne({ kind: "link", id: l.id, name, parent }, c.value)}>
+                              <span style={{ paddingLeft: c.depth * 10 }}>{folderMap.get(c.value)?.name}</span>
+                              {c.value === parent ? <Check className="ml-auto !text-accent" /> : null}
+                            </DropdownMenuItem>
+                          ))}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onSelect={() => folderAround(itemById.get(l.id)!)}>
+                            <FolderPlus /> New folder around it
+                          </DropdownMenuItem>
+                        </DropdownMenuNested>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onSelect={() => removeLink(l)}>
+                          <Trash2 /> {l.deliverable ? "Stop sharing here" : "Remove link"}
                         </DropdownMenuItem>
                       </>
                     ) : null}
@@ -1753,7 +1942,11 @@ function Canvas({
             <PanelClose onClick={() => setSelectedIds(new Set())} />
           </div>
           <p className="mt-0.5 text-[12px] text-fg-muted">
-            {[selectedDeliverables.length ? `${selectedDeliverables.length} deliverable${selectedDeliverables.length === 1 ? "" : "s"}` : null, selectedFolders.length ? `${selectedFolders.length} folder${selectedFolders.length === 1 ? "" : "s"}` : null]
+            {[
+              selectedDeliverables.length ? `${selectedDeliverables.length} deliverable${selectedDeliverables.length === 1 ? "" : "s"}` : null,
+              selectedLinks.length ? `${selectedLinks.length} link${selectedLinks.length === 1 ? "" : "s"}` : null,
+              selectedFolders.length ? `${selectedFolders.length} folder${selectedFolders.length === 1 ? "" : "s"}` : null,
+            ]
               .filter(Boolean)
               .join(" · ")}
           </p>
@@ -1771,7 +1964,7 @@ function Canvas({
                   label="Move selection to folder"
                   onChange={(target) => {
                     if (target === NEW_FOLDER) return;
-                    moveMany(selectedDeliverables, selectedFolders, target)
+                    moveMany(selectedItems, selectedFolders, target)
                       .then(() => toast.success(target ? `Moved ${selectedCount} items into ${quote(folderMap.get(target)?.name ?? "folder")}.` : `Moved ${selectedCount} items to the top level.`))
                       .catch(() => {});
                   }}
@@ -1787,7 +1980,7 @@ function Canvas({
             <SummaryName key={selectedFolder.id} name={selectedFolder.name} label="Folder name" maxLength={60} canEdit={canEdit} editKey={renameKey} onRename={(name) => void actions.updateFolder(selectedFolder.id, { name })} />
             <PanelClose onClick={() => setSelectedIds(new Set())} />
           </div>
-          <p className="mt-0.5 text-[12px] text-fg-muted">{folderSummary(contents.get(selectedFolder.id)?.count ?? 0, contents.get(selectedFolder.id)?.states ?? [])}</p>
+          <p className="mt-0.5 text-[12px] text-fg-muted">{folderSummary(contents.get(selectedFolder.id)?.count ?? 0, contents.get(selectedFolder.id)?.states ?? [], contents.get(selectedFolder.id)?.links ?? 0)}</p>
           {selectedFolder.parentId ? (
             <p className="mt-1 flex items-center gap-1 text-[12px] text-fg-muted">
               Inside <FolderBreadcrumb folders={folderMap} folderId={selectedFolder.parentId} className="text-[12px]" />
@@ -1827,6 +2020,22 @@ function Canvas({
             </>
           ) : null}
         </div>
+      ) : selectedLink ? (
+        <LinkPanel
+          key={selectedLink.id}
+          link={selectedLink}
+          boardId={card.boardId}
+          canEdit={canEdit}
+          folders={folderList}
+          folderMap={folderMap}
+          sharedIds={new Set(canvasLinks.flatMap((l) => (l.deliverable ? [l.deliverable.id] : [])))}
+          onOpen={() => openLink(selectedLink)}
+          onClose={() => setSelectedIds(new Set())}
+          onMove={(target) => moveOne({ kind: "link", id: selectedLink.id, name: linkName(selectedLink), parent: groupOf(selectedLink) }, target)}
+          onNewFolder={() => folderAround(itemById.get(selectedLink.id)!)}
+          onShare={(deliverable) => shareFrom(selectedLink, deliverable)}
+          onRemove={() => removeLink(selectedLink)}
+        />
       ) : selectedDeliverable ? (
         <div className={PANEL} role="dialog" aria-label="Deliverable summary">
           <div className="flex items-start gap-2">
@@ -1838,7 +2047,7 @@ function Canvas({
             {selectedDeliverable.blockedBy.length ? ` · waiting on ${selectedDeliverable.blockedBy.map((id) => names.get(id)).join(", ")}` : ""}
           </p>
           {selectedDeliverable.description.trim() ? (
-            <p className="mt-1.5 line-clamp-4 whitespace-pre-wrap break-words text-[12px] text-fg-muted">{selectedDeliverable.description}</p>
+            <p className="mt-1.5 line-clamp-4 whitespace-pre-wrap break-words text-[12px] text-fg-muted">{plainDescription(selectedDeliverable.description)}</p>
           ) : null}
           {canEdit ? (
             <div className="mt-2">
@@ -1957,7 +2166,16 @@ function Canvas({
   );
 }
 
-export default function DeliverableCanvas(props: { deliverables: DeliverableDTO[]; folders: DeliverableGroupDTO[]; links: DeliverableLinkDTO[]; canEdit: boolean; actions: CanvasActions; onOpen: (id: string) => void }) {
+export default function DeliverableCanvas(props: {
+  deliverables: DeliverableDTO[];
+  folders: DeliverableGroupDTO[];
+  links: DeliverableLinkDTO[];
+  canvasLinks: CanvasLinkDTO[];
+  canEdit: boolean;
+  actions: CanvasActions;
+  onOpen: (id: string) => void;
+  focusLinkId?: string | null;
+}) {
   return (
     <ReactFlowProvider>
       <Canvas {...props} />

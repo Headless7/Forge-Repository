@@ -21,6 +21,7 @@ import {
   attachments,
   boardColumns,
   boards,
+  canvasLinks,
   cards,
   comments,
   deliverables,
@@ -31,6 +32,7 @@ import {
 import { AppError, forbidden, invalid } from "../errors";
 import { storage } from "../storage";
 import { audit } from "./activity";
+import { noteLinksToDeleted } from "./canvas-links";
 import type { Actor } from "./context";
 import { recomputeCardRollup, recomputeDeliverableCover } from "./deliverables";
 import { Effects } from "./effects";
@@ -86,10 +88,11 @@ export interface PurgeScope {
   eligible: boolean;
   reason?: string;
   files: AttachmentFiles[];
-  counts: { cards: number; deliverables: number; revisions: number; files: number; comments: number };
+  /** `links`: links from cards that stay, pointing at what would go (they're removed with it). */
+  counts: { cards: number; deliverables: number; revisions: number; files: number; comments: number; links: number };
 }
 
-const NONE = { cards: 0, deliverables: 0, revisions: 0, files: 0, comments: 0 };
+const NONE = { cards: 0, deliverables: 0, revisions: 0, files: 0, comments: 0, links: 0 };
 const missing = (target: PurgeTarget): PurgeScope => ({ target, label: "Already deleted", projectId: null, parents: {}, eligible: false, reason: "Already deleted", files: [], counts: { ...NONE } });
 
 async function contentAccess(actor: Actor, projectId: string, ex: Executor): Promise<{ access: ProjectAccess | null; denied?: string }> {
@@ -112,14 +115,22 @@ async function sharedResources(ex: Executor, attachmentIds: string[]): Promise<n
 async function countRows(ex: Executor, cardIds: string[], deliverableIds?: string[]) {
   const byCard = cardIds.length ? inArray(deliverables.cardId, cardIds) : undefined;
   const scope = deliverableIds ? (deliverableIds.length ? inArray(deliverables.id, deliverableIds) : sql`false`) : byCard ?? sql`false`;
-  const [[d], [v], [c]] = await Promise.all([
+  const linksTo = deliverableIds
+    ? deliverableIds.length
+      ? inArray(canvasLinks.targetDeliverableId, deliverableIds)
+      : sql`false`
+    : cardIds.length
+      ? and(inArray(canvasLinks.targetCardId, cardIds), notInArray(canvasLinks.cardId, cardIds))
+      : sql`false`;
+  const [[d], [v], [c], [l]] = await Promise.all([
     ex.select({ n: count() }).from(deliverables).where(scope),
     ex.select({ n: count() }).from(assetVersions).innerJoin(deliverables, eq(deliverables.id, assetVersions.deliverableId)).where(scope),
     deliverableIds
       ? ex.select({ n: count() }).from(comments).where(deliverableIds.length ? inArray(comments.deliverableId, deliverableIds) : sql`false`)
       : ex.select({ n: count() }).from(comments).where(cardIds.length ? inArray(comments.cardId, cardIds) : sql`false`),
+    ex.select({ n: count() }).from(canvasLinks).where(linksTo),
   ]);
-  return { deliverables: d?.n ?? 0, revisions: v?.n ?? 0, comments: c?.n ?? 0 };
+  return { deliverables: d?.n ?? 0, revisions: v?.n ?? 0, comments: c?.n ?? 0, links: l?.n ?? 0 };
 }
 
 /** Resolves what deleting `target` would remove, and whether `actor` may do it right now. */
@@ -134,7 +145,8 @@ export async function resolveScope(actor: Actor, target: PurgeTarget, ex: Execut
       const base = { target, label: project.name, projectId: project.id, parents: {} };
       const files = await ex.select(fileColumns).from(attachments).where(eq(attachments.projectId, project.id));
       const cardIds = (await ex.select({ id: cards.id }).from(cards).where(eq(cards.projectId, project.id))).map((c) => c.id);
-      const counts = { cards: cardIds.length, files: files.length, ...(await countRows(ex, cardIds)) };
+      // Links never leave a project, so none are left pointing at a deleted one.
+      const counts = { cards: cardIds.length, files: files.length, ...(await countRows(ex, cardIds)), links: 0 };
       try {
         assertStudioOwner(access, "delete projects");
       } catch (error) {
@@ -257,7 +269,7 @@ export interface PurgePreviewItem {
 
 export interface PurgePreview {
   items: PurgePreviewItem[];
-  totals: { items: number; cards: number; deliverables: number; revisions: number; files: number; comments: number; bytes: number; sharedFiles: number };
+  totals: { items: number; cards: number; deliverables: number; revisions: number; files: number; comments: number; links: number; bytes: number; sharedFiles: number };
 }
 
 function dedupeTargets(targets: PurgeTarget[]): PurgeTarget[] {
@@ -350,6 +362,7 @@ export async function previewPurge(actor: Actor, input: { targets: PurgeTarget[]
       revisions: sum("revisions"),
       files: files.size,
       comments: sum("comments"),
+      links: sum("links"),
       bytes: total.bytes,
       sharedFiles: total.shared,
     },
@@ -394,6 +407,14 @@ async function deleteTarget(tx: Executor, actor: Actor, scope: PurgeScope, bytes
           .map((r) => r.key)
           .filter((key): key is string => Boolean(key))
       : [];
+  // Cards that stay but link to what's going: their history says the link went with it.
+  if (t.type !== "project" && t.type !== "attachment") {
+    const doomed =
+      t.type === "deliverable"
+        ? { deliverableIds: [t.id] }
+        : { cardIds: (await tx.select({ id: cards.id }).from(cards).where(t.type === "card" ? eq(cards.id, t.id) : t.type === "board" ? eq(cards.boardId, t.id) : eq(cards.columnId, t.id))).map((c) => c.id) };
+    for (const source of await noteLinksToDeleted(tx, actor.userId, doomed)) fx.card(source.projectId, source.cardId);
+  }
   switch (t.type) {
     case "project":
       await tx.delete(cards).where(eq(cards.projectId, t.id));

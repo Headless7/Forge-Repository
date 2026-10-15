@@ -9,7 +9,7 @@ export type CardState = "NOT_SUBMITTED" | "IN_PROGRESS" | "NEEDS_REVIEW" | "CHAN
 export type Priority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
 export type CardDisplayMode = "VISUAL" | "COMPACT";
 export type AttachmentKind = "IMAGE" | "VIDEO" | "AUDIO" | "ROBLOX" | "FILE";
-export type AttachmentPurpose = "VERSION" | "CARD" | "COMMENT" | "RESOURCE" | "COVER" | "CHECKLIST" | "ITEM";
+export type AttachmentPurpose = "VERSION" | "CARD" | "COMMENT" | "RESOURCE" | "COVER" | "CHECKLIST" | "ITEM" | "DESCRIPTION";
 export type ForumKind = "BUGS" | "QA" | "CUSTOM";
 export type ItemStatus = "OPEN" | "IN_PROGRESS" | "FIXED" | "VERIFIED" | "CLOSED";
 export type ItemPriority = "LOW" | "MEDIUM" | "HIGH" | "GAME_BREAKING";
@@ -126,6 +126,8 @@ export interface ProductionSnapshotEntry {
   required: boolean;
   versionId: string | null;
   versionNumber: number | null;
+  /** A deliverable shared from another card (this card needed it): that card's key. */
+  sharedFrom?: string;
 }
 
 /** Progress across a card's active deliverables. "Has files", "in review" and "approved" are distinct. */
@@ -676,6 +678,85 @@ export interface DeliverableLinkDTO {
   createdAt: string;
 }
 
+/** The card a link points at, as it is now (same project, so anyone who sees the link may see it). */
+export interface LinkedCardDTO {
+  id: string;
+  key: string;
+  number: number;
+  title: string;
+  board: { id: string; number: number; name: string; archived: boolean };
+  column: { id: string; name: string; icon: string | null; color: string | null } | null;
+  state: CardState;
+  productionStatus: ProductionStatus;
+  archived: boolean;
+  cover: MediaRefDTO | null;
+  progress: DeliverableProgressDTO;
+  /** Its active deliverables, in order (to share one of them). */
+  deliverables: Array<{ id: string; number: number; name: string; assetType: string; state: CardState }>;
+}
+
+/** A deliverable shared from another card, as it is there now. Its work and history live on that card. */
+export interface SharedDeliverableDTO {
+  id: string;
+  number: number;
+  name: string;
+  assetType: string;
+  state: CardState;
+  required: boolean;
+  archived: boolean;
+  color: string | null;
+  cover: MediaRefDTO | null;
+  versionCount: number;
+  hasFiles: boolean;
+  openFeedback: number;
+  /** Its latest approved revision's number, if any. */
+  approvedVersionNumber: number | null;
+}
+
+/**
+ * A link object on the card's canvas and list: another card, or one of its deliverables (shared
+ * here). Placed like a deliverable, in a folder or at the top level.
+ */
+export interface CanvasLinkDTO {
+  id: string;
+  card: LinkedCardDTO;
+  /** The shared deliverable; null for a link to the whole card. */
+  deliverable: SharedDeliverableDTO | null;
+  /** This card can't be completed until the shared deliverable is approved. */
+  needed: boolean;
+  groupId: string | null;
+  canvasX: number;
+  canvasY: number;
+  createdById: string | null;
+  createdAt: string;
+}
+
+/** Another card that links to this one, or shares one of its deliverables. */
+export interface BacklinkDTO {
+  /** The link's id (it belongs to the other card). */
+  id: string;
+  card: { id: string; key: string; number: number; title: string; board: { id: string; number: number; name: string }; state: CardState; archived: boolean };
+  /** Which of this card's deliverables it shares; null when it links the whole card. */
+  deliverableId: string | null;
+  /** That card can't be completed until the shared deliverable is approved. */
+  needed: boolean;
+}
+
+/** Cards (and their deliverables) a card can link to: the project's active cards, by board and category. */
+export interface LinkCandidatesDTO {
+  boards: Array<{ id: string; number: number; name: string; columns: Array<{ id: string; name: string; icon: string | null; color: string | null }> }>;
+  cards: Array<{
+    id: string;
+    key: string;
+    number: number;
+    title: string;
+    boardId: string;
+    columnId: string;
+    state: CardState;
+    deliverables: Array<{ id: string; number: number; name: string; assetType: string; state: CardState }>;
+  }>;
+}
+
 export interface ProductionEventDTO {
   id: string;
   actorId: string | null;
@@ -687,11 +768,12 @@ export interface ProductionEventDTO {
 }
 
 export interface ReadinessDTO {
-  /** Every required deliverable is approved at its current revision. */
+  /** Every required deliverable (and every shared one this card needs) is approved at its current revision. */
   ready: boolean;
-  blockers: Array<{ deliverableId: string; name: string; reason: string }>;
+  /** `sharedFrom`: a deliverable shared from that card (key), which this card needs. */
+  blockers: Array<{ deliverableId: string; name: string; reason: string; sharedFrom?: string }>;
   /** Differences from the last completion/publication record. */
-  pendingChanges: Array<{ deliverableId: string; name: string; detail: string }>;
+  pendingChanges: Array<{ deliverableId: string; name: string; detail: string; sharedFrom?: string }>;
 }
 
 export interface CardDetailDTO extends CardSummaryDTO {
@@ -709,6 +791,10 @@ export interface CardDetailDTO extends CardSummaryDTO {
   deliverableLinks: DeliverableLinkDTO[];
   /** Canvas folders (every folder has something inside it). */
   deliverableGroups: DeliverableGroupDTO[];
+  /** Links to other cards and shared deliverables, placed on the canvas. */
+  canvasLinks: CanvasLinkDTO[];
+  /** Other cards linking here, or sharing this card's deliverables. */
+  linkedFrom: BacklinkDTO[];
   productionEvents: ProductionEventDTO[];
   productionSnapshot: ProductionSnapshotEntry[];
   readiness: ReadinessDTO;
@@ -718,10 +804,21 @@ export interface CardDetailDTO extends CardSummaryDTO {
   /** The chosen cover (MANUAL), whether or not it can be shown right now. */
   coverPinnedId: string | null;
   attachments: AttachmentDTO[];
+  /** Files taken out of a revision (archived): kept until deleted permanently, and can be put back. */
+  removedFiles: RemovedFileDTO[];
   comments: CommentDTO[];
   reviews: ReviewDTO[];
   checklists: ChecklistDTO[];
   permissions: CardPermissions;
+}
+
+export interface RemovedFileDTO {
+  id: string;
+  filename: string;
+  kind: AttachmentKind;
+  versionId: string | null;
+  deliverableId: string | null;
+  removedAt: string;
 }
 
 export interface NotificationDTO {

@@ -61,6 +61,36 @@ export function describeActivity(event: ActivityDTO, resolveUser: (id: string) =
       return <>uploaded{v(d)}{withCard ? <> of {card}</> : null}</>;
     case "attachment.added":
       return d.demo ? <>added a demonstration clip ({s(d.filename)})</> : <>attached {s(d.filename)}</>;
+    case "version.file_added":
+      return <>added {s(d.filename)} to{v(d)}{d.deliverable ? <> of <strong className="font-medium text-fg">{s(d.deliverable)}</strong></> : null}</>;
+    case "attachment.removed":
+      return <>removed {s(d.filename)} from{v(d)}{d.deliverable ? <> of <strong className="font-medium text-fg">{s(d.deliverable)}</strong></> : null}</>;
+    case "attachment.restored":
+      return <>put {s(d.filename)} back in{v(d)}{d.deliverable ? <> of <strong className="font-medium text-fg">{s(d.deliverable)}</strong></> : null}</>;
+    case "card.linked":
+      return d.deliverable ? (
+        <>shared <strong className="font-medium text-fg">{s(d.deliverable)}</strong> from {s(d.cardKey)} here{d.needed ? " (needed to complete this card)" : ""}</>
+      ) : (
+        <>linked <strong className="font-medium text-fg">{s(d.cardKey)} {s(d.cardTitle)}</strong></>
+      );
+    case "card.linked_from":
+      return d.deliverable ? (
+        <>shared <strong className="font-medium text-fg">{s(d.deliverable)}</strong> with {s(d.cardKey)} {s(d.cardTitle)}</>
+      ) : (
+        <>linked this card from <strong className="font-medium text-fg">{s(d.cardKey)} {s(d.cardTitle)}</strong></>
+      );
+    case "card.unlinked":
+      return d.deliverable ? <>stopped sharing <strong className="font-medium text-fg">{s(d.deliverable)}</strong> from {s(d.cardKey)}</> : <>removed the link to {s(d.cardKey)} {s(d.cardTitle)}</>;
+    case "card.unlinked_from":
+      return d.deliverable ? <>stopped sharing <strong className="font-medium text-fg">{s(d.deliverable)}</strong> with {s(d.cardKey)}</> : <>removed the link from {s(d.cardKey)} {s(d.cardTitle)}</>;
+    case "card.link_needed":
+      return d.needed ? (
+        <>made this card wait for <strong className="font-medium text-fg">{s(d.deliverable)}</strong> from {s(d.cardKey)} to be approved</>
+      ) : (
+        <>stopped this card waiting for <strong className="font-medium text-fg">{s(d.deliverable)}</strong> from {s(d.cardKey)}</>
+      );
+    case "card.link_removed":
+      return <>deleted {d.deliverable ? <><strong className="font-medium text-fg">{s(d.deliverable)}</strong> on {s(d.cardKey)}</> : <strong className="font-medium text-fg">{s(d.cardKey)} {s(d.cardTitle)}</strong>} for good, so its link here was removed</>;
     case "demo.cleared":
       return <>removed {d.count === 1 ? "the demonstration clip" : `${d.count} demonstration clips`} on publish to free storage</>;
     case "card.cover_changed":

@@ -35,10 +35,12 @@ import { conflict, forbidden, invalid, notFound } from "../errors";
 import { storage } from "../storage";
 import { audit, logActivity } from "./activity";
 import { nextCardPosition } from "./board";
+import { copyLinks } from "./canvas-links";
 import { loadCardDetail, summarizeCards } from "./card-dto";
 import type { Actor } from "./context";
 import { removeEmptyGroups } from "./deliverable-groups";
 import { createPrimaryDeliverable, recomputeCardRollup, recomputeDeliverableCover } from "./deliverables";
+import { copyDescriptionImages, syncDescriptionImages } from "./media";
 import { Effects } from "./effects";
 import { filterProjectMembers } from "./members-query";
 import { inboxAudience, notify, NotificationBatch } from "./notifications";
@@ -341,6 +343,8 @@ export async function updateCard(actor: Actor, input: UpdateCardInput): Promise<
         await tx.update(deliverables).set({ name: patch.title }).where(eq(deliverables.id, active[0]!.id));
       }
     }
+    // Images the description no longer shows are archived (and ones it shows again come back).
+    if (patch.description !== undefined) await syncDescriptionImages(tx, card.id, null, patch.description);
     for (const a of activities) {
       await logActivity(tx, {
         studioId: access.studioId,
@@ -602,6 +606,9 @@ export async function duplicateCardInTx(
     })
     .returning();
   const copyId = copy!.id;
+  // Its description's images are copied with it (the stored files are shared).
+  const description = await copyDescriptionImages(tx, { cardId: source.id, deliverableId: null }, { cardId: copyId, deliverableId: null }, source.description);
+  if (description !== source.description) await tx.update(cards).set({ description }).where(eq(cards.id, copyId));
 
   if (options.include.assignees) {
     const rows = await tx.select().from(cardAssignees).where(eq(cardAssignees.cardId, source.id));
@@ -678,6 +685,8 @@ export async function duplicateCardInTx(
       })
       .returning();
     idMap.set(d.id, nd!.id);
+    const text = await copyDescriptionImages(tx, { cardId: source.id, deliverableId: d.id }, { cardId: copyId, deliverableId: nd!.id }, d.description);
+    if (text !== d.description) await tx.update(deliverables).set({ description: text }).where(eq(deliverables.id, nd!.id));
     if (!options.include.attachments || !d.currentVersionId) continue;
     const media = await tx
       .select()
@@ -709,6 +718,8 @@ export async function duplicateCardInTx(
     const toId = idMap.get(l.toId);
     if (fromId && toId) await tx.insert(deliverableLinks).values({ cardId: copyId, fromId, toId, type: l.type, fromPoint: l.fromPoint, toPoint: l.toPoint, note: l.note, createdById: actor.userId });
   }
+  // Links to other cards (and shared deliverables) point at the same work from the copy.
+  await copyLinks(tx, source.id, copyId, groupMap, actor.userId);
   // Archived deliverables weren't copied: a folder that only held those has nothing in it here.
   await removeEmptyGroups(tx, copyId);
   if (options.include.attachments) {

@@ -41,6 +41,8 @@ export interface TipFacts {
   "card.canvas": { deliverableCount: number };
   /** Once someone makes a folder, or collapses or expands one (their own view). */
   "card.folders": { canEdit: boolean; folderCount: number };
+  /** Once someone links a card (or shares a deliverable here), or follows a link. */
+  "card.links": { canEdit: boolean; linkCount: number };
   "card.revisions": { revisionCount: number };
   "card.feedback": { canComment: boolean; media: "image" | "timed" | "other" };
   "card.upload-vs-submit": { canSubmit: boolean; state: CardState };
@@ -150,6 +152,17 @@ export const TIPS: { [K in TipId]: TipDefinition<TipFacts[K]> } = {
         ? "A folder is a frame around related deliverables, and folders can sit inside folders — drop a deliverable onto another to make one, and drag a deliverable into a folder (or out past its edge) to move it. Collapsing a folder hides what's inside for you only, and arrows then point at the folder."
         : "A folder is a frame around related deliverables, and folders can sit inside folders. Collapsing a folder hides what's inside for you only, and arrows then point at the folder.",
     eligible: (f) => f.folderCount > 0,
+    side: "bottom",
+    align: "end",
+  },
+  "card.links": {
+    version: 1,
+    title: () => "Linked cards and shared work",
+    body: (f) =>
+      f.canEdit
+        ? "A link shows another card's live status and opens it; linking one of its deliverables shares that work here, while its files and reviews stay on its own card. A shared deliverable only holds this card back if you mark it as needed."
+        : "A link shows another card's live status and opens it; a shared deliverable's files and reviews stay on its own card. It only holds this card back when it's marked as needed.",
+    eligible: (f) => f.linkCount > 0,
     side: "bottom",
     align: "end",
   },

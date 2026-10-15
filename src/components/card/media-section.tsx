@@ -11,8 +11,11 @@ import {
   ImagePlus,
   Link2,
   Loader2,
+  Lock,
   MapPin,
+  RotateCcw,
   Timer,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -35,7 +38,7 @@ import { VideoPlayer, type VideoMarker, type VideoPlayerHandle } from "../media/
 import { Button } from "../ui/button";
 import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Checkbox, EmptyState } from "../ui/controls";
-import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
+import { ConfirmDialog, Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { Textarea } from "../ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Tooltip } from "../ui/menu";
 import { useUploads } from "../upload/upload-manager";
@@ -82,10 +85,28 @@ function mediaOf(version: VersionDTO | undefined, attachments: AttachmentDTO[]) 
 
 // ── Upload dialog ────────────────────────────────────────────────────────────
 
-export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open: boolean; onOpenChange: (open: boolean) => void; initialFiles?: File[] }) {
+/** The deliverable's current revision while it can still take (or give up) files: not submitted, not decided on. */
+export function openRevision(scope: { versions: VersionDTO[]; currentVersionId: string | null }): VersionDTO | null {
+  const current = scope.versions.find((v) => v.id === scope.currentVersionId);
+  return current && current.status === "DRAFT" ? current : null;
+}
+
+/** Why a revision's files can't change any more (shown instead of hiding the controls). */
+export function lockedReason(version: VersionDTO, isCurrent: boolean): string {
+  if (!isCurrent && version.status === "DRAFT") return `V${version.number} is an earlier revision, so its files stay as they were.`;
+  if (version.status === "IN_REVIEW") return `V${version.number} is waiting for review, so its files are kept as they were submitted.`;
+  if (version.status === "APPROVED") return `V${version.number} was approved, so its files are kept as review history.`;
+  return `V${version.number} was reviewed, so its files are kept as review history.`;
+}
+
+export function UploadVersionDialog({ open, onOpenChange, initialFiles, initialMode = "new" }: { open: boolean; onOpenChange: (open: boolean) => void; initialFiles?: File[]; initialMode?: "add" | "new" }) {
   const { card, scope, multi } = useScope();
   const uploadTarget = scope.uploadTarget;
   const uploads = useUploads();
+  const draft = openRevision(scope);
+  // Adding is offered only while the current revision is still being prepared.
+  const [mode, setMode] = useState<"add" | "new">(draft && scope.permissions.canUpload ? initialMode : "new");
+  const adding = mode === "add" && Boolean(draft);
   const [files, setFiles] = useState<File[]>(initialFiles ?? []);
   const [notes, setNotes] = useState("");
   const [submit, setSubmit] = useState(false);
@@ -104,21 +125,30 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
   const importUrl = useCardMutation("upload.importUrl", card.id, card.projectId);
   const createVersion = useCardMutation("version.create", card.id, card.projectId, { silent: true });
   const nextNumber = (scope.versions.at(-1)?.number ?? 0) + 1;
+  const targetNumber = adding ? draft!.number : nextNumber;
+  const submitRevision = useCardMutation("review.submit", card.id, card.projectId);
 
   const start = async () => {
     if (files.length) {
       onOpenChange(false);
       const demo = hasRoblox ? demoFile : null;
-      void uploads.uploadVersion(uploadTarget, files, { notes, submit }).then((results) => {
+      const uploading = adding ? uploads.addToRevision(uploadTarget, draft!, files) : uploads.uploadVersion(uploadTarget, files, { notes, submit });
+      void uploading.then((results) => {
         // The clip goes with the Roblox file it demonstrates, once that file exists.
         const roblox = results.find((a) => a.kind === "ROBLOX");
         if (demo && roblox) void uploads.uploadFiles({ ...uploadTarget, demoOfId: roblox.id, label: "Demo clip" }, [demo], "demo");
+        if (adding && submit && results.length === files.length) submitRevision.mutate({ deliverableId: scope.deliverable.id, versionId: draft!.id });
       });
     } else if (url.trim()) {
       try {
-        const version = await createVersion.mutateAsync({ deliverableId: scope.deliverable.id, notes });
-        await importUrl.mutateAsync({ cardId: card.id, url: url.trim(), purpose: "version", versionId: version.id });
-        toast.success(`V${version.number} imported.`);
+        if (adding) {
+          await importUrl.mutateAsync({ cardId: card.id, url: url.trim(), purpose: "version", versionId: draft!.id });
+          toast.success(`Added the image to V${draft!.number}.`);
+        } else {
+          const version = await createVersion.mutateAsync({ deliverableId: scope.deliverable.id, notes });
+          await importUrl.mutateAsync({ cardId: card.id, url: url.trim(), purpose: "version", versionId: version.id });
+          toast.success(`V${version.number} imported.`);
+        }
         onOpenChange(false);
       } catch {
         // toast already shown
@@ -140,10 +170,47 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        title={multi ? `Upload ${scope.deliverable.name} V${nextNumber}` : `Upload V${nextNumber}`}
-        description={multi ? "Only this deliverable gets a new revision. Its earlier revisions, and every other deliverable, stay exactly as they are." : "Previous versions and their feedback are kept exactly as they are."}
+        title={adding ? `Add files to ${multi ? `${scope.deliverable.name} ` : ""}V${draft!.number}` : multi ? `Upload ${scope.deliverable.name} V${nextNumber}` : `Upload V${nextNumber}`}
+        description={
+          adding
+            ? `V${draft!.number} hasn't been submitted yet, so new files join the ones already in it.`
+            : multi
+              ? "Only this deliverable gets a new revision. Its earlier revisions, and every other deliverable, stay exactly as they are."
+              : "Previous versions and their feedback are kept exactly as they are."
+        }
         size="lg"
       >
+        {draft && scope.permissions.canUpload ? (
+          <div role="radiogroup" aria-label="Where the files go" className="mb-3 grid gap-2 sm:grid-cols-2">
+            {(
+              [
+                ["add", `Add to V${draft.number}`, `V${draft.number} isn't submitted yet: the files join it.`],
+                ["new", `Start V${nextNumber}`, `A new revision. V${draft.number} stays as it is.`],
+              ] as const
+            ).map(([value, label, text]) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={mode === value}
+                onClick={() => setMode(value)}
+                className={cn("rounded-lg border p-2.5 text-left", mode === value ? "border-accent bg-accent-soft" : "border-border-strong hover:bg-surface-3")}
+              >
+                <span className="flex items-center gap-1.5 text-[13px] font-semibold">
+                  {value === "add" ? <ImagePlus className="size-4" /> : <Upload className="size-4" />} {label}
+                </span>
+                <span className="mt-0.5 block text-[12px] text-fg-muted">{text}</span>
+              </button>
+            ))}
+          </div>
+        ) : scope.currentVersionId ? (
+          <p className="mb-3 text-[12.5px] text-fg-muted">
+            {(() => {
+              const current = scope.versions.find((v) => v.id === scope.currentVersionId);
+              return current && current.status !== "DRAFT" ? `${lockedReason(current, true).replace(/, so .*$/, "")}, so new files start V${nextNumber}.` : null;
+            })()}
+          </p>
+        ) : null}
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -212,11 +279,11 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
             <input ref={demoInput} type="file" accept="video/*" hidden onChange={(e) => { chooseDemo(e.target.files?.[0] ?? null); e.target.value = ""; }} />
           </div>
         ) : null}
-        <Textarea className="mt-3" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Version notes — what changed?" />
+        {adding ? null : <Textarea className="mt-3" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Version notes — what changed?" />}
         {scope.permissions.canSubmit ? (
           <label className="mt-3 flex items-center gap-2 text-[13px]">
             <Checkbox checked={submit} onCheckedChange={(v) => setSubmit(v === true)} />
-            Submit V{nextNumber} for review when the upload finishes
+            Submit V{targetNumber} for review when the upload finishes
           </label>
         ) : null}
         {submit && scope.permissions.canSubmit ? <NoReviewerHint reviewerId={scope.deliverable.reviewerId} cardReviewerIds={card.reviewerIds} className="mt-1.5 pl-6" /> : null}
@@ -225,7 +292,7 @@ export function UploadVersionDialog({ open, onOpenChange, initialFiles }: { open
             Cancel
           </Button>
           <Button variant="primary" disabled={!files.length && !url.trim()} loading={importUrl.isPending || createVersion.isPending} onClick={() => void start()}>
-            <Upload /> Upload as V{nextNumber}
+            {adding ? <ImagePlus /> : <Upload />} {adding ? `Add to V${targetNumber}` : `Upload as V${targetNumber}`}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -278,6 +345,9 @@ export function FeedbackPanel({
   const olderOpen = version
     ? roots.filter((c) => c.kind === "FEEDBACK" && !c.resolvedAt && c.versionId && c.versionId !== version.id)
     : [];
+  // Notes left on a file that has since been taken out of this revision stay listed with it.
+  const removedNames = new Map(card.removedFiles.filter((f) => version && f.versionId === version.id).map((f) => [f.id, f.filename]));
+  const onRemoved = roots.filter((c) => c.annotation && removedNames.has(c.annotation.attachmentId));
   const openCount = scoped.filter((c) => c.kind === "FEEDBACK" && !c.resolvedAt).length;
 
   const isVideo = media?.kind === "VIDEO";
@@ -387,6 +457,14 @@ export function FeedbackPanel({
             ))}
           </div>
         ) : null}
+        {onRemoved.length ? (
+          <div className="mt-2 rounded-lg border border-dashed border-border-strong p-1.5">
+            <p className="px-2 py-1 text-[11.5px] font-semibold text-fg-muted">On removed files ({onRemoved.length})</p>
+            {onRemoved.map((c) => (
+              <CommentThread key={c.id} comment={c} anchor={null} versionLabel={removedNames.get(c.annotation!.attachmentId)} />
+            ))}
+          </div>
+        ) : null}
       </div>
       {card.permissions.canComment ? (
         <div ref={composerWrap} className="border-t border-border p-2">
@@ -424,13 +502,158 @@ export function FeedbackPanel({
   );
 }
 
+// ── A revision's files ───────────────────────────────────────────────────────
+
+const KIND_LABEL: Record<AttachmentDTO["kind"], string> = { IMAGE: "Image", VIDEO: "Video", AUDIO: "Audio", ROBLOX: "Roblox file", FILE: "File" };
+
+/**
+ * The files of the revision on screen, to switch between and — while the revision is still being
+ * prepared — to add to or take out of. A submitted (or earlier) revision says why its files can't
+ * change, and what to do instead.
+ */
+function RevisionFiles({
+  version,
+  media,
+  currentId,
+  onSelect,
+  onUpload,
+}: {
+  version: VersionDTO;
+  media: AttachmentDTO[];
+  currentId: string | null;
+  onSelect: (attachmentId: string) => void;
+  onUpload: (files?: File[], mode?: "add" | "new") => void;
+}) {
+  const { card, scope, multi } = useScope();
+  const isCurrent = version.id === scope.currentVersionId;
+  const open = isCurrent && version.status === "DRAFT";
+  const canManage = scope.permissions.canUpload;
+  const nextNumber = (scope.versions.at(-1)?.number ?? 0) + 1;
+  const removed = card.removedFiles.filter((f) => f.versionId === version.id);
+  const archive = useCardMutation("attachment.archive", card.id, card.projectId);
+  const restore = useCardMutation("attachment.restore", card.id, card.projectId);
+  const [confirming, setConfirming] = useState<AttachmentDTO | null>(null);
+  const notesOn = (id: string) => scope.comments.filter((c) => !c.parentId && !c.deletedAt && c.annotation?.attachmentId === id).length;
+  const where = `V${version.number}${multi ? ` of ${scope.deliverable.name}` : ""}`;
+
+  const remove = (a: AttachmentDTO) =>
+    archive
+      .mutateAsync({ attachmentId: a.id })
+      .then(() => {
+        setConfirming(null);
+        toast.success(`Removed ${a.filename} from ${where}.`, {
+          description: "It's kept in Archived items until someone deletes it for good.",
+          action: { label: "Undo", onClick: () => restore.mutate({ attachmentId: a.id }) },
+        });
+      })
+      .catch(() => setConfirming(null));
+
+  return (
+    <section aria-label={`Files in V${version.number}`} className="rounded-xl border border-border bg-surface-2 p-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1">
+        <h4 className="text-[12.5px] font-semibold">
+          Files in V{version.number} <span className="font-normal text-fg-muted">· {media.length}</span>
+        </h4>
+        {open ? (
+          <span className="text-[11.5px] text-fg-muted">Not submitted yet{canManage ? " — you can still add or remove files" : ""}</span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-[11.5px] text-fg-muted">
+            <Lock className="size-3" aria-hidden /> Kept as review history
+          </span>
+        )}
+        <span className="flex-1" />
+        {canManage && open ? (
+          <Button size="xs" variant="secondary" onClick={() => onUpload(undefined, "add")}>
+            <ImagePlus /> Add files
+          </Button>
+        ) : null}
+      </div>
+      {canManage && !open ? (
+        <p className="px-1 pt-0.5 text-[11.5px] text-fg-subtle">
+          {lockedReason(version, isCurrent)}{" "}
+          {isCurrent ? (
+            <button type="button" className="inline-flex min-h-6 items-center font-medium text-accent hover:underline" onClick={() => onUpload(undefined, "new")}>
+              Upload V{nextNumber} instead
+            </button>
+          ) : null}
+        </p>
+      ) : null}
+      {media.length ? (
+        <ul className="mt-1.5 grid gap-1">
+          {media.map((a) => {
+            const Icon = KIND_ICONS[a.kind];
+            const viewing = currentId === a.id;
+            const notes = notesOn(a.id);
+            return (
+              <li key={a.id} className={cn("flex items-center gap-2 rounded-lg border px-1.5 py-1", viewing ? "border-accent/60 bg-accent-soft/40" : "border-border")}>
+                <button type="button" onClick={() => onSelect(a.id)} aria-current={viewing ? "true" : undefined} aria-label={`View ${a.filename}`} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                  <span className="flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-surface-4">
+                    {a.thumbUrl ? <img src={a.thumbUrl} alt="" className="h-full w-full object-cover" /> : <Icon className="size-4 text-fg-subtle" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12.5px] font-medium" title={a.filename}>
+                      {a.filename}
+                    </span>
+                    <span className="block truncate text-[11px] text-fg-muted">
+                      {KIND_LABEL[a.kind]} · {formatBytes(a.sizeBytes)}
+                      {a.width ? ` · ${a.width}×${a.height}` : ""}
+                      {a.status === "FAILED" ? " · upload failed" : a.status === "PENDING" ? " · uploading…" : ""}
+                      {notes ? ` · ${notes} note${notes === 1 ? "" : "s"}` : ""}
+                    </span>
+                  </span>
+                  {viewing ? <span className="hidden shrink-0 text-[10.5px] font-semibold text-accent sm:inline">Viewing</span> : null}
+                </button>
+                {canManage && open ? (
+                  <Button size="xs" variant="ghost" className="shrink-0" aria-label={`Remove ${a.filename} from V${version.number}`} loading={archive.isPending && archive.variables?.attachmentId === a.id} onClick={() => (notes ? setConfirming(a) : void remove(a))}>
+                    <Trash2 /> <span className="hidden sm:inline">Remove</span>
+                  </Button>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="px-1 py-2 text-[12px] text-fg-muted">
+          No files in V{version.number}.{canManage && open ? " Add files before submitting it for review." : ""}
+        </p>
+      )}
+      {removed.length ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 px-1 text-[11.5px] text-fg-muted">
+          <span>Removed:</span>
+          {removed.map((r) => (
+            <span key={r.id} className="inline-flex max-w-full items-center gap-1 rounded-md border border-dashed border-border-strong px-1.5 py-0.5">
+              <span className="truncate line-through decoration-fg-subtle" title={r.filename}>
+                {r.filename}
+              </span>
+              {canManage && open ? (
+                <button type="button" className="touch-target inline-flex min-h-6 shrink-0 items-center gap-0.5 font-medium text-accent hover:underline" onClick={() => restore.mutate({ attachmentId: r.id })}>
+                  <RotateCcw className="size-3" /> Put back
+                </button>
+              ) : null}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <ConfirmDialog
+        open={confirming !== null}
+        onOpenChange={(o) => !o && !archive.isPending && setConfirming(null)}
+        title={`Remove ${confirming?.filename ?? "this file"} from V${version.number}?`}
+        confirmLabel="Remove"
+        loading={archive.isPending}
+        onConfirm={() => confirming && void remove(confirming)}
+        description={`It has ${confirming ? notesOn(confirming.id) : 0} feedback note${confirming && notesOn(confirming.id) === 1 ? "" : "s"}. They stay with V${version.number} under “On removed files”, and you can put the file back from Archived items.`}
+      />
+    </section>
+  );
+}
+
 // ── Media section ────────────────────────────────────────────────────────────
 
 function stageLabel(kind: AttachmentDTO["kind"]) {
   return kind === "ROBLOX" ? "Roblox preview" : kind === "AUDIO" ? "Audio review" : "Media review";
 }
 
-export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: File[]) => void }) {
+export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: File[], mode?: "add" | "new") => void }) {
   const ws = useScope();
   const { card, scope, multi, versionId, setVersionId: selectVersion, attachmentId, setAttachmentId, activeCommentId, setActiveCommentId, pending, setPending, player, timeline, focusFeedbackComposer } = ws;
   const tutorial = useTutorial();
@@ -531,7 +754,8 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setOver(false);
-    if (perms.canUpload && e.dataTransfer.files.length) onUploadVersion([...e.dataTransfer.files]);
+    // Dropped while a revision is being prepared: adding to it is offered first (a new revision is one tap away).
+    if (perms.canUpload && e.dataTransfer.files.length) onUploadVersion([...e.dataTransfer.files], openRevision(scope) ? "add" : "new");
   };
 
   if (!versions.length || !version) {
@@ -617,26 +841,6 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
           </Tooltip>
         </div>
         </TipAnchor>
-        {media.length > 1 ? (
-          <div className="scrollbar-none flex max-w-full items-center gap-1 overflow-x-auto" role="tablist" aria-label="Files in this revision">
-            {media.map((a) => {
-              const Icon = KIND_ICONS[a.kind];
-              return (
-                <button
-                  key={a.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={current?.id === a.id}
-                  onClick={() => setAttachmentId(a.id)}
-                  title={a.filename}
-                  className={cn("flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border", current?.id === a.id ? "border-accent ring-1 ring-accent" : "border-border-strong opacity-70 hover:opacity-100")}
-                >
-                  {a.thumbUrl ? <img src={a.thumbUrl} alt="" className="h-full w-full object-cover" /> : <Icon className="size-4 text-fg-subtle" />}
-                </button>
-              );
-            })}
-          </div>
-        ) : null}
         <span className="flex-1" />
         {versionsWithMedia.length >= 2 && (current?.kind === "IMAGE" || current?.kind === "VIDEO") ? (
           <Button size="sm" variant={compare ? "primary" : "ghost"} onClick={() => setCompare((c) => !c)} aria-pressed={compare}>
@@ -653,7 +857,7 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
           </Tooltip>
         ) : null}
         {perms.canUpload ? (
-          <Button size="sm" variant="secondary" onClick={() => onUploadVersion()}>
+          <Button size="sm" variant="secondary" onClick={() => onUploadVersion(undefined, "new")}>
             <Upload /> New revision
           </Button>
         ) : null}
@@ -675,6 +879,7 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
       ) : null}
 
       <div className={cn("grid gap-3", current?.kind === "ROBLOX" ? "2xl:grid-cols-[minmax(0,1fr)_360px]" : "2xl:grid-cols-[minmax(0,1fr)_380px]")}>
+        <div className="grid min-w-0 content-start gap-2">
         <div
           onDragOver={(e) => {
             if (perms.canUpload && e.dataTransfer.types.includes("Files")) {
@@ -697,7 +902,14 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
               initialRightId={version.id}
             />
           ) : !current ? (
-            <div className="flex h-full min-h-[200px] items-center justify-center text-[13px] text-white/60">This revision has no files yet.</div>
+            <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-3 p-4 text-center text-[13px] text-white/60">
+              <span>V{version.number} has no files{isCurrent && version.status === "DRAFT" ? " yet" : ""}.</span>
+              {perms.canUpload && isCurrent && version.status === "DRAFT" ? (
+                <Button size="sm" variant="secondary" onClick={() => onUploadVersion(undefined, "add")}>
+                  <ImagePlus /> Add files to V{version.number}
+                </Button>
+              ) : null}
+            </div>
           ) : current.status === "PENDING" ? (
             <div className="flex h-full min-h-[200px] items-center justify-center text-[13px] text-white/60">Uploading…</div>
           ) : current.status === "FAILED" ? (
@@ -854,9 +1066,11 @@ export function MediaSection({ onUploadVersion }: { onUploadVersion: (files?: Fi
           )}
           {over ? (
             <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center border-2 border-dashed border-accent bg-accent-soft/80 text-[13px] font-semibold backdrop-blur-sm">
-              Drop to upload {multi ? `${scope.deliverable.name} ` : ""}V{(versions.at(-1)?.number ?? 0) + 1}
+              {openRevision(scope) ? `Drop to add files: you'll choose V${openRevision(scope)!.number} or a new revision` : `Drop to upload ${multi ? `${scope.deliverable.name} ` : ""}V${(versions.at(-1)?.number ?? 0) + 1}`}
             </div>
           ) : null}
+        </div>
+        {!compare ? <RevisionFiles version={version} media={media} currentId={current?.id ?? null} onSelect={(id) => setAttachmentId(id)} onUpload={onUploadVersion} /> : null}
         </div>
         <FeedbackPanel
           media={compare ? null : feedbackMedia}

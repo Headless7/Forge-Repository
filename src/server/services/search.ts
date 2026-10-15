@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { plainDescription } from "@/lib/description-images";
 import type { SearchResultDTO } from "@/lib/types";
 import { getProjectAccess, requireProject, requireStudio } from "../access";
 import { db } from "../db";
@@ -101,7 +102,7 @@ export async function searchCards(
     if (row.mAssignee) matchedIn.push("assignee");
     if (row.commentHit) matchedIn.push("comment");
     let snippet: string | null = null;
-    const source = row.mDescription ? row.card.description : row.commentHit;
+    const source = row.mDescription ? plainDescription(row.card.description) : row.commentHit;
     if (source && !row.mTitle) {
       const index = source.toLowerCase().indexOf(q.toLowerCase());
       const start = Math.max(0, index - 40);

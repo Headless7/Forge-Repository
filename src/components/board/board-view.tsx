@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Eye, Sparkles, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ROBLOX_TEMPLATE } from "@/lib/column-icons";
 import { CARD_STATE_META, CARD_STATE_ORDER, resolveDisplayMode } from "@/lib/card-meta";
@@ -28,7 +28,7 @@ import { Button } from "../ui/button";
 import { Skeleton } from "../ui/controls";
 import { useUploads } from "../upload/upload-manager";
 import { ArchivedDialog } from "./archived-dialog";
-import { BoardContext, pendingCardDrops, type BoardContextValue, type OpenCardOptions } from "./board-context";
+import { BoardContext, cardDepth, pendingCardDrops, rememberLinkStep, takeLinkStep, type BoardContextValue, type OpenCardOptions } from "./board-context";
 import { BoardHeader } from "./board-header";
 import { CardTile } from "./card-tile";
 import { AddColumn, BoardColumn, type ColumnActions } from "./column";
@@ -87,11 +87,7 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
   const queueMode = searchParams.get("queue") === "review";
   const cardAction = searchParams.get("action");
   const focusComment = searchParams.get("comment");
-  const pushedCard = useRef(false);
-  useEffect(() => {
-    if (!cardKey) pushedCard.current = false;
-  }, [cardKey]);
-
+  const router = useRouter();
   const openCard = useCallback(
     (key: string, options: OpenCardOptions = {}) => {
       if (!key || key === "…") return;
@@ -101,17 +97,18 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
         params.delete("v");
       }
       params.set("card", key);
-      for (const [name, value] of [["queue", options.queue], ["action", options.action], ["comment", options.comment]] as const) {
+      for (const [name, value] of [["queue", options.queue], ["action", options.action], ["comment", options.comment], ["from", options.from], ["fromBoard", options.fromBoard ? String(options.fromBoard) : undefined]] as const) {
         if (value) params.set(name, value);
         else params.delete(name);
       }
       if (options.deliverable) params.set("d", String(options.deliverable));
       const url = `${pathname}?${params.toString()}`;
-      if (params.get("card") && new URLSearchParams(window.location.search).get("card")) {
-        window.history.replaceState(null, "", url);
+      // How many cards were opened on top of the board (each its own history entry), so closing goes all the way back.
+      const depth = cardDepth();
+      if (!options.push && params.get("card") && new URLSearchParams(window.location.search).get("card")) {
+        window.history.replaceState({ forgeCardDepth: depth }, "", url);
       } else {
-        window.history.pushState(null, "", url);
-        pushedCard.current = true;
+        window.history.pushState({ forgeCardDepth: depth + 1 }, "", url);
       }
     },
     [pathname],
@@ -121,16 +118,64 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
   const closeCard = useCallback(() => {
     // Back on the board after working in a card: the moment to show how to find your own work.
     tutorial.trigger("board.my-work");
-    if (pushedCard.current) {
-      pushedCard.current = false;
-      window.history.back();
+    const strip = () => {
+      const params = new URLSearchParams(window.location.search);
+      for (const name of ["card", "d", "v", "queue", "action", "comment", "from", "fromBoard"]) params.delete(name);
+      const query = params.toString();
+      window.history.replaceState(null, "", `${pathname}${query ? `?${query}` : ""}`);
+    };
+    const depth = cardDepth();
+    if (depth > 0) {
+      // Back past every card opened on top of the board; if the page itself was opened on a card
+      // (a shared link), that one closes too.
+      const settle = () => {
+        window.removeEventListener("popstate", settle);
+        if (new URLSearchParams(window.location.search).get("card")) strip();
+      };
+      window.addEventListener("popstate", settle);
+      window.history.go(-depth);
       return;
     }
-    const params = new URLSearchParams(window.location.search);
-    for (const name of ["card", "d", "v", "queue", "action", "comment"]) params.delete(name);
-    const query = params.toString();
-    window.history.replaceState(null, "", `${pathname}${query ? `?${query}` : ""}`);
+    strip();
   }, [pathname, tutorial]);
+
+  /** Opens a linked card (or a deliverable of it): here when it's on this board, otherwise on its own board. The way back is kept. */
+  const openLinked = useCallback(
+    (target: { key: string; boardNumber: number; deliverableNumber?: number | null }) => {
+      const from = new URLSearchParams(window.location.search).get("card") ?? undefined;
+      if (from) rememberLinkStep({ from, to: target.key });
+      if (target.boardNumber === board.board.number) {
+        openCard(target.key, { deliverable: target.deliverableNumber ?? undefined, from, fromBoard: from ? board.board.number : undefined, push: true });
+        return;
+      }
+      const params = new URLSearchParams({ card: target.key });
+      if (target.deliverableNumber) params.set("d", String(target.deliverableNumber));
+      if (from) {
+        params.set("from", from);
+        params.set("fromBoard", String(board.board.number));
+      }
+      router.push(`/${studioSlug}/${board.project.slug}/b/${target.boardNumber}?${params.toString()}`);
+    },
+    [board.board.number, board.project.slug, studioSlug, openCard, router],
+  );
+
+  /**
+   * The "← UTD-81" chip on a card opened through a link: steps back to that card the way you came
+   * (one history step, so closing it afterwards returns to the board). Without that step in this
+   * tab's history (the page was opened on this card), it opens the card here without a chip.
+   */
+  const backFromLink = useCallback(
+    (from: { key: string; boardNumber: number }) => {
+      const current = new URLSearchParams(window.location.search).get("card") ?? "";
+      if (takeLinkStep({ from: from.key, to: current })) {
+        window.history.back();
+        return;
+      }
+      if (from.boardNumber === board.board.number) openCard(from.key);
+      else router.push(`/${studioSlug}/${board.project.slug}/b/${from.boardNumber}?card=${encodeURIComponent(from.key)}`);
+    },
+    [board.board.number, board.project.slug, studioSlug, openCard, router],
+  );
 
   // ── Lookups & derived data ─────────────────────────────────────────────────
   const membersById = useMemo(() => new Map(board.members.map((m) => [m.id, m])), [board.members]);
@@ -206,7 +251,6 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
   const visibleCardIds = useMemo(() => new Set(visibleCards.map((c) => c.id)), [visibleCards]);
   const filtered = hasAnyFilter(filters);
   const scheduleView = view === "TIMELINE" || view === "CALENDAR";
-  const router = useRouter();
   /** Opens a card from the timeline/calendar: here when it's on this board, otherwise on its board. */
   const openTarget = useCallback(
     (t: OpenTarget) => {
@@ -842,6 +886,9 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
           focusCommentId={focusComment}
           onClose={closeCard}
           onNavigate={(key) => openCard(key, { queue: queueMode ? "review" : undefined })}
+          onOpenLinked={openLinked}
+          onBackFromLink={backFromLink}
+          from={searchParams.get("from") ? { key: searchParams.get("from")!, boardNumber: Number(searchParams.get("fromBoard")) || board.board.number } : null}
         />
       ) : null}
       <NotReadyDialog

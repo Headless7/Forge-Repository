@@ -423,7 +423,7 @@ export function CardSidebar({ onApprove, onRequestChanges, onSubmit, onUploadVer
             <span className="text-fg-subtle">{card.estimateHours != null ? `${card.estimateHours} h` : "None"}</span>
           )}
         </Row>
-        <Row label="Links">
+        <Row label="Web links">
           <LinksEditor links={card.links} canEdit={perms.canEdit} onChange={(links) => update.mutate({ cardId: card.id, links })} />
         </Row>
         <Row label="Watchers">

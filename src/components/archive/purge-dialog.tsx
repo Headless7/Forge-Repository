@@ -106,6 +106,7 @@ export function PurgeDialog({ open, onOpenChange, targets, onDone }: { open: boo
                   {preview.totals.deliverables} deliverable{preview.totals.deliverables === 1 ? "" : "s"}, {preview.totals.revisions} revision{preview.totals.revisions === 1 ? "" : "s"},{" "}
                   {preview.totals.files} file{preview.totals.files === 1 ? "" : "s"} and {preview.totals.comments} comment{preview.totals.comments === 1 ? "" : "s"}.
                   {preview.totals.sharedFiles ? ` ${preview.totals.sharedFiles} file${preview.totals.sharedFiles === 1 ? " is" : "s are"} also used by other cards and will be kept.` : ""}
+                  {preview.totals.links ? ` ${preview.totals.links} link${preview.totals.links === 1 ? "" : "s"} from other cards point${preview.totals.links === 1 ? "s" : ""} at it and will be removed (those cards' history says so).` : ""}
                 </p>
               </div>
               {eligible.length ? (

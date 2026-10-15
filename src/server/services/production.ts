@@ -5,7 +5,8 @@ import type { ProductionSnapshotEntry, ProductionStatus } from "@/lib/types";
 import { assertCard, requireCard, type CardAccess } from "../access";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
-import { assetVersions, cards, deliverables, productionEvents } from "../db/schema";
+import { assetVersions, canvasLinks, cards, deliverables, productionEvents, projects } from "../db/schema";
+import { loadNeededShares } from "./canvas-links";
 import { conflict, forbidden } from "../errors";
 import { logActivity } from "./activity";
 import { loadDeliverableFacts } from "./card-dto";
@@ -48,7 +49,7 @@ async function snapshotFor(tx: Executor, cardId: string): Promise<ProductionSnap
     .leftJoin(assetVersions, eq(assetVersions.id, deliverables.approvedVersionId))
     .where(and(eq(deliverables.cardId, cardId), isNull(deliverables.archivedAt)))
     .orderBy(asc(deliverables.position));
-  return rows.map((r) => ({
+  const own = rows.map((r) => ({
     deliverableId: r.id,
     name: r.name,
     required: r.required,
@@ -56,20 +57,44 @@ async function snapshotFor(tx: Executor, cardId: string): Promise<ProductionSnap
     versionId: r.state === "APPROVED" ? r.approvedVersionId : null,
     versionNumber: r.state === "APPROVED" ? r.versionNumber : null,
   }));
+  // Shared work this card needs is recorded too (it's approved, or the card couldn't be completed).
+  const shared = await tx
+    .select({ id: deliverables.id, name: deliverables.name, approvedVersionId: deliverables.approvedVersionId, state: deliverables.state, archivedAt: deliverables.archivedAt, versionNumber: assetVersions.versionNumber, cardNumber: cards.number, projectKey: projects.key })
+    .from(canvasLinks)
+    .innerJoin(deliverables, eq(deliverables.id, canvasLinks.targetDeliverableId))
+    .innerJoin(cards, eq(cards.id, deliverables.cardId))
+    .innerJoin(projects, eq(projects.id, cards.projectId))
+    .leftJoin(assetVersions, eq(assetVersions.id, deliverables.approvedVersionId))
+    .where(and(eq(canvasLinks.cardId, cardId), eq(canvasLinks.needed, true), isNull(deliverables.archivedAt)))
+    .orderBy(asc(canvasLinks.createdAt));
+  return [
+    ...own,
+    ...shared.map((r) => ({
+      deliverableId: r.id,
+      name: r.name,
+      required: true,
+      versionId: r.state === "APPROVED" ? r.approvedVersionId : null,
+      versionNumber: r.state === "APPROVED" ? r.versionNumber : null,
+      sharedFrom: `${r.projectKey}-${r.cardNumber}`,
+    })),
+  ];
 }
 
 async function readinessOf(ctx: CardAccess) {
-  const facts = (await loadDeliverableFacts([ctx.card.id])).get(ctx.card.id)!;
-  const versionRows = await db
-    .select({ id: assetVersions.id, n: assetVersions.versionNumber })
-    .from(assetVersions)
-    .where(eq(assetVersions.cardId, ctx.card.id));
+  const keys = new Map([[ctx.card.projectId, ctx.access.project.key]]);
+  const [factsByCard, versionRows, needed] = await Promise.all([
+    loadDeliverableFacts([ctx.card.id]),
+    db.select({ id: assetVersions.id, n: assetVersions.versionNumber }).from(assetVersions).where(eq(assetVersions.cardId, ctx.card.id)),
+    loadNeededShares([ctx.card.id], keys),
+  ]);
+  const facts = factsByCard.get(ctx.card.id)!;
   return computeReadiness({
     deliverables: facts.facts,
     links: facts.links,
     snapshot: ctx.card.productionSnapshot,
     recorded: ctx.card.productionStatus !== "TODO",
-    versionNumbers: new Map(versionRows.map((v) => [v.id, v.n])),
+    versionNumbers: new Map([...versionRows.map((v) => [v.id, v.n] as const), ...needed.versionNumbers]),
+    shared: needed.byCard.get(ctx.card.id),
   });
 }
 
@@ -204,7 +229,7 @@ export async function moveProduction(
       data: {
         from,
         to,
-        included: snapshot.filter((s) => s.versionNumber).map((s) => `${s.name} V${s.versionNumber}`),
+        included: snapshot.filter((s) => s.versionNumber).map((s) => `${s.name} V${s.versionNumber}${s.sharedFrom ? ` (from ${s.sharedFrom})` : ""}`),
       },
     });
     fx.notify(

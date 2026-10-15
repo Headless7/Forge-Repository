@@ -6,7 +6,7 @@ import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import type { AttachmentKind } from "@/lib/types";
 import { requireProject, requireStudio } from "../access";
 import { db } from "../db";
-import { attachments, boardColumns, boards, cards, deliverables, projects, robloxResources } from "../db/schema";
+import { assetVersions, attachments, boardColumns, boards, cards, deliverables, projects, robloxResources } from "../db/schema";
 import { forbidden } from "../errors";
 import { columnToDTO } from "./board";
 import { summarizeCards } from "./card-dto";
@@ -41,10 +41,11 @@ export async function listArchivedContent(actor: Actor, projectId: string) {
       .limit(500),
     // Archived files whose card and deliverable are still active.
     db
-      .select({ a: attachments, cardNumber: cards.number, cardTitle: cards.title, deliverableName: deliverables.name })
+      .select({ a: attachments, cardNumber: cards.number, cardTitle: cards.title, deliverableName: deliverables.name, versionNumber: assetVersions.versionNumber })
       .from(attachments)
       .innerJoin(cards, eq(cards.id, attachments.cardId))
       .leftJoin(deliverables, eq(deliverables.id, attachments.deliverableId))
+      .leftJoin(assetVersions, eq(assetVersions.id, attachments.versionId))
       .where(and(eq(attachments.projectId, projectId), isNotNull(attachments.archivedAt), isNull(cards.archivedAt), isNull(deliverables.archivedAt)))
       .orderBy(desc(attachments.archivedAt))
       .limit(500),
@@ -121,12 +122,14 @@ export async function listArchivedContent(actor: Actor, projectId: string) {
       files: deliverableBytes.get(d.id)?.files ?? 0,
       bytes: deliverableBytes.get(d.id)?.bytes ?? 0,
     })),
-    attachments: attachmentRows.map(({ a, cardNumber, cardTitle, deliverableName }) => ({
+    attachments: attachmentRows.map(({ a, cardNumber, cardTitle, deliverableName, versionNumber }) => ({
       id: a.id,
       cardId: a.cardId,
       cardKey: key(cardNumber),
       cardTitle,
       deliverableName,
+      /** Where it was: a revision's file ("V3"), an image taken out of a description, or another file. */
+      origin: a.purpose === "DESCRIPTION" ? ("description" as const) : a.purpose === "VERSION" && versionNumber ? (`V${versionNumber}` as const) : null,
       filename: a.filename,
       kind: a.kind as AttachmentKind,
       bytes: a.sizeBytes,

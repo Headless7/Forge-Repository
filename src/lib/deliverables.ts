@@ -133,26 +133,42 @@ const STATE_REASON: Record<CardState, string> = {
   APPROVED: "Approved",
 };
 
+/** A deliverable shared from another card that this card needs approved before it can be completed. */
+export interface SharedFacts extends DeliverableFacts {
+  /** Its own card's key ("UTD-3"). */
+  cardKey: string;
+}
+
 export function computeReadiness(input: {
   deliverables: DeliverableFacts[];
   links: LinkFacts[];
   snapshot: ProductionSnapshotEntry[];
   recorded: boolean;
+  /** Revision numbers by id, for this card's deliverables and the shared ones. */
   versionNumbers: Map<string, number>;
+  /** Shared deliverables this card needs (see canvas links). They never count toward its own progress. */
+  shared?: SharedFacts[];
 }): ReadinessDTO {
   const counted = countedDeliverables(input.deliverables);
+  const shared = (input.shared ?? []).filter((d) => !d.archived);
   const blockers: ReadinessDTO["blockers"] = [];
   if (!counted.length) blockers.push({ deliverableId: "", name: "Deliverables", reason: "Add at least one deliverable" });
   const v = (id: string | null) => (id ? input.versionNumbers.get(id) : undefined);
+  const reasonFor = (d: DeliverableFacts) => {
+    if (d.state === "NOT_SUBMITTED" && !d.hasFiles) return "No files uploaded yet";
+    if (d.state === "IN_PROGRESS" && v(d.currentVersionId)) return `V${v(d.currentVersionId)} in progress — not submitted for review`;
+    if (d.state === "NEEDS_REVIEW" && v(d.currentVersionId)) return `V${v(d.currentVersionId)} is waiting for review`;
+    if (d.state === "CHANGES_REQUESTED" && v(d.currentVersionId)) return `Changes requested on V${v(d.currentVersionId)}`;
+    return STATE_REASON[d.state];
+  };
 
   for (const d of counted) {
     if (d.state === "APPROVED") continue;
-    let reason = STATE_REASON[d.state];
-    if (d.state === "NOT_SUBMITTED" && !d.hasFiles) reason = "No files uploaded yet";
-    if (d.state === "IN_PROGRESS" && v(d.currentVersionId)) reason = `V${v(d.currentVersionId)} in progress — not submitted for review`;
-    if (d.state === "NEEDS_REVIEW" && v(d.currentVersionId)) reason = `V${v(d.currentVersionId)} is waiting for review`;
-    if (d.state === "CHANGES_REQUESTED" && v(d.currentVersionId)) reason = `Changes requested on V${v(d.currentVersionId)}`;
-    blockers.push({ deliverableId: d.id, name: d.name, reason });
+    blockers.push({ deliverableId: d.id, name: d.name, reason: reasonFor(d) });
+  }
+  for (const d of shared) {
+    if (d.state === "APPROVED") continue;
+    blockers.push({ deliverableId: d.id, name: d.name, reason: `Shared from ${d.cardKey}, needed here — ${reasonFor(d).replace(/^[A-Z](?![A-Z0-9])/, (c) => c.toLowerCase())}`, sharedFrom: d.cardKey });
   }
   // A counted deliverable can't be done while something it requires isn't approved.
   const blocked = blockedBy(input.deliverables, input.links);
@@ -168,7 +184,20 @@ export function computeReadiness(input: {
   const pendingChanges: ReadinessDTO["pendingChanges"] = [];
   if (input.recorded) {
     const recordedIds = new Set(input.snapshot.map((s) => s.deliverableId));
+    const sharedById = new Map((input.shared ?? []).map((d) => [d.id, d]));
     for (const entry of input.snapshot) {
+      if (entry.sharedFrom) {
+        // Shared work this card needed when it was recorded: flag a newer revision of it (if it's still needed here).
+        const d = sharedById.get(entry.deliverableId);
+        if (!d || !entry.versionId) continue;
+        const where = { deliverableId: d.id, name: d.name, sharedFrom: d.cardKey };
+        if (d.archived) pendingChanges.push({ ...where, detail: `Archived on ${d.cardKey} since it was recorded` });
+        else if (d.currentVersionId && d.currentVersionId !== entry.versionId) {
+          const now = v(d.currentVersionId);
+          pendingChanges.push({ ...where, detail: `${now ? `V${now}` : "A new revision"} on ${d.cardKey} is ${d.state === "APPROVED" ? "approved but not yet recorded" : STATE_REASON[d.state].toLowerCase()} · V${entry.versionNumber ?? "?"} is recorded` });
+        } else if (d.state !== "APPROVED") pendingChanges.push({ ...where, detail: `Reopened on ${d.cardKey} (${STATE_REASON[d.state].toLowerCase()}) · V${entry.versionNumber ?? "?"} is recorded` });
+        continue;
+      }
       const d = byId.get(entry.deliverableId);
       if (!d) continue;
       if (!entry.versionId) {
@@ -196,6 +225,9 @@ export function computeReadiness(input: {
     }
     for (const d of counted) {
       if (!recordedIds.has(d.id)) pendingChanges.push({ deliverableId: d.id, name: d.name, detail: "Added after this was recorded" });
+    }
+    for (const d of shared) {
+      if (!recordedIds.has(d.id)) pendingChanges.push({ deliverableId: d.id, name: d.name, detail: `Shared from ${d.cardKey} and needed here since this was recorded`, sharedFrom: d.cardKey });
     }
   }
   return { ready: blockers.length === 0, blockers, pendingChanges };

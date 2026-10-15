@@ -1,8 +1,8 @@
 "use client";
 
 import { format } from "date-fns";
-import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Ellipsis, Link2, Lock, Plus, Users } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Ellipsis, Link2, Lock, Pencil, Plus, Users } from "lucide-react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { CARD_STATE_META } from "@/lib/card-meta";
 import { roleHas } from "@/lib/permissions";
 import { useCardMutation } from "@/lib/queries";
@@ -15,10 +15,13 @@ import { StatePill } from "../domain/state";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/controls";
 import { ConfirmDialog } from "../ui/dialog";
-import { Input, Textarea } from "../ui/input";
+import { RichText } from "../comments/rich-text";
+import { Input } from "../ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip } from "../ui/menu";
 import { DeliverableCoverControl } from "./cover-control";
+import { SharedWithChips } from "./card-links";
 import { DeliverableColorPicker } from "./deliverable-color";
+import { DescriptionTextarea, releaseUnusedImages, useCoverFromDescription, useDescriptionImageUploads, useImageRenderer } from "./description-images";
 import { AddDeliverableDialog, useDeliverableTypes } from "./deliverables-panel";
 import { useScope, useWorkspace } from "./workspace-context";
 
@@ -128,6 +131,94 @@ function RelationChip({ d, prefix }: { d: DeliverableDTO; prefix?: string }) {
   );
 }
 
+/**
+ * The deliverable's description: what done looks like, with references and images. Read with its
+ * images shown (any of them can become the cover); Edit opens the text with image paste and upload.
+ */
+function DeliverableDescription({ d }: { d: DeliverableDTO }) {
+  const { card, mentionSet } = useWorkspace();
+  const canEdit = d.permissions.canEdit;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(d.description);
+  const images = useDescriptionImageUploads(useMemo(() => ({ id: card.id, projectId: card.projectId, title: card.title, deliverableId: d.id, label: d.name }), [card.id, card.projectId, card.title, d.id, d.name]), setDraft);
+  const update = useCardMutation("deliverable.update", card.id, card.projectId, {
+    onSuccess: () => {
+      setEditing(false);
+      images.uploaded.current.clear();
+    },
+  });
+  const cover = useCoverFromDescription(card.id, card.projectId);
+  const renderImage = useImageRenderer({
+    attachments: card.attachments,
+    coverId: d.coverMode === "MANUAL" ? (d.cover?.attachmentId ?? null) : null,
+    canEdit: canEdit && !d.archivedAt,
+    onUseAsCover: (id) => cover.forDeliverable(d.id, id),
+  });
+  const start = () => {
+    setDraft(d.description);
+    setEditing(true);
+  };
+  const cancel = () => {
+    releaseUnusedImages(images.uploaded.current, d.description);
+    setEditing(false);
+  };
+  const save = () => (draft !== d.description ? update.mutate({ deliverableId: d.id, description: draft }) : setEditing(false));
+
+  if (editing) {
+    return (
+      <section aria-label="Edit the deliverable's description" className="grid gap-1.5">
+        <DescriptionTextarea
+          autoFocus
+          autoGrow
+          maxRows={20}
+          value={draft}
+          onChange={setDraft}
+          onImages={images.start}
+          busy={images.busy}
+          maxLength={5000}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !images.busy) save();
+            if (e.key === "Escape") cancel();
+          }}
+          placeholder="What does done look like? Paste references, links or screenshots."
+          aria-label="Deliverable description"
+          className="min-h-24 text-[13px]"
+          footer={
+            <span className="ml-auto flex items-center gap-1.5">
+              <Button size="xs" variant="ghost" onClick={cancel}>
+                Cancel
+              </Button>
+              <Button size="xs" variant="primary" disabled={images.busy > 0} loading={update.isPending} onClick={save}>
+                Save
+              </Button>
+            </span>
+          }
+        />
+      </section>
+    );
+  }
+  return (
+    <section aria-label="Deliverable description" className="group">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h3 className="text-[12.5px] font-semibold text-fg-muted">Description</h3>
+        {canEdit && d.description.trim() ? (
+          <Button size="xs" variant="ghost" onClick={start}>
+            <Pencil /> Edit
+          </Button>
+        ) : null}
+      </div>
+      {d.description.trim() ? (
+        <RichText text={d.description} mentions={mentionSet} className="text-fg" renderImage={renderImage} />
+      ) : (
+        <button type="button" onClick={start} className="w-full rounded-lg border border-dashed border-border-strong px-3 py-2.5 text-left text-[13px] text-fg-subtle hover:border-fg-subtle hover:text-fg-muted">
+          Add a description: what done looks like, references, images…
+        </button>
+      )}
+    </section>
+  );
+}
+
 /** Name, type, requirement, people, due date, description and relationships of the focused deliverable. */
 export function DeliverableHeader() {
   const { card, scope, members, deliverables, viewerId, openDeliverable } = useScope();
@@ -137,14 +228,12 @@ export function DeliverableHeader() {
   const update = useCardMutation("deliverable.update", card.id, card.projectId);
   const archive = useCardMutation("deliverable.archive", card.id, card.projectId, { onSuccess: () => openDeliverable(null) });
   const [name, setName] = useState(d.name);
-  const [description, setDescription] = useState(d.description);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [addDependent, setAddDependent] = useState(false);
   const types = useDeliverableTypes();
   const typesListId = useId();
   const saveType = (value: string) => value.trim() !== d.assetType && update.mutate({ deliverableId: d.id, assetType: value.trim() });
   useEffect(() => setName(d.name), [d.name]);
-  useEffect(() => setDescription(d.description), [d.description]);
 
   const byId = new Map(deliverables.map((x) => [x.id, x]));
   const requires = card.deliverableLinks.filter((l) => l.type === "DEPENDENCY" && l.toId === d.id).map((l) => byId.get(l.fromId)).filter((x): x is DeliverableDTO => Boolean(x));
@@ -339,17 +428,9 @@ export function DeliverableHeader() {
         </p>
       </div>
 
-      {perms.canEdit || d.description ? (
-        <Textarea
-          value={description}
-          disabled={!perms.canEdit}
-          onChange={(e) => setDescription(e.target.value)}
-          onBlur={() => description !== d.description && update.mutate({ deliverableId: d.id, description })}
-          placeholder="What does done look like for this deliverable?"
-          aria-label="Deliverable description"
-          className="min-h-14 text-[13px]"
-        />
-      ) : null}
+      <SharedWithChips deliverableId={d.id} />
+
+      {perms.canEdit || d.description ? <DeliverableDescription d={d} /> : null}
 
       {requires.length || requiredBy.length || related.length ? (
         <div className="flex flex-wrap items-center gap-1.5 text-[12px]">

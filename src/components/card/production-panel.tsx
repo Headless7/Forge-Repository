@@ -11,6 +11,7 @@ import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
 import { TipAnchor } from "../tutorial/tutorial";
 import { Textarea } from "../ui/input";
+import { linkTarget } from "./card-links";
 import { useWorkspace } from "./workspace-context";
 
 /**
@@ -19,7 +20,15 @@ import { useWorkspace } from "./workspace-context";
  * changes any review state.
  */
 export function ProductionPanel() {
-  const { card, membersById, openDeliverable, multi } = useWorkspace();
+  const { card, membersById, openDeliverable, multi, openLinked } = useWorkspace();
+  // Shared work this card needs opens on its own card; this card's own deliverables open here.
+  const sharedLink = (deliverableId: string) => card.canvasLinks.find((l) => l.deliverable?.id === deliverableId);
+  const openItem = (item: { deliverableId: string; sharedFrom?: string }) => {
+    const link = item.sharedFrom ? sharedLink(item.deliverableId) : undefined;
+    if (link) openLinked(linkTarget(link));
+    else openDeliverable(item.deliverableId);
+  };
+  const neededShares = card.canvasLinks.filter((l) => l.needed && l.deliverable && !l.deliverable.archived && !l.card.archived);
   const [target, setTarget] = useState<ProductionStatus | null>(null);
   const [note, setNote] = useState("");
   const move = useCardMutation("card.setProduction", card.id, card.projectId, {
@@ -74,7 +83,10 @@ export function ProductionPanel() {
           <ul className="mt-1 grid gap-0.5 text-[12px]">
             {card.productionSnapshot.map((s) => (
               <li key={s.deliverableId} className="flex gap-1.5">
-                <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {s.name}
+                  {s.sharedFrom ? <span className="text-fg-subtle"> · from {s.sharedFrom}</span> : null}
+                </span>
                 <span className="font-mono text-fg-muted">{s.versionNumber ? `V${s.versionNumber}` : "—"}</span>
               </li>
             ))}
@@ -89,9 +101,10 @@ export function ProductionPanel() {
           <ul className="mt-1 grid gap-1">
             {readiness.pendingChanges.map((p) => (
               <li key={`${p.deliverableId}-${p.detail}`}>
-                {multi ? (
-                  <button type="button" onClick={() => openDeliverable(p.deliverableId)} className="inline-flex min-h-6 items-center font-medium hover:underline">
+                {multi || p.sharedFrom ? (
+                  <button type="button" onClick={() => openItem(p)} className="inline-flex min-h-6 items-center font-medium hover:underline">
                     {p.name}
+                    {p.sharedFrom ? <span className="ml-1 font-normal text-fg-subtle">· {p.sharedFrom}</span> : null}
                   </button>
                 ) : (
                   <span className="font-medium">{p.name}</span>
@@ -108,7 +121,7 @@ export function ProductionPanel() {
       {status === "TODO" ? (
         readiness.ready ? (
           <p className="mt-2 flex items-center gap-1.5 text-[12px] font-medium text-state-approved">
-            <CircleCheck className="size-4" /> Every required deliverable is approved.
+            <CircleCheck className="size-4" /> Every required deliverable{neededShares.length ? " (and the shared work it needs)" : ""} is approved.
           </p>
         ) : (
           <div className="mt-2 text-[12px]">
@@ -118,8 +131,8 @@ export function ProductionPanel() {
             <ul className="mt-1 grid gap-1">
               {readiness.blockers.slice(0, 8).map((b) => (
                 <li key={`${b.deliverableId}-${b.reason}`} className="rounded-md bg-surface-3/50 px-2 py-1">
-                  {b.deliverableId && multi ? (
-                    <button type="button" onClick={() => openDeliverable(b.deliverableId)} className="inline-flex min-h-6 items-center font-medium hover:underline">
+                  {b.deliverableId && (multi || b.sharedFrom) ? (
+                    <button type="button" onClick={() => openItem(b)} className="inline-flex min-h-6 items-center font-medium hover:underline">
                       {b.name}
                     </button>
                   ) : (
@@ -180,6 +193,15 @@ export function ProductionPanel() {
                     </li>
                   );
                 })}
+              {neededShares.map((l) => (
+                <li key={l.id} className="flex gap-2">
+                  <span className="min-w-0 flex-1 truncate">
+                    {l.deliverable!.name}
+                    <span className="text-fg-subtle"> · from {l.card.key}</span>
+                  </span>
+                  <span className="font-mono text-fg-muted">{l.deliverable!.state === "APPROVED" && l.deliverable!.approvedVersionNumber ? `V${l.deliverable!.approvedVersionNumber} approved` : "not approved"}</span>
+                </li>
+              ))}
             </ul>
           ) : null}
           {target === "PUBLISHED" && demoClips > 0 ? (

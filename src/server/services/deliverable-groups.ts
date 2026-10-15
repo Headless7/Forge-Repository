@@ -5,7 +5,7 @@ import type { CardDetailDTO } from "@/lib/types";
 import { assertCard, requireCard, type CardAccess } from "../access";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
-import { deliverableGroups, deliverables } from "../db/schema";
+import { canvasLinks, deliverableGroups, deliverables } from "../db/schema";
 import { conflict, invalid, notFound } from "../errors";
 import { loadCardDetail } from "./card-dto";
 import type { Actor } from "./context";
@@ -45,8 +45,8 @@ async function requireGroup(actor: Actor, groupId: string): Promise<{ ctx: CardA
   return { ctx, group };
 }
 
-/** The deliverables and folders named must all be this card's, and the deliverables active. */
-async function assertMembers(tx: Executor, cardId: string, deliverableIds: string[], groupIds: string[], groups: ReadonlyMap<string, GroupRow>) {
+/** The deliverables, links and folders named must all be this card's, and the deliverables active. */
+async function assertMembers(tx: Executor, cardId: string, deliverableIds: string[], groupIds: string[], groups: ReadonlyMap<string, GroupRow>, linkIds: string[] = []) {
   if (deliverableIds.length) {
     const rows = await tx
       .select({ id: deliverables.id, archivedAt: deliverables.archivedAt })
@@ -55,11 +55,18 @@ async function assertMembers(tx: Executor, cardId: string, deliverableIds: strin
     if (rows.length !== deliverableIds.length) throw notFound("Deliverable");
     if (rows.some((r) => r.archivedAt)) throw conflict("Archived deliverables can't be put in folders. Restore them first.");
   }
+  if (linkIds.length) {
+    const rows = await tx
+      .select({ id: canvasLinks.id })
+      .from(canvasLinks)
+      .where(and(eq(canvasLinks.cardId, cardId), inArray(canvasLinks.id, linkIds)));
+    if (rows.length !== linkIds.length) throw notFound("Link");
+  }
   for (const id of groupIds) if (!groups.has(id)) throw notFound("Folder");
 }
 
 /**
- * Removes folders with nothing active inside them (no active deliverable, no sub-folder), and
+ * Removes folders with nothing active inside them (no active deliverable, link or sub-folder), and
  * then any folder that became empty because of it. Archived deliverables still pointing at a
  * removed folder return to the top level (the database clears the reference).
  */
@@ -67,11 +74,14 @@ export async function removeEmptyGroups(tx: Executor, cardId: string): Promise<s
   const removed: string[] = [];
   const groups = await tx.select({ id: deliverableGroups.id, parentId: deliverableGroups.parentId }).from(deliverableGroups).where(eq(deliverableGroups.cardId, cardId));
   if (!groups.length) return removed;
-  const active = await tx
-    .select({ groupId: deliverables.groupId })
-    .from(deliverables)
-    .where(and(eq(deliverables.cardId, cardId), isNull(deliverables.archivedAt)));
-  const used = new Set(active.map((d) => d.groupId).filter((id): id is string => Boolean(id)));
+  const [active, links] = await Promise.all([
+    tx
+      .select({ groupId: deliverables.groupId })
+      .from(deliverables)
+      .where(and(eq(deliverables.cardId, cardId), isNull(deliverables.archivedAt))),
+    tx.select({ groupId: canvasLinks.groupId }).from(canvasLinks).where(eq(canvasLinks.cardId, cardId)),
+  ]);
+  const used = new Set([...active, ...links].map((d) => d.groupId).filter((id): id is string => Boolean(id)));
   const remaining = new Map(groups.map((g) => [g.id, g]));
   for (;;) {
     const parents = new Set([...remaining.values()].map((g) => g.parentId));
@@ -100,26 +110,28 @@ async function finish(actor: Actor, ctx: CardAccess, fx: Effects): Promise<CardD
  */
 export async function createGroup(
   actor: Actor,
-  input: { cardId: string; name?: string | null; color?: string | null; parentId?: string | null; deliverableIds: string[]; groupIds?: string[]; positions?: NodeLayout[] },
+  input: { cardId: string; name?: string | null; color?: string | null; parentId?: string | null; deliverableIds: string[]; linkIds?: string[]; groupIds?: string[]; positions?: NodeLayout[] },
 ): Promise<CardDetailDTO> {
   const ctx = await requireCard(actor.userId, input.cardId);
   assertCard(ctx.perms, "canEdit", EDIT_MESSAGE);
   const deliverableIds = unique(input.deliverableIds);
+  const linkIds = unique(input.linkIds);
   const groupIds = unique(input.groupIds);
-  if (!deliverableIds.length && !groupIds.length) throw invalid("Pick at least one deliverable to put in the folder.");
+  if (!deliverableIds.length && !linkIds.length && !groupIds.length) throw invalid("Pick at least one deliverable to put in the folder.");
   const color = cleanColor(input.color);
   const fx = new Effects();
   await db.transaction(async (tx) => {
     const groups = foldersById(await tx.select().from(deliverableGroups).where(eq(deliverableGroups.cardId, ctx.card.id)));
     const parentId = input.parentId ?? null;
     if (parentId && !groups.has(parentId)) throw notFound("Folder");
-    await assertMembers(tx, ctx.card.id, deliverableIds, groupIds, groups);
+    await assertMembers(tx, ctx.card.id, deliverableIds, groupIds, groups, linkIds);
     for (const id of groupIds) if (folderContains(groups, id, parentId)) throw conflict("A folder can't be moved inside itself.");
     const [group] = await tx
       .insert(deliverableGroups)
       .values({ cardId: ctx.card.id, parentId, name: cleanName(input.name), color, createdById: actor.userId, createdAt: now() })
       .returning();
     if (deliverableIds.length) await tx.update(deliverables).set({ groupId: group!.id }).where(inArray(deliverables.id, deliverableIds));
+    if (linkIds.length) await tx.update(canvasLinks).set({ groupId: group!.id }).where(inArray(canvasLinks.id, linkIds));
     if (groupIds.length) await tx.update(deliverableGroups).set({ parentId: group!.id, updatedAt: now() }).where(inArray(deliverableGroups.id, groupIds));
     if (input.positions?.length) await applyLayout(tx, ctx.card.id, input.positions);
     await removeEmptyGroups(tx, ctx.card.id);
@@ -152,6 +164,7 @@ export async function ungroup(actor: Actor, input: { groupId: string }): Promise
   const fx = new Effects();
   await db.transaction(async (tx) => {
     await tx.update(deliverables).set({ groupId: group.parentId }).where(eq(deliverables.groupId, group.id));
+    await tx.update(canvasLinks).set({ groupId: group.parentId }).where(eq(canvasLinks.groupId, group.id));
     await tx.update(deliverableGroups).set({ parentId: group.parentId, updatedAt: now() }).where(eq(deliverableGroups.parentId, group.id));
     await tx.delete(deliverableGroups).where(eq(deliverableGroups.id, group.id));
     await removeEmptyGroups(tx, ctx.card.id);
@@ -165,21 +178,23 @@ export async function ungroup(actor: Actor, input: { groupId: string }): Promise
  */
 export async function moveToGroup(
   actor: Actor,
-  input: { cardId: string; deliverableIds?: string[]; groupIds?: string[]; targetGroupId: string | null; positions?: NodeLayout[] },
+  input: { cardId: string; deliverableIds?: string[]; linkIds?: string[]; groupIds?: string[]; targetGroupId: string | null; positions?: NodeLayout[] },
 ): Promise<CardDetailDTO> {
   const ctx = await requireCard(actor.userId, input.cardId);
   assertCard(ctx.perms, "canEdit", EDIT_MESSAGE);
   const deliverableIds = unique(input.deliverableIds);
+  const linkIds = unique(input.linkIds);
   const groupIds = unique(input.groupIds);
-  if (!deliverableIds.length && !groupIds.length) throw invalid("Nothing to move.");
+  if (!deliverableIds.length && !linkIds.length && !groupIds.length) throw invalid("Nothing to move.");
   const fx = new Effects();
   await db.transaction(async (tx) => {
     const groups = foldersById(await tx.select().from(deliverableGroups).where(eq(deliverableGroups.cardId, ctx.card.id)));
     const target = input.targetGroupId ?? null;
     if (target && !groups.has(target)) throw notFound("Folder");
-    await assertMembers(tx, ctx.card.id, deliverableIds, groupIds, groups);
+    await assertMembers(tx, ctx.card.id, deliverableIds, groupIds, groups, linkIds);
     for (const id of groupIds) if (folderContains(groups, id, target)) throw conflict("A folder can't be moved inside itself.");
     if (deliverableIds.length) await tx.update(deliverables).set({ groupId: target }).where(inArray(deliverables.id, deliverableIds));
+    if (linkIds.length) await tx.update(canvasLinks).set({ groupId: target }).where(inArray(canvasLinks.id, linkIds));
     if (groupIds.length) await tx.update(deliverableGroups).set({ parentId: target, updatedAt: now() }).where(inArray(deliverableGroups.id, groupIds));
     if (input.positions?.length) await applyLayout(tx, ctx.card.id, input.positions);
     await removeEmptyGroups(tx, ctx.card.id);

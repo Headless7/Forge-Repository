@@ -1,13 +1,13 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Folder, Layers, List, Lock, MessageSquareWarning, Network, Plus } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Folder, Layers, List, Lock, MessageSquareWarning, Network, Plus, Share2 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { folderSummary, folderTree, type FolderTreeNode } from "@/lib/canvas-folders";
 import { useCardMutation } from "@/lib/queries";
 import { rpc, errorMessage } from "@/lib/rpc-client";
-import type { DeliverableDTO, DeliverableGroupDTO, DeliverableLinkType } from "@/lib/types";
+import type { CanvasLinkDTO, DeliverableDTO, DeliverableGroupDTO, DeliverableLinkType } from "@/lib/types";
 import { roleHas } from "@/lib/permissions";
 import { cn, formatShortDate } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -20,9 +20,13 @@ import { StatePill } from "../domain/state";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/controls";
 import { Dialog, DialogContent, DialogFooter } from "../ui/dialog";
-import { Input, Textarea } from "../ui/input";
+import { Input } from "../ui/input";
 import { TipAnchor, useTutorial } from "../tutorial/tutorial";
+import { useUploads } from "../upload/upload-manager";
+import { DescriptionTextarea, pendingToken, type ImageSource } from "./description-images";
+import { imageToken, PENDING_TOKEN, plainDescription } from "@/lib/description-images";
 import { Tooltip } from "../ui/menu";
+import { AddLinkButton, LinkedFrom, LinkRow, sharedWith } from "./card-links";
 import type { CanvasActions } from "./deliverable-canvas";
 import { DeliverableWork } from "./deliverable-work";
 import { useCollapsedFolders } from "./folder-view";
@@ -79,6 +83,10 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
     if (open) setRequires(startWith ? [startWith] : []);
   }, [open, startWith]);
   const [description, setDescription] = useState("");
+  // Images added before the deliverable exists are stored right after it's created.
+  const [pendingImages, setPendingImages] = useState<ImageSource[]>([]);
+  const uploads = useUploads();
+  const queryClient = useQueryClient();
   const create = useCardMutation("deliverable.create", card.id, card.projectId);
   const types = useDeliverableTypes();
   const canAssign = card.permissions.canAssign;
@@ -90,17 +98,38 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
     setReviewerId("none");
     setDueAt("");
     setDescription("");
+    setPendingImages([]);
+  };
+  /** Stores the images added while writing, then puts them in the new deliverable's description where they were. */
+  const attachImages = (deliverableId: string, text: string, sources: ImageSource[]) => {
+    const target = { id: card.id, projectId: card.projectId, title: card.title, deliverableId, label: name.trim() };
+    void Promise.all(
+      sources.map((s) =>
+        (s.file ? uploads.uploadOne(target, s.file, "description") : rpc("upload.importUrl", { cardId: card.id, url: s.url!, purpose: "description", deliverableId }))
+          .then((a) => ({ s, token: imageToken(a.filename || s.name, a.id) }))
+          .catch((error) => {
+            toast.error(`Couldn't add ${s.name}: ${errorMessage(error)}`);
+            return { s, token: s.url ?? "" };
+          }),
+      ),
+    ).then(async (done) => {
+      let final = text;
+      for (const { s, token } of done) final = final.replace(pendingToken(s), token);
+      await rpc("deliverable.update", { deliverableId, description: final.trim() }).catch((error) => toast.error(errorMessage(error)));
+      void queryClient.invalidateQueries({ queryKey: qk.card(card.id) });
+    });
   };
   const submit = async (openAfter: boolean) => {
     if (!name.trim()) return;
     const last = deliverables.at(-1);
+    const images = pendingImages.filter((s) => description.includes(pendingToken(s)));
     try {
       const detail = await create.mutateAsync({
         cardId: card.id,
         name: name.trim(),
         assetType: assetType.trim() || undefined,
         required,
-        description: description.trim() || undefined,
+        description: description.replace(PENDING_TOKEN, "").trim() || undefined,
         ownerId: ownerId === "none" ? null : ownerId,
         reviewerId: reviewerId === "none" ? null : reviewerId,
         dueAt: dueAt ? new Date(dueAt).toISOString() : null,
@@ -110,6 +139,7 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
         linkFrom: linkFrom && linkFrom.type !== "DEPENDENCY" ? linkFrom : null,
       });
       const created = detail.deliverables.find((d) => d.name === name.trim() && !deliverables.some((x) => x.id === d.id));
+      if (created && images.length) attachImages(created.id, description, images);
       onOpenChange(false);
       reset();
       toast.success(`Added ${name.trim()}.`);
@@ -201,7 +231,15 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
               </span>
             </div>
           ) : null}
-          <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What does done look like? (optional)" maxLength={5000} />
+          <DescriptionTextarea
+            value={description}
+            onChange={setDescription}
+            onImages={(sources) => setPendingImages((list) => [...list, ...sources])}
+            busy={0}
+            placeholder="What does done look like? (optional — paste references or screenshots)"
+            aria-label="Description"
+            maxLength={5000}
+          />
           <label className="flex items-center gap-2 text-[13px]">
             <Checkbox checked={required} onCheckedChange={(v) => setRequired(v === true)} /> Required to complete the card
           </label>
@@ -223,7 +261,8 @@ export function AddDeliverableDialog({ open, onOpenChange, linkFrom }: { open: b
 }
 
 function DeliverableRow({ d, first, last, canEdit, onMove }: { d: DeliverableDTO; first: boolean; last: boolean; canEdit: boolean; onMove: (d: DeliverableDTO, dir: -1 | 1) => void }) {
-  const { openDeliverable, deliverables, membersById } = useWorkspace();
+  const { openDeliverable, deliverables, membersById, card } = useWorkspace();
+  const shares = sharedWith(card.linkedFrom, d.id);
   const creator = d.createdById ? membersById.get(d.createdById) : undefined;
   const kind = d.kinds.find((k) => k !== "FILE") ?? d.kinds[0];
   const KindIcon = kind ? KIND_ICONS[kind] : Layers;
@@ -250,9 +289,14 @@ function DeliverableRow({ d, first, last, canEdit, onMove }: { d: DeliverableDTO
                 <Lock className="size-3" /> waiting on {blockedNames.join(", ")}
               </span>
             ) : null}
+            {shares.length ? (
+              <span className="inline-flex items-center gap-0.5" title={`Shared with ${shares.map((s) => s.card.key).join(", ")}`}>
+                <Share2 className="size-3" /> shared with {shares.length === 1 ? shares[0]!.card.key : `${shares.length} cards`}
+              </span>
+            ) : null}
             <CreatorMark person={creator} />
           </span>
-          {d.description.trim() ? <span className="mt-0.5 line-clamp-2 whitespace-pre-wrap break-words text-[11.5px] text-fg-muted">{d.description}</span> : null}
+          {d.description.trim() ? <span className="mt-0.5 line-clamp-2 whitespace-pre-wrap break-words text-[11.5px] text-fg-muted">{plainDescription(d.description)}</span> : null}
           <DeliverableWork d={d} className="mt-0.5" />
         </span>
         {d.openFeedback ? (
@@ -278,11 +322,13 @@ function DeliverableRow({ d, first, last, canEdit, onMove }: { d: DeliverableDTO
   );
 }
 
-type TreeNode = FolderTreeNode<DeliverableGroupDTO, DeliverableDTO>;
+/** A row of the list: a deliverable, or a link (listed after the deliverables of its folder). */
+type ListItem = { id: string; groupId: string | null; position: number } & ({ kind: "deliverable"; deliverable: DeliverableDTO } | { kind: "link"; link: CanvasLinkDTO });
+type TreeNode = FolderTreeNode<DeliverableGroupDTO, ListItem>;
 
 /** Deliverables inside a tree node, in list order. */
 function flatten(node: TreeNode): DeliverableDTO[] {
-  return node.kind === "item" ? [node.item] : node.children.flatMap(flatten);
+  return node.kind === "item" ? (node.item.kind === "deliverable" ? [node.item.deliverable] : []) : node.children.flatMap(flatten);
 }
 
 /** The list view's folders: a section per folder (collapsible here, independently of the canvas), nested like the canvas. */
@@ -293,13 +339,16 @@ function FolderSection({ node, canEdit, onMove }: { node: Extract<TreeNode, { ki
   const open = !collapsed.has(node.folder.id);
   const setOpen = (next: (open: boolean) => boolean) => setCollapsed(node.folder.id, !next(open));
   const inside = flatten(node);
+  const linksInside = (function count(n: TreeNode): number {
+    return n.kind === "item" ? Number(n.item.kind === "link") : n.children.reduce((sum, c) => sum + count(c), 0);
+  })(node);
   return (
     <li className="rounded-lg border border-dashed border-border-strong/80 p-1.5" style={node.folder.color ? { borderColor: node.folder.color, backgroundColor: `color-mix(in oklab, ${node.folder.color} 6%, transparent)` } : undefined}>
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex min-h-8 w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-surface-3">
         {open ? <ChevronDown className="size-4 shrink-0 text-fg-subtle" /> : <ChevronRight className="size-4 shrink-0 text-fg-subtle" />}
         <Folder className="size-4 shrink-0" style={{ color: node.folder.color ?? "var(--fg-muted)" }} aria-hidden />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{node.folder.name}</span>
-        <span className="shrink-0 text-[11px] text-fg-muted">{folderSummary(inside.length, inside.map((d) => d.state))}</span>
+        <span className="shrink-0 text-[11px] text-fg-muted">{folderSummary(inside.length, inside.map((d) => d.state), linksInside)}</span>
       </button>
       {open ? (
         <ul className="mt-1 grid gap-1.5 pl-2 sm:pl-4" aria-label={`Inside ${node.folder.name}`}>
@@ -315,17 +364,22 @@ function ListTree({ nodes, canEdit, onMove }: { nodes: TreeNode[]; canEdit: bool
     <>
       {nodes.map((node, i) =>
         node.kind === "item" ? (
-          <DeliverableRow
-            key={node.item.id}
-            d={node.item}
-            first={i === 0}
-            last={i === nodes.length - 1}
-            canEdit={canEdit}
-            onMove={(d, dir) => {
-              const neighbour = nodes[i + dir];
-              if (neighbour) onMove(d, neighbour, dir);
-            }}
-          />
+          node.item.kind === "link" ? (
+            <LinkRow key={node.item.id} link={node.item.link} />
+          ) : (
+            <DeliverableRow
+              key={node.item.id}
+              d={node.item.deliverable}
+              first={i === 0}
+              // Links come after the deliverables: the last deliverable can't move past them.
+              last={i === nodes.length - 1 || (nodes[i + 1]?.kind === "item" && (nodes[i + 1] as Extract<TreeNode, { kind: "item" }>).item.kind === "link")}
+              canEdit={canEdit}
+              onMove={(d, dir) => {
+                const neighbour = nodes[i + dir];
+                if (neighbour) onMove(d, neighbour, dir);
+              }}
+            />
+          )
         ) : (
           <FolderSection key={node.folder.id} node={node} canEdit={canEdit} onMove={onMove} />
         ),
@@ -361,7 +415,16 @@ export function DeliverablesPanel() {
   const moveToGroup = useCardMutation("deliverable.group.move", card.id, card.projectId);
   const archived = card.deliverables.filter((d) => d.archivedAt);
   const folders = card.deliverableGroups;
-  const tree = useMemo(() => folderTree(folders, deliverables), [folders, deliverables]);
+  const tree = useMemo(() => {
+    const last = deliverables.reduce((max, d) => Math.max(max, d.position), 0);
+    const items: ListItem[] = [
+      ...deliverables.map((d) => ({ kind: "deliverable" as const, id: d.id, groupId: d.groupId, position: d.position, deliverable: d })),
+      ...card.canvasLinks.map((l, i) => ({ kind: "link" as const, id: l.id, groupId: l.groupId, position: last + 1 + i, link: l })),
+    ];
+    return folderTree(folders, items);
+  }, [folders, deliverables, card.canvasLinks]);
+  // A link added from the header is selected on the canvas once it arrives.
+  const [focusLinkId, setFocusLinkId] = useState<string | null>(null);
 
   const actions: CanvasActions = {
     layout: (changes) =>
@@ -436,21 +499,25 @@ export function DeliverablesPanel() {
         </TipAnchor>
         </TipAnchor>
         {canEdit ? (
-          <Button size="sm" variant="secondary" onClick={() => setAdding(true)}>
-            <Plus /> Add deliverable
-          </Button>
+          <span className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setAdding(true)}>
+              <Plus /> Add deliverable
+            </Button>
+            <AddLinkButton onLinked={(l) => setFocusLinkId(l.id)} />
+          </span>
         ) : null}
       </div>
 
       {view === "canvas" ? (
         <div className="h-[min(62vh,560px)] min-h-[340px] overflow-hidden rounded-xl border border-border bg-surface-2/40">
-          <DeliverableCanvas deliverables={deliverables} folders={folders} links={card.deliverableLinks} canEdit={canEdit} actions={actions} onOpen={openDeliverable} />
+          <DeliverableCanvas deliverables={deliverables} folders={folders} links={card.deliverableLinks} canvasLinks={card.canvasLinks} canEdit={canEdit} actions={actions} onOpen={openDeliverable} focusLinkId={focusLinkId} />
         </div>
       ) : (
         <ul className="grid gap-1.5" aria-label="Deliverables list">
           <ListTree nodes={tree} canEdit={canEdit} onMove={onMove} />
         </ul>
       )}
+      <LinkedFrom />
       {archived.length ? (
         <details className="text-[12px] text-fg-muted">
           <summary className="cursor-pointer">Archived deliverables ({archived.length}) — history is kept</summary>

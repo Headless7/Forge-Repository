@@ -27,6 +27,18 @@ every revision, decision and comment stays attached to the work it belongs to.
   each item can carry a picture (upload or paste a screenshot) for visual reference.
 - **Connected canvas** — deliverables on a pan/zoom canvas (or as a list) with
   *dependency* and *association* links; blocked work shows what it is waiting on.
+- **Linked cards and shared work** — link any other card of the project (on any board) from
+  a card's canvas or list, or share one of its deliverables. Links show that work live and open
+  it (with the way back); the other card lists them under *Linked from*. A shared deliverable is
+  worked on and reviewed on its own card and counts only there — unless a card marks it
+  *needed*, which holds that card's completion until it's approved (and completing records the
+  approved revision).
+- **Images in descriptions** — paste screenshots or image links (Discord's expire, so they're
+  copied into Forge), drop or add images in a card's or deliverable's description; any of them
+  can become the cover.
+- **Files of a revision** — add more files to the revision being prepared, or take some out
+  (with Undo); once a revision is submitted its files are kept as review history and new files
+  start the next revision.
 - **Review workflow** — Not submitted → In progress → Needs review →
   Changes requested / Approved, per deliverable, rolled up onto the card.
 - **Real previews** — videos, images, **audio** (.mp3/.ogg with waveform and

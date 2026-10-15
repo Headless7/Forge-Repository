@@ -10,7 +10,7 @@ import type { AttachmentDTO } from "@/lib/types";
 import { cn, formatBytes } from "@/lib/utils";
 import { Button } from "../ui/button";
 
-type Purpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "item" | "demo";
+type Purpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "item" | "demo" | "description";
 
 export interface UploadItem {
   id: string;
@@ -25,6 +25,8 @@ export interface UploadItem {
   checklistItemId: string | null;
   /** "demo": the Roblox file the clip demonstrates. */
   demoOfId: string | null;
+  /** Added to a revision that already has files (rather than uploaded with a new one). */
+  addedToRevision: boolean;
   progress: number;
   status: "queued" | "uploading" | "processing" | "done" | "error";
   error?: string;
@@ -52,8 +54,12 @@ interface UploadContextValue {
   items: UploadItem[];
   /** Uploads files as a brand-new revision (V+1) of one deliverable. */
   uploadVersion: (card: UploadTarget, files: File[], options?: { notes?: string; submit?: boolean }) => Promise<AttachmentDTO[]>;
+  /** Adds files to a revision that hasn't been submitted yet (the one being prepared). */
+  addToRevision: (card: UploadTarget, version: { id: string; number: number }, files: File[]) => Promise<AttachmentDTO[]>;
   /** Uploads reference files (or comment attachments) without creating a version. */
   uploadFiles: (card: UploadTarget, files: File[], purpose: Exclude<Purpose, "version">) => Promise<AttachmentDTO[]>;
+  /** One file whose caller shows the outcome itself (a description image): rejects with the reason it failed. */
+  uploadOne: (card: UploadTarget, file: File, purpose: Exclude<Purpose, "version">) => Promise<AttachmentDTO>;
   retry: (itemId: string) => void;
   dismiss: (itemId: string) => void;
 }
@@ -166,13 +172,15 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         );
         await putWithProgress(intent.upload.url, item.file, intent.upload.headers, (p) => patch(item.id, { progress: p }));
         patch(item.id, { status: "processing", progress: 1 });
-        const attachment = await rpc("upload.complete", { attachmentId: intent.attachmentId, clientMeta: await clientMeta(item.file) });
+        const attachment = await rpc("upload.complete", { attachmentId: intent.attachmentId, clientMeta: await clientMeta(item.file), addedToRevision: item.addedToRevision || undefined });
         patch(item.id, { status: "done", attachment });
         // Finished uploads disappear from the tray after a moment.
         setTimeout(() => setItems((list) => list.filter((i) => i.id !== item.id)), 4000);
         return attachment;
       } catch (error) {
         patch(item.id, { status: "error", error: errorMessage(error) });
+        // Description images aren't in the tray: the editor that started them reports the failure.
+        if (item.purpose === "description") setItems((list) => list.filter((i) => i.id !== item.id));
         throw error;
       }
     },
@@ -180,7 +188,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   );
 
   const enqueue = useCallback(
-    async (card: UploadTarget, files: File[], purpose: Purpose, versionId: string | null) => {
+    async (card: UploadTarget, files: File[], purpose: Purpose, versionId: string | null, addedToRevision = false) => {
       projects.current.set(card.id, card.projectId);
       kinds.current.set(card.id, card.kind ?? "card");
       const created: UploadItem[] = files.map((file) => ({
@@ -194,6 +202,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         deliverableId: card.deliverableId ?? null,
         checklistItemId: card.checklistItemId ?? null,
         demoOfId: card.demoOfId ?? null,
+        addedToRevision,
         progress: 0,
         status: "queued",
       }));
@@ -243,9 +252,44 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     [enqueue, refresh],
   );
 
+  const addToRevision = useCallback<UploadContextValue["addToRevision"]>(
+    async (card, version, files) => {
+      if (files.length === 0) return [];
+      const results = await enqueue(card, files, "version", version.id, true);
+      if (results.length) toast.success(`${results.length === 1 ? `Added ${results[0]!.filename}` : `Added ${results.length} files`} to V${version.number}${card.label ? ` of “${card.label}”` : ""}.`);
+      return results;
+    },
+    [enqueue],
+  );
+
   const uploadFiles = useCallback<UploadContextValue["uploadFiles"]>(
     (card, files, purpose) => enqueue(card, files, purpose, null),
     [enqueue],
+  );
+
+  const uploadOne = useCallback<UploadContextValue["uploadOne"]>(
+    async (card, file, purpose) => {
+      projects.current.set(card.id, card.projectId);
+      kinds.current.set(card.id, card.kind ?? "card");
+      const item: UploadItem = {
+        id: crypto.randomUUID(),
+        cardId: card.id,
+        target: card.kind ?? "card",
+        cardTitle: card.label ? `${card.title} › ${card.label}` : card.title,
+        file,
+        purpose,
+        versionId: null,
+        deliverableId: card.deliverableId ?? null,
+        checklistItemId: card.checklistItemId ?? null,
+        demoOfId: card.demoOfId ?? null,
+        addedToRevision: false,
+        progress: 0,
+        status: "queued",
+      };
+      setItems((list) => [...list, item]);
+      return run(item);
+    },
+    [run],
   );
 
   const retry = useCallback(
@@ -261,12 +305,13 @@ export function UploadProvider({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback((itemId: string) => setItems((list) => list.filter((i) => i.id !== itemId)), []);
 
-  const value = useMemo(() => ({ items, uploadVersion, uploadFiles, retry, dismiss }), [items, uploadVersion, uploadFiles, retry, dismiss]);
+  const value = useMemo(() => ({ items, uploadVersion, addToRevision, uploadFiles, uploadOne, retry, dismiss }), [items, uploadVersion, addToRevision, uploadFiles, uploadOne, retry, dismiss]);
 
   return (
     <UploadContext.Provider value={value}>
       {children}
-      <UploadTray items={items.filter((i) => i.purpose !== "comment")} onRetry={retry} onDismiss={dismiss} />
+      {/* Comment and description images show where they're written, not in the tray. */}
+      <UploadTray items={items.filter((i) => i.purpose !== "comment" && i.purpose !== "description")} onRetry={retry} onDismiss={dismiss} />
     </UploadContext.Provider>
   );
 }

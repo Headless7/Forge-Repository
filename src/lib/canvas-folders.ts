@@ -103,13 +103,14 @@ export function visibleFolderOf(byId: ReadonlyMap<string, FolderLike & { collaps
   return visible;
 }
 
-/** "3 deliverables · 1 approved · 1 needs attention" */
-export function folderSummary(count: number, states: readonly CardState[]): string {
+/** "3 deliverables · 1 approved · 1 needs attention", plus "· 2 links" when it holds links to other cards. */
+export function folderSummary(count: number, states: readonly CardState[], links = 0): string {
   const approved = states.filter((s) => s === "APPROVED").length;
-  const parts = [`${count} deliverable${count === 1 ? "" : "s"}`];
+  const parts = count || !links ? [`${count} deliverable${count === 1 ? "" : "s"}`] : [];
   if (approved) parts.push(approved === count ? "all approved" : `${approved} approved`);
   const attention = states.filter((s) => s === "NEEDS_REVIEW" || s === "CHANGES_REQUESTED").length;
   if (attention) parts.push(`${attention} need${attention === 1 ? "s" : ""} attention`);
+  if (links) parts.push(`${links} link${links === 1 ? "" : "s"}`);
   return parts.join(" · ");
 }
 

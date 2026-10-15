@@ -1,5 +1,6 @@
 import { and, eq, inArray, isNull, lt, max, ne, sql } from "drizzle-orm";
-import { DEMO_CLIP_MAX_BYTES, ITEM_VIDEO_MAX_BYTES, demoClipProblem, itemVideoProblem, type AttachmentDTO } from "@/lib/types";
+import { descriptionImageIds, IMAGE_TOKEN, imageToken } from "@/lib/description-images";
+import { DEMO_CLIP_MAX_BYTES, ITEM_VIDEO_MAX_BYTES, demoClipProblem, itemVideoProblem, type AttachmentDTO, type AttachmentPurpose } from "@/lib/types";
 import { assertCard, assertItem, computeDeliverablePermissions, loadContributors, requireCard, requireDeliverable, requireItem, type CardAccess, type DeliverableAccess, type ItemAccess } from "../access";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
@@ -30,7 +31,20 @@ import { enqueueStorageCleanup, storageUnits } from "./purge";
 import { notify } from "./notifications";
 import { ABANDONED_UPLOAD_MS, reserveStudioStorage } from "./storage-quota";
 
-export type UploadPurpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "item" | "demo";
+export type UploadPurpose = "version" | "attachment" | "comment" | "resource" | "cover" | "checklist" | "item" | "demo" | "description";
+
+/** What each kind of upload is stored as (demonstration clips are part of their revision). */
+const STORED_PURPOSE: Record<UploadPurpose, AttachmentPurpose> = {
+  version: "VERSION",
+  demo: "VERSION",
+  attachment: "CARD",
+  comment: "COMMENT",
+  resource: "RESOURCE",
+  cover: "COVER",
+  checklist: "CHECKLIST",
+  item: "ITEM",
+  description: "DESCRIPTION",
+};
 
 /** Forum items (bug reports, QA checks) take pictures and clips only (the kinds the list and lightbox show). */
 const ITEM_KINDS = ["IMAGE", "VIDEO"] as const;
@@ -113,6 +127,25 @@ export async function updateVersionNotes(actor: Actor, input: { versionId: strin
   return { ok: true };
 }
 
+/**
+ * Files can be added to (or taken out of) a revision only while it's being prepared: it's the
+ * deliverable's current revision and it hasn't been submitted, decided on, or superseded. Anything
+ * else is review history, kept exactly as it was.
+ */
+export function revisionOpenProblem(version: { id: string; number: number; status: string; currentId: string | null }): string | null {
+  if (version.status !== "DRAFT") {
+    const what = version.status === "IN_REVIEW" ? "is waiting for review" : version.status === "APPROVED" ? "was approved" : "was reviewed";
+    return `V${version.number} ${what}, so its files are kept as review history. Upload a new revision instead.`;
+  }
+  if (version.currentId !== version.id) return `V${version.number} is an earlier revision, so its files are kept as they were. Add files to the current revision instead.`;
+  return null;
+}
+
+function assertRevisionOpen(version: { id: string; number: number; status: string; currentId: string | null }) {
+  const problem = revisionOpenProblem(version);
+  if (problem) throw conflict(problem);
+}
+
 // ── Upload lifecycle: create intent → browser PUT → complete ────────────────
 
 /** A card upload (`ctx`) or a forum-item upload (`item`): exactly one is set. */
@@ -169,6 +202,18 @@ async function assertUploadAllowed(
     if (!item) throw notFound("Checklist item");
     return { ctx, item: null, deliverableId: null, checklistItemId: item.id };
   }
+  if (input.purpose === "description") {
+    // An image in a description: editing that description (the deliverable's, else the card's).
+    assertCard(ctx.perms, "canEdit", "You don't have permission to change this description.");
+    if (!input.deliverableId) return { ctx, item: null, deliverableId: null };
+    const [d] = await ex
+      .select({ id: deliverables.id, archivedAt: deliverables.archivedAt })
+      .from(deliverables)
+      .where(and(eq(deliverables.id, input.deliverableId), eq(deliverables.cardId, ctx.card.id)));
+    if (!d) throw notFound("Deliverable");
+    if (d.archivedAt) throw conflict("This deliverable is archived. Restore it to change its description.");
+    return { ctx, item: null, deliverableId: d.id };
+  }
   if (input.purpose === "cover") {
     // Changing a cover is a card edit; the file belongs to no revision — and to the deliverable
     // whose cover it is, if any (else it's the card's).
@@ -186,10 +231,13 @@ async function assertUploadAllowed(
   if (input.purpose === "version") {
     if (!input.versionId) throw invalid("A revision is required.");
     const rows = await ex
-      .select({ id: assetVersions.id, deliverableId: assetVersions.deliverableId })
+      .select({ id: assetVersions.id, deliverableId: assetVersions.deliverableId, number: assetVersions.versionNumber, status: assetVersions.status, currentId: deliverables.currentVersionId })
       .from(assetVersions)
+      .innerJoin(deliverables, eq(deliverables.id, assetVersions.deliverableId))
       .where(and(eq(assetVersions.id, input.versionId), eq(assetVersions.cardId, ctx.card.id)));
     if (!rows[0]) throw notFound("Version");
+    // Files go into the revision being prepared; submitted (and older) revisions stay as they were reviewed.
+    assertRevisionOpen(rows[0]);
     deliverableId = rows[0].deliverableId;
   }
   if (deliverableId) {
@@ -227,6 +275,7 @@ export async function createUpload(
   if ("error" in classification) throw invalid(classification.error);
   if (input.purpose === "cover" && !(COVER_KINDS as readonly string[]).includes(classification.kind)) throw invalid("A cover must be an image or a video.");
   if (input.purpose === "checklist" && classification.kind !== "IMAGE") throw invalid("A checklist item's picture must be an image.");
+  if (input.purpose === "description" && classification.kind !== "IMAGE") throw invalid("Only images can go in a description. Attach other files to the card or upload them as a revision.");
   if (input.purpose === "item" && !(ITEM_KINDS as readonly string[]).includes(classification.kind)) throw invalid("Forum items take images and videos.");
   if (input.purpose === "demo" && classification.kind !== "VIDEO") throw invalid("A demonstration clip must be a video.");
   const itemVideo = input.purpose === "item" && classification.kind === "VIDEO";
@@ -245,7 +294,7 @@ export async function createUpload(
   const key = ctx
     ? attachmentKey({ studioId, projectId, cardId: ctx.card.id, attachmentId: id, name })
     : itemAttachmentKey({ studioId, projectId, itemId: item.item.id, attachmentId: id, name });
-  const purpose = input.purpose === "version" || input.purpose === "demo" ? "VERSION" : input.purpose === "comment" ? "COMMENT" : input.purpose === "resource" ? "RESOURCE" : input.purpose === "cover" ? "COVER" : input.purpose === "checklist" ? "CHECKLIST" : input.purpose === "item" ? "ITEM" : "CARD";
+  const purpose = STORED_PURPOSE[input.purpose];
   await db.transaction(async (tx) => {
     // Counts against the studio's storage limit from now on (until finished or abandoned).
     await reserveStudioStorage(tx, studioId, input.size);
@@ -425,7 +474,8 @@ async function completeItemUpload(actor: Actor, attachment: AttachmentRow, clien
 
 export async function completeUpload(
   actor: Actor,
-  input: { attachmentId: string; clientMeta?: ClientMediaMeta },
+  /** `addedToRevision`: the file was added to a revision that already had files (not uploaded with it). */
+  input: { attachmentId: string; clientMeta?: ClientMediaMeta; addedToRevision?: boolean },
 ): Promise<AttachmentDTO> {
   const pending = await loadAttachment(input.attachmentId);
   if (pending.itemId && !pending.cardId) return completeItemUpload(actor, pending, input.clientMeta);
@@ -481,7 +531,17 @@ export async function completeUpload(
         .from(deliverables)
         .where(and(eq(deliverables.cardId, ctx.card.id), isNull(deliverables.archivedAt)));
       const scoped = d && (activeCount?.n ?? 1) > 1 ? d.name : undefined;
-      if ((readyCount?.value ?? 0) === 0) {
+      if (input.addedToRevision && (readyCount?.value ?? 0) > 0) {
+        // Added later to a revision that's still being prepared: history says so (no one is notified).
+        await logActivity(tx, {
+          studioId: ctx.access.studioId,
+          projectId: ctx.card.projectId,
+          cardId: ctx.card.id,
+          actorId: actor.userId,
+          type: "version.file_added",
+          data: { versionNumber: version?.versionNumber ?? null, filename: attachment.filename, deliverable: scoped, deliverableId: d?.id },
+        });
+      } else if ((readyCount?.value ?? 0) === 0) {
         await logActivity(tx, {
           studioId: ctx.access.studioId,
           projectId: ctx.card.projectId,
@@ -513,6 +573,9 @@ export async function completeUpload(
       if (!(COVER_KINDS as readonly string[]).includes(row!.kind)) throw invalid("A cover must be an image or a video.");
       if (row!.deliverableId) await pinDeliverableCover(tx, ctx, row!.deliverableId, row!.id, actor.userId);
       else await pinCover(tx, ctx, row!.id, actor.userId);
+    } else if (attachment.purpose === "DESCRIPTION") {
+      // Shown once the description that refers to it is saved (see syncDescriptionImages).
+      if (row!.kind !== "IMAGE") throw invalid("Only images can go in a description.");
     } else if (attachment.purpose === "CHECKLIST") {
       // Becomes its item's picture now, replacing the one before.
       if (row!.kind !== "IMAGE") throw invalid("A checklist item's picture must be an image.");
@@ -571,7 +634,8 @@ export async function importFromUrl(
   });
   const [row] = await db.select().from(attachments).where(eq(attachments.id, intent.attachmentId));
   await storage().put(row!.storageKey, fetched.buffer, row!.mimeType);
-  return completeUpload(actor, { attachmentId: intent.attachmentId });
+  // One image at a time: into a revision that already has files, it's an addition to it.
+  return completeUpload(actor, { attachmentId: intent.attachmentId, addedToRevision: input.purpose === "version" });
 }
 
 /**
@@ -595,20 +659,47 @@ export async function deleteDemoClips(tx: Executor, cardId: string): Promise<{ i
   return clips.map((c) => ({ id: c.id, filename: c.filename }));
 }
 
+/**
+ * A file of a revision (not a demonstration clip): who may take it out or put it back, and whether
+ * the revision still allows it. People who can upload to the deliverable manage its files, as do
+ * card editors; only the revision being prepared can change (see revisionOpenProblem).
+ */
+async function revisionFileAccess(ctx: CardAccess, attachment: AttachmentRow, verb: "remove" | "restore") {
+  const [row] = await db
+    .select({ version: assetVersions, deliverable: deliverables })
+    .from(assetVersions)
+    .innerJoin(deliverables, eq(deliverables.id, assetVersions.deliverableId))
+    .where(eq(assetVersions.id, attachment.versionId!));
+  if (!row) throw notFound("Version");
+  const contributors = (await loadContributors(db, [row.deliverable.id])).get(row.deliverable.id) ?? [];
+  const dperms = computeDeliverablePermissions(ctx, row.deliverable, contributors);
+  if (!dperms.canUpload && !ctx.perms.canEdit) throw forbidden(`Only people who can upload to ${row.deliverable.name} can ${verb} its files.`);
+  const problem = revisionOpenProblem({ id: row.version.id, number: row.version.versionNumber, status: row.version.status, currentId: row.deliverable.currentVersionId });
+  if (problem) throw conflict(verb === "remove" ? problem : problem.replace("its files are kept", "files can't be put back into it, and its files are kept"));
+  return row;
+}
+
 export async function archiveAttachment(actor: Actor, input: { attachmentId: string }) {
   const { attachment, ctx } = await loadAttachmentForWrite(actor, input.attachmentId);
+  const revisionFile = Boolean(attachment.versionId && !attachment.demoOfId);
   const own = attachment.uploadedById === actor.userId;
-  if (!(ctx.perms.canEdit || (own && ctx.perms.canComment))) throw forbidden("You can't remove this attachment.");
-  if (attachment.versionId && attachment.kind !== "FILE" && !attachment.demoOfId) {
-    // Work under review is part of the revision history and is never removed (demonstration clips can be swapped).
-    const [version] = await db.select().from(assetVersions).where(eq(assetVersions.id, attachment.versionId));
-    if (version && version.status !== "DRAFT") {
-      throw conflict("Files on a submitted revision are kept for review history. Upload a new revision instead.");
-    }
-  }
+  // Work under review is part of the revision history and is never removed (demonstration clips can be swapped).
+  const revision = revisionFile ? await revisionFileAccess(ctx, attachment, "remove") : null;
+  if (!revision && !(ctx.perms.canEdit || (own && ctx.perms.canComment))) throw forbidden("You can't remove this attachment.");
+  if (attachment.archivedAt) return { ok: true };
   await db.transaction(async (tx) => {
     await tx.update(attachments).set({ archivedAt: now() }).where(eq(attachments.id, attachment.id));
     await recomputeCovers(tx, attachment);
+    if (revision) {
+      await logActivity(tx, {
+        studioId: ctx.access.studioId,
+        projectId: ctx.card.projectId,
+        cardId: ctx.card.id,
+        actorId: actor.userId,
+        type: "attachment.removed",
+        data: { filename: attachment.filename, versionNumber: revision.version.versionNumber, deliverable: revision.deliverable.name, deliverableId: revision.deliverable.id },
+      });
+    }
     await touchCard(tx, ctx.card.id, actor.userId);
   });
   new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
@@ -619,11 +710,22 @@ export async function archiveAttachment(actor: Actor, input: { attachmentId: str
 export async function restoreAttachment(actor: Actor, input: { attachmentId: string }) {
   const { attachment, ctx } = await loadAttachmentForWrite(actor, input.attachmentId);
   const own = attachment.uploadedById === actor.userId;
-  if (!(ctx.perms.canEdit || (own && ctx.perms.canComment))) throw forbidden("You can't restore this attachment.");
+  const revision = attachment.versionId && !attachment.demoOfId ? await revisionFileAccess(ctx, attachment, "restore") : null;
+  if (!revision && !(ctx.perms.canEdit || (own && ctx.perms.canComment))) throw forbidden("You can't restore this attachment.");
   if (!attachment.archivedAt) return { ok: true };
   await db.transaction(async (tx) => {
     await tx.update(attachments).set({ archivedAt: null }).where(eq(attachments.id, attachment.id));
     await recomputeCovers(tx, attachment);
+    if (revision) {
+      await logActivity(tx, {
+        studioId: ctx.access.studioId,
+        projectId: ctx.card.projectId,
+        cardId: ctx.card.id,
+        actorId: actor.userId,
+        type: "attachment.restored",
+        data: { filename: attachment.filename, versionNumber: revision.version.versionNumber, deliverable: revision.deliverable.name, deliverableId: revision.deliverable.id },
+      });
+    }
     await touchCard(tx, ctx.card.id, actor.userId);
   });
   new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
@@ -701,8 +803,9 @@ export async function setCover(actor: Actor, input: { cardId: string; attachment
     .from(attachments)
     .where(and(eq(attachments.id, input.attachmentId), eq(attachments.cardId, ctx.card.id), isNull(attachments.archivedAt)));
   // Files on other cards (even ones the actor can see) are "not found" here, never borrowed; nor is
-  // an image uploaded as a deliverable's cover (that deliverable may replace it any time).
-  if (!attachment || !["CARD", "VERSION", "COVER"].includes(attachment.purpose) || (attachment.purpose === "COVER" && attachment.deliverableId)) throw notFound("File");
+  // an image uploaded as a deliverable's cover or put in its description (that deliverable may
+  // replace it any time). The card's own description images can be its cover.
+  if (!attachment || !["CARD", "VERSION", "COVER", "DESCRIPTION"].includes(attachment.purpose) || ((attachment.purpose === "COVER" || attachment.purpose === "DESCRIPTION") && attachment.deliverableId)) throw notFound("File");
   if (!(COVER_KINDS as readonly string[]).includes(attachment.kind)) throw invalid("Only an image or a video can be the cover.");
   if (attachment.status === "FAILED" || attachment.status === "PENDING") throw conflict("That file hasn't finished uploading, so it can't be the cover yet.");
   await db.transaction(async (tx) => {
@@ -759,8 +862,10 @@ async function editableDeliverable(actor: Actor, deliverableId: string) {
 }
 
 /**
- * Uses one of the deliverable's own images or videos (from any of its revisions, or an earlier
- * cover upload) as its cover. It stays through new revisions and reviews until someone changes it.
+ * Uses one of the deliverable's own images or videos (from any of its revisions, its description,
+ * or an earlier cover upload) as its cover. It stays through new revisions and reviews until
+ * someone changes it — or the file goes (a description image taken out of the description, say),
+ * when the automatic cover shows instead.
  */
 export async function setDeliverableCover(actor: Actor, input: { deliverableId: string; attachmentId: string }) {
   const ctx = await editableDeliverable(actor, input.deliverableId);
@@ -769,7 +874,7 @@ export async function setDeliverableCover(actor: Actor, input: { deliverableId: 
     .from(attachments)
     .where(and(eq(attachments.id, input.attachmentId), eq(attachments.deliverableId, ctx.deliverable.id), isNull(attachments.archivedAt)));
   // Another deliverable's or card's files are "not found" here, never borrowed.
-  if (!attachment || !["VERSION", "COVER"].includes(attachment.purpose)) throw notFound("File");
+  if (!attachment || !["VERSION", "COVER", "DESCRIPTION"].includes(attachment.purpose)) throw notFound("File");
   if (!(COVER_KINDS as readonly string[]).includes(attachment.kind)) throw invalid("Only an image or a video can be the cover.");
   if (attachment.status === "FAILED" || attachment.status === "PENDING") throw conflict("That file hasn't finished uploading, so it can't be the cover yet.");
   await db.transaction(async (tx) => {
@@ -800,6 +905,53 @@ export async function setDeliverableCoverMode(actor: Actor, input: { deliverable
   });
   new Effects().card(ctx.card.projectId, ctx.card.id).flush(actor.clientId);
   return { ok: true };
+}
+
+// ── Description images ──────────────────────────────────────────────────────
+
+/**
+ * After a description is saved: its images that the text no longer shows are archived (they stay
+ * restorable until deleted permanently, like any file), and ones it shows again come back. Covers
+ * are re-derived, so a cover that was one of those images falls back to the automatic one.
+ */
+export async function syncDescriptionImages(tx: Executor, cardId: string, deliverableId: string | null, text: string) {
+  const shown = new Set(descriptionImageIds(text));
+  const rows = await tx
+    .select({ id: attachments.id, archivedAt: attachments.archivedAt })
+    .from(attachments)
+    .where(and(eq(attachments.cardId, cardId), eq(attachments.purpose, "DESCRIPTION"), deliverableId ? eq(attachments.deliverableId, deliverableId) : isNull(attachments.deliverableId)));
+  const hide = rows.filter((r) => !r.archivedAt && !shown.has(r.id)).map((r) => r.id);
+  const show = rows.filter((r) => r.archivedAt && shown.has(r.id)).map((r) => r.id);
+  if (hide.length) await tx.update(attachments).set({ archivedAt: now() }).where(inArray(attachments.id, hide));
+  if (show.length) await tx.update(attachments).set({ archivedAt: null }).where(inArray(attachments.id, show));
+  if (!hide.length && !show.length) return;
+  if (deliverableId) await recomputeDeliverableCover(tx, deliverableId);
+  await recomputeCardRollup(tx, cardId);
+}
+
+/** Copies description images to a duplicated card or deliverable (sharing the stored files) and points its text at the copies. */
+export async function copyDescriptionImages(tx: Executor, from: { cardId: string; deliverableId: string | null }, to: { cardId: string; deliverableId: string | null }, text: string): Promise<string> {
+  const ids = descriptionImageIds(text);
+  if (!ids.length) return text;
+  const rows = await tx
+    .select()
+    .from(attachments)
+    .where(
+      and(
+        eq(attachments.cardId, from.cardId),
+        eq(attachments.purpose, "DESCRIPTION"),
+        from.deliverableId ? eq(attachments.deliverableId, from.deliverableId) : isNull(attachments.deliverableId),
+        inArray(attachments.id, ids),
+        isNull(attachments.archivedAt),
+      ),
+    );
+  const map = new Map<string, string>();
+  for (const a of rows) {
+    const { id, createdAt: _c, updatedAt: _u, ...rest } = a;
+    const [copy] = await tx.insert(attachments).values({ ...rest, cardId: to.cardId, deliverableId: to.deliverableId, createdAt: now() }).returning({ id: attachments.id });
+    map.set(id, copy!.id);
+  }
+  return text.replace(IMAGE_TOKEN, (whole, name: string, id: string) => (map.has(id.toLowerCase()) ? imageToken(name, map.get(id.toLowerCase())!) : whole));
 }
 
 // ── Recovery after restarts ─────────────────────────────────────────────────
