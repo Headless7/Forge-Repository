@@ -547,7 +547,6 @@ export async function loadCardDetail(cardAccess: CardAccess): Promise<CardDetail
       parentId: g.parentId,
       name: g.name,
       color: g.color,
-      collapsed: g.collapsed,
       createdById: g.createdById,
       createdAt: g.createdAt.toISOString(),
     })),

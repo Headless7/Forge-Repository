@@ -25,6 +25,7 @@ import { CardSidebar } from "./card-sidebar";
 import { CardTabs } from "./card-tabs";
 import { Checklists } from "./checklists";
 import { DeliverableBreadcrumb, DeliverableHeader } from "./deliverable-header";
+import { resetFolderView } from "./folder-view";
 import { AddDeliverableDialog, DeliverablesPanel } from "./deliverables-panel";
 import { Description } from "./description";
 import { FeedbackPanel, MediaSection, UploadVersionDialog } from "./media-section";
@@ -203,6 +204,10 @@ export function CardModal({
     retry: false,
   });
   const cardId = summary?.id ?? resolved.data ?? null;
+  // Every card opens with its canvas folders expanded; collapsing is each person's own view.
+  useEffect(() => {
+    resetFolderView(cardId);
+  }, [cardId]);
   const detail = useQuery({
     queryKey: qk.card(cardId ?? "none"),
     queryFn: () => rpc("card.get", { cardId: cardId! }),

@@ -25,6 +25,7 @@ import { TipAnchor, useTutorial } from "../tutorial/tutorial";
 import { Tooltip } from "../ui/menu";
 import type { CanvasActions } from "./deliverable-canvas";
 import { DeliverableWork } from "./deliverable-work";
+import { useCollapsedFolders } from "./folder-view";
 import { useWorkspace } from "./workspace-context";
 
 const DeliverableCanvas = dynamic(() => import("./deliverable-canvas"), {
@@ -286,7 +287,11 @@ function flatten(node: TreeNode): DeliverableDTO[] {
 
 /** The list view's folders: a section per folder (collapsible here, independently of the canvas), nested like the canvas. */
 function FolderSection({ node, canEdit, onMove }: { node: Extract<TreeNode, { kind: "folder" }>; canEdit: boolean; onMove: (d: DeliverableDTO, neighbour: TreeNode, dir: -1 | 1) => void }) {
-  const [open, setOpen] = useState(!node.folder.collapsed);
+  const { card } = useWorkspace();
+  // The same open/closed view as the canvas: this person's own, open when the card opens.
+  const [collapsed, setCollapsed] = useCollapsedFolders(card.id);
+  const open = !collapsed.has(node.folder.id);
+  const setOpen = (next: (open: boolean) => boolean) => setCollapsed(node.folder.id, !next(open));
   const inside = flatten(node);
   return (
     <li className="rounded-lg border border-dashed border-border-strong/80 p-1.5" style={node.folder.color ? { borderColor: node.folder.color, backgroundColor: `color-mix(in oklab, ${node.folder.color} 6%, transparent)` } : undefined}>
@@ -383,11 +388,8 @@ export function DeliverablesPanel() {
         return detail;
       }),
     updateFolder: (groupId, patch) => updateGroup.mutateAsync({ groupId, ...patch }),
-    toggleFolder: (groupId, collapsed) => {
-      // Saved for people who can edit; for everyone else the canvas keeps its own view.
-      if (canEdit) updateGroup.mutate({ groupId, collapsed });
-      tutorial.trigger("card.folders");
-    },
+    // Collapsing is each person's own view: nothing to save, just the tip on first use.
+    toggleFolder: () => tutorial.trigger("card.folders"),
     ungroup: (groupId) => ungroup.mutateAsync({ groupId }),
     moveToFolder: (input) => moveToGroup.mutateAsync({ cardId: card.id, ...input }),
   };

@@ -659,8 +659,6 @@ export interface DeliverableGroupDTO {
   name: string;
   /** Frame colour (one of ACCENT_COLORS); null = neutral. */
   color: string | null;
-  /** Drawn as one compact node with its contents hidden. */
-  collapsed: boolean;
   createdById: string | null;
   createdAt: string;
 }

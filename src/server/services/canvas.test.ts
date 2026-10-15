@@ -130,7 +130,9 @@ describe("canvas folders", () => {
   it("groups deliverables, nests folders, keeps positions absolute and removes folders left empty", async () => {
     let detail = await groups.createGroup(f.manager.actor, { cardId, name: "  UI  ", deliverableIds: [a, b, b], positions: [{ id: b, x: 500, y: 20 }] });
     const ui = detail.deliverableGroups.find((g) => g.name === "UI")!;
-    expect(ui).toMatchObject({ parentId: null, collapsed: false, color: null, createdById: f.manager.id });
+    expect(ui).toMatchObject({ parentId: null, color: null, createdById: f.manager.id });
+    // Collapsing is each person's own view: nothing about it is shared.
+    expect(ui).not.toHaveProperty("collapsed");
     expect(detail.deliverables.find((d) => d.id === a)!.groupId).toBe(ui.id);
     expect(detail.deliverables.find((d) => d.id === b)).toMatchObject({ groupId: ui.id, canvasX: 500, canvasY: 20 });
     // A folder inside UI around A, named after nothing in particular.
@@ -144,9 +146,9 @@ describe("canvas folders", () => {
     await expectAppError(groups.createGroup(f.manager.actor, { cardId, parentId: inner.id, groupIds: [ui.id], deliverableIds: [] }), "CONFLICT");
     await expectAppError(groups.createGroup(f.manager.actor, { cardId, deliverableIds: [] }), "VALIDATION");
     await expectAppError(groups.moveToGroup(f.manager.actor, { cardId, deliverableIds: [a], targetGroupId: "00000000-0000-0000-0000-000000000000" }), "NOT_FOUND");
-    // Rename, colour, collapse.
-    detail = await groups.updateGroup(f.manager.actor, { groupId: inner.id, name: "Buttons", color: ACCENT_COLORS[0], collapsed: true });
-    expect(detail.deliverableGroups.find((g) => g.id === inner.id)).toMatchObject({ name: "Buttons", color: ACCENT_COLORS[0], collapsed: true });
+    // Rename and colour.
+    detail = await groups.updateGroup(f.manager.actor, { groupId: inner.id, name: "Buttons", color: ACCENT_COLORS[0] });
+    expect(detail.deliverableGroups.find((g) => g.id === inner.id)).toMatchObject({ name: "Buttons", color: ACCENT_COLORS[0] });
     await expectAppError(groups.updateGroup(f.manager.actor, { groupId: inner.id, color: "#000000" }), "VALIDATION");
     await expectAppError(groups.updateGroup(f.manager.actor, { groupId: inner.id, name: "   " }), "VALIDATION");
     // Moving A out of Buttons (to the top level) leaves Buttons empty, so it goes; UI keeps B.
@@ -204,11 +206,11 @@ describe("canvas folders", () => {
     await expectAppError(groups.createGroup(f.member2.actor, { cardId, deliverableIds: [a, b] }), "FORBIDDEN");
     const detail = await groups.createGroup(f.member.actor, { cardId, deliverableIds: [a, b] });
     const g = detail.deliverableGroups[0]!;
-    await expectAppError(groups.updateGroup(f.viewer.actor, { groupId: g.id, collapsed: true }), "FORBIDDEN");
+    await expectAppError(groups.updateGroup(f.viewer.actor, { groupId: g.id, name: "Mine" }), "FORBIDDEN");
     await expectAppError(groups.ungroup(f.viewer.actor, { groupId: g.id }), "FORBIDDEN");
-    await expectAppError(groups.updateGroup(f.manager.actor, { groupId: "00000000-0000-0000-0000-000000000000", collapsed: true }), "NOT_FOUND");
+    await expectAppError(groups.updateGroup(f.manager.actor, { groupId: "00000000-0000-0000-0000-000000000000", name: "Gone" }), "NOT_FOUND");
     await cardService.setCardArchived(f.manager.actor, { cardId, archived: true });
-    await expectAppError(groups.updateGroup(f.manager.actor, { groupId: g.id, collapsed: true }), "FORBIDDEN");
+    await expectAppError(groups.updateGroup(f.manager.actor, { groupId: g.id, name: "Archived" }), "FORBIDDEN");
     await cardService.setCardArchived(f.manager.actor, { cardId, archived: false });
     await groups.ungroup(f.manager.actor, { groupId: g.id });
   });

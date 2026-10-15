@@ -39,7 +39,7 @@ export interface TipFacts {
   "card.workspace": None;
   "card.deliverables": { deliverableCount: number };
   "card.canvas": { deliverableCount: number };
-  /** Once the canvas has a folder (made by this person, or collapsed/expanded by them). */
+  /** Once someone makes a folder, or collapses or expands one (their own view). */
   "card.folders": { canEdit: boolean; folderCount: number };
   "card.revisions": { revisionCount: number };
   "card.feedback": { canComment: boolean; media: "image" | "timed" | "other" };
@@ -147,8 +147,8 @@ export const TIPS: { [K in TipId]: TipDefinition<TipFacts[K]> } = {
     title: () => "Folders keep the canvas tidy",
     body: (f) =>
       f.canEdit
-        ? "A folder is a frame around related deliverables, and folders can sit inside folders — drop a deliverable onto another to make one, and drag a deliverable into a folder (or out past its edge) to move it. Collapsing a folder hides what's inside, and arrows then point at the folder."
-        : "A folder is a frame around related deliverables, and folders can sit inside folders. Collapsing a folder hides what's inside, and arrows then point at the folder.",
+        ? "A folder is a frame around related deliverables, and folders can sit inside folders — drop a deliverable onto another to make one, and drag a deliverable into a folder (or out past its edge) to move it. Collapsing a folder hides what's inside for you only, and arrows then point at the folder."
+        : "A folder is a frame around related deliverables, and folders can sit inside folders. Collapsing a folder hides what's inside for you only, and arrows then point at the folder.",
     eligible: (f) => f.folderCount > 0,
     side: "bottom",
     align: "end",

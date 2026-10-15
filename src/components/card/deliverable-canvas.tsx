@@ -116,6 +116,7 @@ import {
 import { DeliverableCoverControl } from "./cover-control";
 import { DeliverableColorPicker } from "./deliverable-color";
 import { DeliverableWork } from "./deliverable-work";
+import { useCollapsedFolders } from "./folder-view";
 import { useWorkspace } from "./workspace-context";
 
 /** Canvas viewport per card, so returning from a deliverable lands where you left. */
@@ -144,6 +145,8 @@ type DeliverableNodeData = {
 };
 type DeliverableNode = Node<DeliverableNodeData, "deliverable">;
 type CanvasNode = DeliverableNode | FolderNode;
+/** A folder as this person sees it: collapsed or not is their own view (see folder-view). */
+type ViewFolder = DeliverableGroupDTO & { collapsed: boolean };
 type LinkEdgeData = { link: DeliverableLinkDTO; satisfied: boolean; onSelect: (id: string) => void; selected: boolean };
 type LinkEdge = Edge<LinkEdgeData, "link">;
 type DropTarget = { id: string; kind: "deliverable" | "folder" } | null;
@@ -347,7 +350,7 @@ export interface CanvasActions {
   /** Make a folder around deliverables and folders (positions sent are saved with it). Resolves with the card. */
   createFolder: (input: { name?: string; parentId: string | null; deliverableIds: string[]; groupIds?: string[]; positions?: NodeLayoutChange[] }) => Promise<CardDetailDTO>;
   updateFolder: (groupId: string, patch: { name?: string; color?: string | null }) => Promise<unknown>;
-  /** Collapse or expand a folder: saved for people who can edit; a local view for everyone else. */
+  /** Someone collapsed or expanded a folder (their own view; nothing is saved). */
   toggleFolder: (groupId: string, collapsed: boolean) => void;
   /** Dissolve a folder: what's inside moves up a level. */
   ungroup: (groupId: string) => Promise<unknown>;
@@ -560,27 +563,16 @@ function Canvas({
   const activeIds = useMemo(() => new Set(deliverables.map((d) => d.id)), [deliverables]);
   const [colorMode] = useState<"light" | "dark">(() => (typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark"));
 
-  // Folders, with collapse state overridden locally until it's saved (or for good, for people who can't edit).
-  const [collapsedLocal, setCollapsedLocal] = useState<Map<string, boolean>>(new Map());
+  // Folders, each with this person's own collapsed/expanded view (never saved; see folder-view).
+  const [collapsedIds, setCollapsed] = useCollapsedFolders(card.id);
   const folderMap = useMemo(() => {
-    const m = new Map<string, DeliverableGroupDTO>();
-    for (const f of folders) m.set(f.id, collapsedLocal.has(f.id) ? { ...f, collapsed: collapsedLocal.get(f.id)! } : f);
+    const m = new Map<string, ViewFolder>();
+    for (const f of folders) m.set(f.id, { ...f, collapsed: collapsedIds.has(f.id) });
     return m;
-  }, [folders, collapsedLocal]);
+  }, [folders, collapsedIds]);
   const folderList = useMemo(() => [...folderMap.values()], [folderMap]);
   const foldersRef = useRef(folderMap);
   foldersRef.current = folderMap;
-  useEffect(() => {
-    setCollapsedLocal((m) => {
-      if (!m.size) return m;
-      const next = new Map(m);
-      for (const [id, collapsed] of m) {
-        const f = folders.find((x) => x.id === id);
-        if (!f || (canEdit && f.collapsed === collapsed)) next.delete(id);
-      }
-      return next.size === m.size ? m : next;
-    });
-  }, [folders, canEdit]);
 
   // Drop local overrides once the saved layout comes back (or someone else changed the node).
   useEffect(() => {
@@ -678,10 +670,10 @@ function Canvas({
       const f = foldersRef.current.get(id);
       if (!f) return;
       const collapsed = !f.collapsed;
-      setCollapsedLocal((m) => new Map(m).set(id, collapsed));
+      setCollapsed(id, collapsed);
       actions.toggleFolder(id, collapsed);
     },
-    [actions],
+    [actions, setCollapsed],
   );
 
   const nodes: CanvasNode[] = useMemo(() => {
@@ -1333,7 +1325,7 @@ function Canvas({
     });
   };
   /** Lays a folder's contents out in neat rows (sub-folders keep their own layout), then makes room around it. */
-  const tidyFolder = (f: DeliverableGroupDTO) => {
+  const tidyFolder = (f: ViewFolder) => {
     const frame = frames.get(f.id);
     if (!frame || f.collapsed) return;
     const plan: Plan = { positions: new Map(), parentOf: new Map(), folderParent: new Map() };

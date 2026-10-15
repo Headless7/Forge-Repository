@@ -103,7 +103,10 @@ export const deliverableGroups = pgTable(
     name: text().notNull(),
     /** Frame colour (one of lib/column-icons ACCENT_COLORS); null = neutral. */
     color: text(),
-    /** Drawn as one compact node with its contents hidden. */
+    /**
+     * No longer used: collapsing a folder is each person's own view, kept in their browser
+     * (components/card/folder-view). Left in place until a migration drops it.
+     */
     collapsed: boolean().notNull().default(false),
     createdById: uuid().references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),

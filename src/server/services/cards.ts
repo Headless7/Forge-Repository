@@ -637,7 +637,7 @@ export async function duplicateCardInTx(
   for (const g of sourceGroups) {
     const [ng] = await tx
       .insert(deliverableGroups)
-      .values({ cardId: copyId, name: g.name, color: g.color, collapsed: g.collapsed, createdById: actor.userId, createdAt })
+      .values({ cardId: copyId, name: g.name, color: g.color, createdById: actor.userId, createdAt })
       .returning();
     groupMap.set(g.id, ng!.id);
   }

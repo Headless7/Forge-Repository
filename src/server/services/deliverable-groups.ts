@@ -127,7 +127,7 @@ export async function createGroup(
   return finish(actor, ctx, fx);
 }
 
-export async function updateGroup(actor: Actor, input: { groupId: string; name?: string; color?: string | null; collapsed?: boolean }): Promise<CardDetailDTO> {
+export async function updateGroup(actor: Actor, input: { groupId: string; name?: string; color?: string | null }): Promise<CardDetailDTO> {
   const { ctx, group } = await requireGroup(actor, input.groupId);
   assertCard(ctx.perms, "canEdit", EDIT_MESSAGE);
   const patch: Partial<typeof deliverableGroups.$inferInsert> = {};
@@ -138,7 +138,6 @@ export async function updateGroup(actor: Actor, input: { groupId: string; name?:
     patch.name = name;
   }
   if (input.color !== undefined) patch.color = cleanColor(input.color);
-  if (input.collapsed !== undefined) patch.collapsed = input.collapsed;
   const fx = new Effects();
   if (Object.keys(patch).length) {
     await db.update(deliverableGroups).set({ ...patch, updatedAt: now() }).where(eq(deliverableGroups.id, group.id));

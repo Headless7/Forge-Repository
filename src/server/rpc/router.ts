@@ -402,7 +402,6 @@ export const appRouter = {
       groupId: idSchema,
       name: z.string().trim().min(1).max(FOLDER_NAME_MAX).optional(),
       color: z.string().max(20).nullable().optional(),
-      collapsed: z.boolean().optional(),
     }),
     limit: { max: 300, windowMs: 60_000 },
     handler: ({ actor }, i) => deliverableGroups.updateGroup(actor, i),
