@@ -28,7 +28,7 @@ import { discordTime, escapeMarkdown, truncate } from "./discord-message";
 import { myChecklistItems, myDeliverables, type BoardRef, type MyChecklistItem, type MyDeliverableItem } from "./home";
 import { listProjectMembers } from "./members-query";
 import { moveProduction } from "./production";
-import { approve, requestChanges, submitForReview } from "./reviews";
+import { approve, requestChanges, reviewerRecipients, submitForReview } from "./reviews";
 import { loadSchedule } from "./schedule";
 import { searchCards } from "./search";
 
@@ -934,7 +934,8 @@ async function perform(actor: Actor, verb: Verb, id: string): Promise<Reply> {
       if (error instanceof AppError) return failed(actor.userId, ctx.card.id, error);
       throw error;
     }
-    return cardReply(actor.userId, ctx.card.id, { banner: verb === "approve" ? `✅ You approved ${what}.` : `📥 You submitted ${what} for review.` });
+    const nobody = verb === "submit" && !(await reviewerRecipients(db, ctx)).length ? " No reviewer set. Nobody will be notified." : "";
+    return cardReply(actor.userId, ctx.card.id, { banner: verb === "approve" ? `✅ You approved ${what}.` : `📥 You submitted ${what} for review.${nobody}` });
   }
   try {
     await moveProduction(actor, { cardId: id, status: verb === "complete" ? "COMPLETED" : "PUBLISHED" });

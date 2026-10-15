@@ -2,7 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, Plus, Tag, Trash2, X } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SUGGESTED_FORUM_TAGS } from "@/lib/forum-meta";
 import { LABEL_COLORS } from "@/lib/column-icons";
 import { qk, useRpcMutation } from "@/lib/queries";
@@ -16,28 +16,66 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/menu";
 
 export { PersonPicker } from "../domain/people-menu";
 
+/** How long a typed deadline waits before it's saved: typing a date passes through other valid dates. */
+const DUE_SAVE_DELAY_MS = 800;
+
 /**
  * An item's deadline, like the card sidebar's: a date-and-time field with a clear button, or the
- * due chip when read-only. `done` items (verified, closed) never show as overdue.
+ * due chip when read-only. `done` items (verified, closed) never show as overdue. With `deferred`,
+ * edits are saved once typing pauses (or on Enter, blur or close) rather than on every keystroke,
+ * so one change makes one save, one history entry and one notice.
  */
-export function DueDateField({ value, onChange, canEdit, done, className }: { value: string | null; onChange: (dueAt: string | null) => void; canEdit: boolean; done?: boolean; className?: string }) {
-  const due = dueStatus(value, done);
+export function DueDateField({ value, onChange, canEdit, done, deferred, className }: { value: string | null; onChange: (dueAt: string | null) => void; canEdit: boolean; done?: boolean; deferred?: boolean; className?: string }) {
+  const [draft, setDraft] = useState(() => toLocalInput(value));
+  const pending = useRef<{ local: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const save = useRef(onChange);
+  useEffect(() => {
+    save.current = onChange;
+  });
+  const flush = useCallback(() => {
+    const p = pending.current;
+    if (!p) return;
+    clearTimeout(p.timer);
+    pending.current = null;
+    save.current(p.local ? new Date(p.local).toISOString() : null);
+  }, []);
+  // An edit still waiting is saved when the field goes away (the dialog closes).
+  useEffect(() => flush, [flush]);
+  // Follow the saved value (and other people's changes) unless an edit is waiting.
+  useEffect(() => {
+    if (!pending.current) setDraft(toLocalInput(value));
+  }, [value]);
+  const edit = (local: string) => {
+    setDraft(local);
+    if (!deferred) return onChange(local ? new Date(local).toISOString() : null);
+    if (pending.current) clearTimeout(pending.current.timer);
+    pending.current = { local, timer: setTimeout(flush, DUE_SAVE_DELAY_MS) };
+  };
+  const clear = () => {
+    if (pending.current) clearTimeout(pending.current.timer);
+    pending.current = null;
+    setDraft("");
+    onChange(null);
+  };
+  const due = dueStatus(draft ? new Date(draft).toISOString() : null, done);
   if (!canEdit) return value ? <DueChip dueAt={value} done={done} className={className} /> : <span className={cn("text-fg-subtle", className)}>None</span>;
   return (
     <div className={cn("flex min-w-0 items-center gap-1", className)}>
       <input
         type="datetime-local"
         aria-label="Due date"
-        value={toLocalInput(value)}
-        onChange={(e) => onChange(e.target.value ? new Date(e.target.value).toISOString() : null)}
+        value={draft}
+        onChange={(e) => edit(e.target.value)}
+        onBlur={flush}
+        onKeyDown={(e) => e.key === "Enter" && flush()}
         className={cn(
           "h-7 min-w-0 flex-1 rounded-md border border-border-strong/70 bg-surface-3/60 px-2 text-[12.5px] outline-none focus:border-accent [color-scheme:dark] light:[color-scheme:light]",
           due === "overdue" && "text-state-changes",
           (due === "today" || due === "soon") && "text-state-review",
         )}
       />
-      {value ? (
-        <Button type="button" size="icon-xs" variant="ghost" aria-label="Clear due date" className="touch-target" onClick={() => onChange(null)}>
+      {draft ? (
+        <Button type="button" size="icon-xs" variant="ghost" aria-label="Clear due date" className="touch-target" onClick={clear}>
           <X />
         </Button>
       ) : null}

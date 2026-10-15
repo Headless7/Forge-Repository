@@ -3,7 +3,7 @@ import { deliverableTeam } from "@/lib/deliverables";
 import type { CardDetailDTO, CardState } from "@/lib/types";
 import { assertDeliverable, requireCard, requireDeliverable, type DeliverableAccess } from "../access";
 import { now } from "../clock";
-import { db, type Tx } from "../db";
+import { db, type Executor, type Tx } from "../db";
 import { assetVersions, cardReviewers, cards, comments, deliverables, reviews } from "../db/schema";
 import { conflict, invalid } from "../errors";
 import { logActivity } from "./activity";
@@ -43,9 +43,10 @@ async function setState(tx: Tx, ctx: DeliverableAccess, state: CardState, actorI
     .where(eq(cards.id, ctx.card.id));
 }
 
-async function reviewerRecipients(tx: Tx, ctx: DeliverableAccess): Promise<string[]> {
+/** Who is asked to review a submission: the deliverable's reviewer, else the card's. Nobody named: nobody. */
+export async function reviewerRecipients(ex: Executor, ctx: Pick<DeliverableAccess, "deliverable" | "card">): Promise<string[]> {
   if (ctx.deliverable.reviewerId) return [ctx.deliverable.reviewerId];
-  const explicit = await tx.select({ userId: cardReviewers.userId }).from(cardReviewers).where(eq(cardReviewers.cardId, ctx.card.id));
+  const explicit = await ex.select({ userId: cardReviewers.userId }).from(cardReviewers).where(eq(cardReviewers.cardId, ctx.card.id));
   // No named reviewer: nobody is pinged. The work still waits in the review queues (home, /reviews).
   return explicit.map((r) => r.userId);
 }

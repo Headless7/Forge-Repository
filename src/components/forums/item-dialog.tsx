@@ -216,7 +216,7 @@ export function ItemDialog({
                       />
                     </Row>
                     <Row label="Due">
-                      <DueDateField value={item.dueAt} canEdit={perms.canEdit} done={isResolvedItem(item.status)} onChange={(dueAt) => update.mutate({ itemId, dueAt })} />
+                      <DueDateField value={item.dueAt} canEdit={perms.canEdit} done={isResolvedItem(item.status)} deferred onChange={(dueAt) => update.mutate({ itemId, dueAt })} />
                     </Row>
                     <Row label="Assignee">
                       <PersonPicker

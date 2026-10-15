@@ -283,7 +283,9 @@ describe("Discord slash commands", () => {
     expect(buttons(memberCard)).toContain(`fg:submit:${deliverableId}`);
     expect(buttons(memberCard)).not.toContain(`fg:complete:${card.id}`);
     expect(text(await click(member, `fg:submit:${deliverableId}`))).toContain("for review?");
-    expect(text(await click(member, `fg:submit!:${deliverableId}`))).toContain("📥 You submitted");
+    const submitted = text(await click(member, `fg:submit!:${deliverableId}`));
+    expect(submitted).toContain("📥 You submitted");
+    expect(submitted).toContain("No reviewer set. Nobody will be notified."); // nobody is named on the card
     expect(await stateOf(deliverableId)).toBe("NEEDS_REVIEW");
 
     await click(manager, `fg:approve!:${deliverableId}`);

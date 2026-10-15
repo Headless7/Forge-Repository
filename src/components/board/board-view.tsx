@@ -522,9 +522,11 @@ export function BoardView({ initialBoard, studioSlug }: { initialBoard: BoardDTO
   // Card quick actions
   const renameMutation = useRpcMutation("card.update", { onError: refreshBoard });
   const stateMutation = useRpcMutation("card.setState", {
-    onSuccess: (card) => {
+    onSuccess: (card, { state }) => {
       queryClient.setQueryData(qk.card(card.id), card);
       refreshBoard();
+      // Submitted from the status menu with nobody named to review it: say that nobody was asked.
+      if (state === "NEEDS_REVIEW" && !card.reviewerIds.length && !card.deliverables.some((d) => !d.archivedAt && d.reviewerId)) toast("No reviewer set. Nobody will be notified.");
     },
     onError: refreshBoard,
   });
