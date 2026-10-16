@@ -100,7 +100,7 @@ describe("forums", () => {
 });
 
 describe("the workflow", () => {
-  it("runs open → in progress → done → verified, and only the reviewer (or a manager) verifies", async () => {
+  it("runs open → in progress → done → verified", async () => {
     const item = await report(f.manager, { title: "Auto roll stops after 10", assigneeId: f.member.id, reviewerId: f.developer.id });
     const started = await forums.setItemStatus(f.member.actor, { itemId: item.id, status: "IN_PROGRESS" });
     expect(started.status).toBe("IN_PROGRESS");
@@ -109,8 +109,7 @@ describe("the workflow", () => {
     expect(fixed).toMatchObject({ status: "FIXED", fixedById: f.member.id });
     expect(fixed.fixedAt).not.toBeNull();
     expect((await notes(f.developer.id, item.id)).map((n) => n.type)).toContain("ITEM_FIXED");
-    // The assignee can't verify their own work; the item's reviewer (a Developer here) can.
-    await expectAppError(forums.setItemStatus(f.member.actor, { itemId: item.id, status: "VERIFIED" }), "FORBIDDEN");
+    // The item's reviewer (a Developer here) verifies it.
     const verified = await forums.setItemStatus(f.developer.actor, { itemId: item.id, status: "VERIFIED" });
     expect(verified).toMatchObject({ status: "VERIFIED", verifiedById: f.developer.id });
     expect((await notes(f.member.id, item.id)).map((n) => n.type)).toContain("ITEM_RESOLVED");
@@ -118,19 +117,44 @@ describe("the workflow", () => {
     expect(reopened).toMatchObject({ status: "OPEN", fixedAt: null, verifiedAt: null, verifiedById: null });
   });
 
-  it("lets a manager send work back, and stops a manager verifying what they did themselves", async () => {
-    // The manager is also the Bugs forum's default reviewer: being named reviewer doesn't allow self-verification either.
+  it("lets a manager send work back", async () => {
+    // The manager is also the Bugs forum's default reviewer.
     const item = await report(f.member, { title: "Trait index says skip" });
     expect(item.reviewerId).toBe(f.manager.id);
     const mine = await forums.setItemStatus(f.manager.actor, { itemId: item.id, status: "IN_PROGRESS" });
     expect(mine.assigneeId).toBe(f.manager.id);
     await forums.setItemStatus(f.manager.actor, { itemId: item.id, status: "FIXED" });
-    await expectAppError(forums.setItemStatus(f.manager.actor, { itemId: item.id, status: "VERIFIED" }), "FORBIDDEN");
     const back = await forums.setItemStatus(f.admin.actor, { itemId: item.id, status: "IN_PROGRESS" });
     expect(back).toMatchObject({ status: "IN_PROGRESS", fixedAt: null });
     expect((await notes(f.manager.id, item.id)).map((n) => n.type)).toContain("ITEM_REOPENED");
     const verified = await forums.setItemStatus(f.admin.actor, { itemId: item.id, status: "VERIFIED" });
     expect(verified.status).toBe("VERIFIED");
+  });
+
+  it("lets any other tester verify or send back, without being a manager or the named reviewer", async () => {
+    const item = await report(f.member, { title: "Lobby music loops twice" });
+    await forums.setItemStatus(f.developer.actor, { itemId: item.id, status: "IN_PROGRESS" });
+    await forums.setItemStatus(f.developer.actor, { itemId: item.id, status: "FIXED" });
+    await expectAppError(forums.setItemStatus(f.viewer.actor, { itemId: item.id, status: "VERIFIED" }), "FORBIDDEN");
+    // Another contributor, not named on it, finds it still broken…
+    const back = await forums.setItemStatus(f.member2.actor, { itemId: item.id, status: "IN_PROGRESS" });
+    expect(back).toMatchObject({ status: "IN_PROGRESS", fixedAt: null });
+    await forums.setItemStatus(f.developer.actor, { itemId: item.id, status: "FIXED" });
+    // …and the contributor who reported it confirms the second fix.
+    expect((await forums.getItem(f.member.actor, item.id)).permissions.canVerify).toBe(true);
+    const verified = await forums.setItemStatus(f.member.actor, { itemId: item.id, status: "VERIFIED" });
+    expect(verified).toMatchObject({ status: "VERIFIED", verifiedById: f.member.id, fixedById: f.developer.id });
+  });
+
+  it("always lets whoever fixed it verify it, whatever the project's self-approval setting", async () => {
+    const [project] = await db.select({ settings: projects.settings }).from(projects).where(eq(projects.id, f.projectId));
+    expect(project!.settings.allowSelfApproval).toBe(false);
+    // A contributor reports it, takes it, fixes it and confirms the fix alone.
+    const item = await report(f.member, { title: "Shop button overlaps the timer", assigneeId: f.member.id });
+    await forums.setItemStatus(f.member.actor, { itemId: item.id, status: "FIXED" });
+    expect((await forums.getItem(f.member.actor, item.id)).permissions.canVerify).toBe(true);
+    const verified = await forums.setItemStatus(f.member.actor, { itemId: item.id, status: "VERIFIED" });
+    expect(verified).toMatchObject({ status: "VERIFIED", fixedById: f.member.id, verifiedById: f.member.id });
   });
 
   it("lets workers take an unassigned item by starting on it", async () => {

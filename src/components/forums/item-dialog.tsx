@@ -222,7 +222,8 @@ export function ItemDialog({
                       <PersonPicker
                         label="Assignee"
                         value={item.assigneeId}
-                        members={canAssignOthers ? members : members.filter((m) => m.id === viewerId)}
+                        members={members}
+                        filter={canAssignOthers ? undefined : (m) => m.id === viewerId}
                         canEdit={canAssignOthers || (perms.canSelfAssign && !item.assigneeId) || (perms.canEdit && item.assigneeId === viewerId)}
                         emptyLabel="Nobody yet"
                         onChange={(assigneeId) => update.mutate({ itemId, assigneeId })}
@@ -230,7 +231,7 @@ export function ItemDialog({
                       />
                     </Row>
                     <Row label="Reviewer">
-                      <PersonPicker label="Reviewer" value={item.reviewerId} members={members} canEdit={canAssignOthers} emptyLabel="Any manager" onChange={(reviewerId) => update.mutate({ itemId, reviewerId })} />
+                      <PersonPicker label="Reviewer" value={item.reviewerId} members={members} canEdit={canAssignOthers} emptyLabel="Anyone" onChange={(reviewerId) => update.mutate({ itemId, reviewerId })} />
                     </Row>
                     <Row label="Tags">
                       <TagPicker selected={item.tagIds} tags={view.tags} forumId={forum.id} projectId={projectId} canEdit={perms.canEdit} canManage={perms.canManageTags} onChange={(tagIds) => update.mutate({ itemId, tagIds })} />
@@ -334,7 +335,7 @@ function StatusActions({ item, forum, pending, onStatus }: { item: ForumItemDeta
       break;
   }
   if (closeButton) buttons.push(closeButton);
-  if (!buttons.length) return <p className="text-[12.5px] text-fg-subtle">{item.status === "FIXED" ? "Waiting for the reviewer to verify it." : "Nothing for you to do here."}</p>;
+  if (!buttons.length) return <p className="text-[12.5px] text-fg-subtle">{item.status === "FIXED" ? "Waiting to be verified." : "Nothing for you to do here."}</p>;
   return <div className="flex flex-wrap gap-1.5">{buttons}</div>;
 }
 

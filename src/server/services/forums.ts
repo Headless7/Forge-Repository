@@ -385,7 +385,7 @@ export interface CreateItemInput {
   priority?: ItemPriority;
   milestoneId?: string | null;
   assigneeId?: string | null;
-  /** Undefined: the forum's default reviewer. Null: nobody (any manager verifies). */
+  /** Undefined: the forum's default reviewer. Null: nobody (anyone on the team verifies). */
   reviewerId?: string | null;
   tagIds?: string[];
   /** ISO date-time it should be done by. */
@@ -566,7 +566,7 @@ export async function setItemStatus(actor: Actor, input: { itemId: string; statu
     case "IN_PROGRESS": {
       if (from === "FIXED" || from === "VERIFIED" || from === "CLOSED") {
         // Sent back: it didn't hold (or it's being looked at again).
-        if (!perms.canVerify && !perms.canEdit) throw forbidden("Only the reviewer or a manager can send this back.");
+        if (!perms.canVerify && !perms.canEdit) throw forbidden("You don't have permission to send this back.");
         Object.assign(patch, { fixedAt: null, fixedById: null, verifiedAt: null, verifiedById: null, closedAt: null, closedById: null, resolution: null });
         batch.add(itemNotice(ctx, actor.userId, "ITEM_REOPENED", others([item.assigneeId]), { from }));
       } else if (!perms.canEdit) {
@@ -585,7 +585,7 @@ export async function setItemStatus(actor: Actor, input: { itemId: string; statu
       break;
     }
     case "VERIFIED": {
-      assertItem(perms, "canVerify", "Only the reviewer or a manager who isn't working on it can verify this.");
+      assertItem(perms, "canVerify", `You don't have permission to verify this ${forum.itemLabel}.`);
       if (from === "CLOSED") throw invalid("Reopen it first.");
       Object.assign(patch, { fixedAt: item.fixedAt ?? at, fixedById: item.fixedById ?? item.assigneeId ?? actor.userId, verifiedAt: at, verifiedById: actor.userId });
       batch.add(itemNotice(ctx, actor.userId, "ITEM_RESOLVED", others([item.assigneeId, item.reportedById]), { status: to }));

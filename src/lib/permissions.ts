@@ -119,7 +119,7 @@ export const PERMISSIONS = [
   /** Change items you reported, are fixing or are verifying. */
   "item.editOwn",
   "item.assign",
-  /** Verify done items (an item's own reviewer can also verify). */
+  /** Verify done items or send them back: everyone who works on items, not only managers, their own fixes included. */
   "item.verify",
   "item.delete",
 ] as const;
@@ -138,6 +138,7 @@ const WORKER: Permission[] = [
   "comment.create",
   "item.create",
   "item.editOwn",
+  "item.verify",
 ];
 
 const MANAGER: Permission[] = [
@@ -157,7 +158,6 @@ const MANAGER: Permission[] = [
   "forum.manage",
   "item.edit",
   "item.assign",
-  "item.verify",
 ];
 
 const ADMIN: Permission[] = [
@@ -267,7 +267,6 @@ export interface ItemPermissionInput {
   role: string;
   userId: string;
   item: { reportedById: string | null; assigneeId: string | null; reviewerId: string | null };
-  allowSelfApproval: boolean;
   /** The project or the forum is archived: everything is read-only. */
   readOnly?: boolean;
 }
@@ -280,7 +279,7 @@ export interface ItemPermissions {
   canAssign: boolean;
   /** Take an unassigned item (become its assignee). */
   canSelfAssign: boolean;
-  /** Confirm a done item (or send it back): the item's reviewer or anyone with item.verify — not the person doing it (unless self-approval is allowed). */
+  /** Confirm a done item (or send it back): the item's reviewer or anyone with item.verify, whoever fixed it included. */
   canVerify: boolean;
   /** Close without doing it (won't fix, can't reproduce…). */
   canClose: boolean;
@@ -291,7 +290,7 @@ export interface ItemPermissions {
 }
 
 /** Item-level rules. Used verbatim by server-side enforcement and by the UI. */
-export function itemPermissions({ role, userId, item, allowSelfApproval, readOnly }: ItemPermissionInput): ItemPermissions {
+export function itemPermissions({ role, userId, item, readOnly }: ItemPermissionInput): ItemPermissions {
   const has = (p: Permission) => roleHas(role, p);
   const isReporter = item.reportedById === userId;
   const isAssignee = item.assigneeId === userId;
@@ -302,8 +301,9 @@ export function itemPermissions({ role, userId, item, allowSelfApproval, readOnl
     canEdit,
     canAssign: has("item.assign"),
     canSelfAssign: has("item.create"),
-    // The named reviewer, or any manager — but never the person doing it, unless the project allows self-approval.
-    canVerify: (isReviewer || has("item.verify")) && (allowSelfApproval || !isAssignee),
+    // The named reviewer or anyone on the team (testers included), whoever fixed it too: forums always allow
+    // self-approval, whatever the project's setting (which covers cards and deliverables).
+    canVerify: isReviewer || has("item.verify"),
     canClose: has("item.edit") || (has("item.editOwn") && isReporter),
     canComment: has("comment.create"),
     canUpload: has("attachment.upload") && canEdit,

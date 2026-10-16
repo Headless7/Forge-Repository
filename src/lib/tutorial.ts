@@ -288,14 +288,15 @@ export const TIPS: { [K in TipId]: TipDefinition<TipFacts[K]> } = {
     align: "start",
   },
   "forums.workflow": {
-    version: 1,
+    // 2: anyone on the team verifies, whoever fixed it included (it used to be the reviewer or a manager, never the fixer).
+    version: 2,
     title: (f) => `How ${withArticle(f.noun)} gets resolved`,
     body: (f) =>
       f.canVerify
-        ? `The assignee marks ${withArticle(f.noun)} done; you then verify it in game and confirm it, or send it back. Until it's verified or closed, ${withArticle(f.noun)} stays in the Open list whichever update it belongs to.`
+        ? `Once ${withArticle(f.noun)} is marked done, anyone on the team, you included (even if you fixed it), verifies it in game and confirms it or sends it back. Until it's verified or closed, it stays in the Open list whichever update it belongs to.`
         : f.canFix
-          ? `Start work to take ${withArticle(f.noun)}, then mark it done; its reviewer verifies it in game before it counts as resolved. Until then it stays in the Open list whichever update it belongs to.`
-          : `The assignee marks ${withArticle(f.noun)} done and its reviewer verifies it in game before it counts as resolved. Until then it stays in the Open list whichever update it belongs to.`,
+          ? `Start work to take ${withArticle(f.noun)}, then mark it done; it's verified in game before it counts as resolved. Until then it stays in the Open list whichever update it belongs to.`
+          : `The assignee marks ${withArticle(f.noun)} done and the team verifies it in game before it counts as resolved. Until then it stays in the Open list whichever update it belongs to.`,
     eligible: always,
     side: "bottom",
     align: "start",

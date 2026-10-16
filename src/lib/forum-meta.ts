@@ -47,8 +47,8 @@ const generic: KindWording = {
   statuses: {
     OPEN: { label: "Open", short: "Open", description: "Logged; nobody has started on it." },
     IN_PROGRESS: { label: "In progress", short: "Doing", description: "The assignee is working on it." },
-    FIXED: { label: "Done · to verify", short: "Done", description: "Marked done; waiting for the reviewer to verify it." },
-    VERIFIED: { label: "Verified", short: "Verified", description: "The reviewer confirmed it." },
+    FIXED: { label: "Done · to verify", short: "Done", description: "Marked done; waiting to be verified." },
+    VERIFIED: { label: "Verified", short: "Verified", description: "Confirmed done." },
     CLOSED: { label: "Closed", short: "Closed", description: "Resolved without doing it." },
   },
   actions: { done: "Mark done", verify: "Verify", sendBack: "Send back", create: "Log" },
@@ -61,8 +61,8 @@ export const FORUM_KIND_META: Record<ForumKind, KindWording> = {
     statuses: {
       OPEN: { label: "Open", short: "Open", description: "Reported; nobody has started on it." },
       IN_PROGRESS: { label: "In progress", short: "Fixing", description: "The assignee is working on a fix." },
-      FIXED: { label: "Fixed · to verify", short: "Fixed", description: "Marked fixed; waiting for the reviewer to verify it in game." },
-      VERIFIED: { label: "Verified", short: "Verified", description: "The reviewer confirmed the fix." },
+      FIXED: { label: "Fixed · to verify", short: "Fixed", description: "Marked fixed; waiting to be verified in game." },
+      VERIFIED: { label: "Verified", short: "Verified", description: "The fix was confirmed in game." },
       CLOSED: { label: "Closed", short: "Closed", description: "Resolved without a fix." },
     },
     actions: { done: "Mark fixed", verify: "Verify fix", sendBack: "Not fixed", create: "Report" },

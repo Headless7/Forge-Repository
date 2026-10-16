@@ -344,7 +344,6 @@ export function computeItemPermissions(access: ProjectAccess, forum: Pick<ForumR
     role: access.role,
     userId: access.userId,
     item,
-    allowSelfApproval: access.project.settings.allowSelfApproval,
     readOnly: Boolean(access.project.archivedAt || forum.archivedAt),
   });
 }

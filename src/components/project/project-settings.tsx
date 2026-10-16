@@ -355,7 +355,7 @@ function Workflow({ board, canEdit }: { board: BoardDTO; canEdit: boolean }) {
         <label className="flex items-center justify-between gap-4">
           <span>
             <span className="block text-[13px] font-medium">Allow self-approval</span>
-            <span className="block text-[12px] text-fg-muted">When off, people assigned to a card can&apos;t approve their own work.</span>
+            <span className="block text-[12px] text-fg-muted">When off, people assigned to a card can&apos;t approve their own work. Forum items can always be verified by whoever fixed them.</span>
           </span>
           <Switch disabled={!canEdit} checked={p.settings.allowSelfApproval} onCheckedChange={(v) => update.mutate({ projectId: p.id, settings: { allowSelfApproval: v } })} />
         </label>

@@ -78,7 +78,7 @@ export const forumItems = pgTable(
     milestoneId: uuid().references(() => milestones.id, { onDelete: "set null" }),
     /** The one person fixing it. */
     assigneeId: uuid().references(() => users.id, { onDelete: "set null" }),
-    /** The one person verifying the fix (null: any manager may verify; nobody is notified). */
+    /** The one person verifying the fix (null: anyone on the team may verify; nobody is notified). */
     reviewerId: uuid().references(() => users.id, { onDelete: "set null" }),
     reportedById: uuid().references(() => users.id, { onDelete: "set null" }),
     /** When it should be done by (null: no deadline). Reminders go to whoever has to act next (see due-dates). */

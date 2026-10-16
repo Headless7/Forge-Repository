@@ -62,6 +62,7 @@ export function Composer({
   const [value, setValue] = useState(initialValue);
   const [pending, setPending] = useState<Pending[]>([]);
   const [sending, setSending] = useState(false);
+  const [dropping, setDropping] = useState(false);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -142,8 +143,34 @@ export function Composer({
     }
   };
 
+  // Files dropped on the composer belong to the comment: left to bubble, the card window takes them as a new revision.
+  const takesFiles = Boolean(card) && !disabled;
+
   return (
-    <div className={cn("@container relative rounded-lg border border-border-strong bg-surface-3/50 transition-colors focus-within:border-accent/70", disabled && "opacity-60")}>
+    <div
+      onDragOver={(e) => {
+        if (!takesFiles || !e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = "copy";
+        setDropping(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false);
+      }}
+      onDrop={(e) => {
+        if (!takesFiles || !e.dataTransfer.files.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setDropping(false);
+        addFiles([...e.dataTransfer.files]);
+      }}
+      className={cn(
+        "@container relative rounded-lg border border-border-strong bg-surface-3/50 transition-colors focus-within:border-accent/70",
+        dropping && "border-accent bg-accent-soft",
+        disabled && "opacity-60",
+      )}
+    >
       {header ? <div className="flex flex-wrap items-center gap-1.5 px-2.5 pt-2">{header}</div> : null}
       <textarea
         ref={textarea}

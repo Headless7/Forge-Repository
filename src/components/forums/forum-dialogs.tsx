@@ -41,7 +41,7 @@ function ReviewerSelect({ value, members, onChange, disabled }: { value: string 
       disabled={disabled}
       value={value ?? ""}
       onValueChange={(v) => onChange(v || null)}
-      options={[{ value: "", label: "Nobody (any manager)" }, ...members.map((m) => ({ value: m.id, label: m.displayName, icon: <UserAvatar user={m} size="xs" /> }))]}
+      options={[{ value: "", label: "Nobody (anyone can verify)" }, ...members.map((m) => ({ value: m.id, label: m.displayName, icon: <UserAvatar user={m} size="xs" /> }))]}
     />
   );
 }
