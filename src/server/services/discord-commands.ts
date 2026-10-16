@@ -261,11 +261,14 @@ interface Scope {
   studios: Array<{ id: string; slug: string; name: string }>;
   /** Live projects the person can open, with their access. */
   accesses: Map<string, ProjectAccess>;
+  /** Used inside a server connected to the person's studios: only the projects posting there count. */
+  server: { guildId: string; name: string } | null;
 }
 
 /**
- * The person's studios — in a Discord server connected to some of them, just those — and the
- * projects they can open there.
+ * The person's studios and the projects they can open. Inside a Discord server connected to some
+ * of those studios, just the projects whose server it is; in direct messages (or another server),
+ * everything.
  */
 async function scopeFor(userId: string, guildId: string | undefined): Promise<Scope> {
   const mine = await db
@@ -275,20 +278,45 @@ async function scopeFor(userId: string, guildId: string | undefined): Promise<Sc
     .where(eq(studioMembers.userId, userId))
     .orderBy(asc(studios.name));
   let chosen = mine;
+  let server: Scope["server"] = null;
   if (guildId) {
-    const rows = await db.select({ studioId: discordConnections.studioId }).from(discordConnections).where(and(eq(discordConnections.guildId, guildId), isNull(discordConnections.lostAt)));
+    const rows = await db
+      .select({ studioId: discordConnections.studioId, name: discordConnections.guildName })
+      .from(discordConnections)
+      .where(and(eq(discordConnections.guildId, guildId), isNull(discordConnections.lostAt)));
     const connected = new Set(rows.map((r) => r.studioId));
     const here = mine.filter((s) => connected.has(s.id));
-    if (here.length) chosen = here;
+    if (here.length) {
+      chosen = here;
+      server = { guildId, name: rows.find((r) => connected.has(r.studioId))!.name };
+    }
   }
   const accesses = new Map<string, ProjectAccess>();
   for (const studio of chosen) {
     for (const id of await accessibleProjectIds(userId, studio.id)) {
       const access = await getProjectAccess(userId, id);
-      if (access && !access.project.archivedAt) accesses.set(id, access);
+      if (access && !access.project.archivedAt && (!server || access.project.discordGuildId === server.guildId)) accesses.set(id, access);
     }
   }
-  return { userId, studios: chosen, accesses };
+  return { userId, studios: chosen, accesses, server };
+}
+
+/** Commands used in a connected server that none of the person's projects post to. */
+function noProjectsHere(server: { name: string }): Reply {
+  return {
+    components: [
+      panel(COLORS.quiet, [
+        text(
+          [
+            `## No projects in ${escapeMarkdown(truncate(server.name, 80))}`,
+            "None of your Forge projects post to this Discord server, so there's nothing to show here.",
+            "- Use the command in a **direct message with Forge** to see all your projects",
+            "- Or ask a studio Admin to choose this server in a project's settings",
+          ].join("\n"),
+        ),
+      ]),
+    ],
+  };
 }
 
 function cardUrl(studioSlug: string, projectSlug: string, boardNumber: number | null | undefined, key: string, deliverableNumber?: number) {
@@ -1449,6 +1477,7 @@ export async function handleInteraction(interaction: Interaction): Promise<Inter
     }
     if (interaction.type === 2) {
       const scope = await scopeFor(user.id, interaction.guild_id);
+      if (scope.server && scope.accesses.size === 0) return send(noProjectsHere(scope.server));
       switch (interaction.data?.name) {
         case "mywork":
           return send(await myWork(scope));

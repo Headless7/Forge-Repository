@@ -16,9 +16,11 @@ import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/discord/interactions/route";
 import { db } from "@/server/db";
-import { cards, checklistItems, checklists, comments, deliverables, discordDmDeliveries, discordDmRecipients, oauthAccounts, projects, reviews as reviewRows } from "@/server/db/schema";
+import { cards, checklistItems, checklists, comments, deliverables, discordConnections, discordDmDeliveries, discordDmRecipients, oauthAccounts, projects, reviews as reviewRows, studioMembers } from "@/server/db/schema";
 import { pngBuffer, primaryDeliverable, setupStudio, upload, type Fixture } from "@/test/helpers";
+import * as boardService from "./board";
 import * as cardService from "./cards";
+import * as projectService from "./projects";
 import { DISCORD_COMMANDS, handleInteraction, LAYOUT_LIMITS, layoutSize, parseDueDay, syncDiscordCommands, type Interaction, type InteractionResponse } from "./discord-commands";
 import { verifyDiscordSignature } from "./discord-interactions";
 import * as media from "./media";
@@ -335,6 +337,96 @@ describe("Discord slash commands", () => {
     expect(team).toContain("Mine due soon");
     expect(team).toContain("Theirs due soon");
     expect(team).toContain("Team deadlines");
+  });
+});
+
+describe("commands inside a Discord server", () => {
+  let serverSeq = 0;
+  const serverId = () => `95${String(Date.now()).slice(-9)}${String(++serverSeq).padStart(6, "0")}`;
+  const inServer = (who: string, guildId: string, name: string, options: Array<{ name: string; type: number; value: string | number | boolean; focused?: boolean }> = []) =>
+    handleInteraction({ ...base(who), guild_id: guildId, type: 2, data: { name, options } });
+  const choicesIn = async (who: string, guildId: string | undefined, name: string, options: Array<{ name: string; type: number; value: string; focused?: boolean }>) => {
+    const reply = await handleInteraction({ ...base(who), ...(guildId ? { guild_id: guildId } : {}), type: 4, data: { name, options } });
+    return "data" in reply && "choices" in reply.data ? reply.data.choices.map((c) => c.value) : [];
+  };
+  const connectServer = (studioId: string, guildId: string, guildName: string) => db.insert(discordConnections).values({ studioId, guildId, guildName });
+  const postTo = (projectId: string, guildId: string | null) => db.update(projects).set({ discordGuildId: guildId }).where(eq(projects.id, projectId));
+
+  it("see only the projects posting to that server; direct messages and other servers see everything", async () => {
+    const f = await setupStudio();
+    const member = await link(f.member.id);
+    const beta = await projectService.createProject(f.owner.actor, { studioId: f.studioId, name: `Beta ${seq}` });
+    const betaColumn = (await boardService.getBoard(f.owner.actor, beta.id)).columns[0]!.id;
+    const word = `Quokka${seq}`;
+    const alphaCard = await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: `${word} alpha task`, assigneeIds: [f.member.id] });
+    const betaCard = await cardService.createCard(f.manager.actor, { projectId: beta.id, columnId: betaColumn, title: `${word} beta task`, assigneeIds: [f.member.id] });
+    const [home, community, empty, unrelated] = [serverId(), serverId(), serverId(), serverId()];
+    await connectServer(f.studioId, home, "Home");
+    await connectServer(f.studioId, community, "Community");
+    await connectServer(f.studioId, empty, "Empty Server");
+    await postTo(f.projectId, home);
+    await postTo(beta.id, community);
+
+    const inHome = text(await inServer(member, home, "mywork"));
+    expect(inHome).toContain(`${word} alpha task`);
+    expect(inHome).not.toContain(`${word} beta task`);
+    const inCommunity = text(await inServer(member, community, "mywork"));
+    expect(inCommunity).toContain(`${word} beta task`);
+    expect(inCommunity).not.toContain(`${word} alpha task`);
+    // A direct message, or a server none of the person's studios connected: everything.
+    for (const reply of [await command(member, "mywork"), await inServer(member, unrelated, "mywork")]) {
+      expect(text(reply)).toContain(`${word} alpha task`);
+      expect(text(reply)).toContain(`${word} beta task`);
+    }
+    // A connected server no project posts to says so, for every command.
+    for (const name of ["mywork", "reviews", "due", "card", "newcard", "additem"]) {
+      const reply = await inServer(member, empty, name, name === "card" ? [{ name: "find", type: 3, value: word }] : []);
+      expect(text(reply)).toContain("No projects in Empty Server");
+      expectValidLayout(reply);
+    }
+    // /card can't reach another server's project by key either.
+    expect(text(await inServer(member, home, "card", [{ name: "find", type: 3, value: `${word} beta` }]))).toContain("No card you can see matches");
+
+    // Suggestions follow the same rule.
+    const findOpt = [{ name: "find", type: 3, value: word, focused: true }];
+    expect(await choicesIn(member, home, "card", findOpt)).toEqual([alphaCard.id]);
+    expect(await choicesIn(member, community, "card", findOpt)).toEqual([betaCard.id]);
+    expect((await choicesIn(member, undefined, "card", findOpt)).sort()).toEqual([alphaCard.id, betaCard.id].sort());
+    expect(await choicesIn(member, empty, "card", findOpt)).toEqual([]);
+    const projectOpt = [{ name: "title", type: 3, value: "Thing" }, { name: "project", type: 3, value: "", focused: true }];
+    const inCommunityProjects = await choicesIn(member, community, "newcard", projectOpt);
+    expect(inCommunityProjects).toContain(beta.id);
+    expect(inCommunityProjects).not.toContain(f.projectId);
+
+    // Moving a project to another server moves it in Discord too.
+    await postTo(beta.id, home);
+    expect(text(await inServer(member, home, "mywork"))).toContain(`${word} beta task`);
+    expect(text(await inServer(member, community, "mywork"))).toContain("No projects in Community");
+    // A project without a server only shows in direct messages.
+    await postTo(beta.id, null);
+    expect(text(await inServer(member, home, "mywork"))).not.toContain(`${word} beta task`);
+    expect(text(await command(member, "mywork"))).toContain(`${word} beta task`);
+  });
+
+  it("a server shared by two studios shows each studio's projects that post there", async () => {
+    const f = await setupStudio();
+    const member = await link(f.member.id);
+    await db.insert(studioMembers).values({ studioId: f.otherStudioId, userId: f.member.id, role: "CONTRIBUTOR" });
+    const word = `Wombat${seq}`;
+    await cardService.createCard(f.manager.actor, { projectId: f.projectId, columnId: f.columns.vfx, title: `${word} studio one`, assigneeIds: [f.member.id] });
+    await cardService.createCard(f.outsider.actor, { projectId: f.otherProjectId, columnId: f.otherColumnId, title: `${word} studio two`, assigneeIds: [f.member.id] });
+    const shared = serverId();
+    await connectServer(f.studioId, shared, "Shared");
+    await connectServer(f.otherStudioId, shared, "Shared");
+    await postTo(f.projectId, shared);
+    await postTo(f.otherProjectId, shared);
+    const both = text(await inServer(member, shared, "mywork"));
+    expect(both).toContain(`${word} studio one`);
+    expect(both).toContain(`${word} studio two`);
+    await postTo(f.otherProjectId, null);
+    const one = text(await inServer(member, shared, "mywork"));
+    expect(one).toContain(`${word} studio one`);
+    expect(one).not.toContain(`${word} studio two`);
   });
 });
 

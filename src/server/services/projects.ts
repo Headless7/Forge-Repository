@@ -16,6 +16,7 @@ import { copyProjectTemplate } from "./project-templates";
 import type { Actor } from "./context";
 import { announceAccessChange } from "../realtime/bus";
 import { Effects } from "./effects";
+import { defaultDiscordServer } from "./discord";
 import { createDefaultForums } from "./forums";
 import { inboxAudience } from "./notifications";
 import { purgeOne } from "./purge";
@@ -153,6 +154,7 @@ export async function createProject(actor: Actor, input: CreateProjectInput): Pr
         color: input.color ?? "#a78bfa",
         description: input.description?.trim() ?? "",
         visibility: input.visibility ?? "STUDIO",
+        discordGuildId: await defaultDiscordServer(tx, input.studioId),
         createdById: actor.userId,
       })
       .returning();

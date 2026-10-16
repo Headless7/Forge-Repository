@@ -137,6 +137,8 @@ export const projects = pgTable(
     cardCounter: integer().notNull().default(0),
     /** Last board number handed out (boards are numbered per project for stable URLs: /b/2). */
     boardCounter: integer().notNull().default(0),
+    /** The Discord server its feeds post to: one of the studio's connected servers, chosen by an Admin (null: none). */
+    discordGuildId: text(),
     archivedAt: tsz(),
     createdById: uuid().references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),

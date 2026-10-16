@@ -283,14 +283,15 @@ export const tutorialSettings = pgTable("tutorial_settings", {
 });
 
 /**
- * A studio's connected Discord server (one per studio). The Forge bot was added to it through
- * Discord's install screen by an Admin or Owner. `lostAt`: Discord says the bot is no longer there.
+ * A Discord server connected to a studio (a studio can connect several). The Forge bot was added
+ * to it through Discord's install screen by an Admin or Owner. Each project posts to one of them
+ * (`projects.discordGuildId`). `lostAt`: Discord says the bot is no longer there.
  */
 export const discordConnections = pgTable(
   "discord_connections",
   {
     studioId: uuid()
-      .primaryKey()
+      .notNull()
       .references(() => studios.id, { onDelete: "cascade" }),
     guildId: text().notNull(),
     guildName: text().notNull(),
@@ -299,12 +300,13 @@ export const discordConnections = pgTable(
     connectedAt: createdAt(),
     lostAt: tsz(),
   },
-  (t) => [index("discord_connections_guild_idx").on(t.guildId)],
+  (t) => [primaryKey({ columns: [t.studioId, t.guildId] }), index("discord_connections_guild_idx").on(t.guildId)],
 );
 
 /**
  * A team feed: which of a project's events (all boards, or one) go to which Discord channel.
- * Private projects only post once someone confirmed who can read the channel.
+ * Private projects only post once someone confirmed who can read the channel. A feed posts only
+ * while its server is the project's server: switching the project to another server pauses it.
  */
 export const discordRoutes = pgTable(
   "discord_routes",
@@ -316,6 +318,8 @@ export const discordRoutes = pgTable(
     projectId: uuid()
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    /** The Discord server the channel is in. */
+    guildId: text().notNull(),
     /** Null: every board of the project. */
     boardId: uuid().references(() => boards.id, { onDelete: "cascade" }),
     channelId: text().notNull(),

@@ -45,6 +45,7 @@ const AUDIT_TEXT: Record<string, string> = {
   "discord.feed_added": "added a Discord feed",
   "discord.feed_updated": "changed a Discord feed",
   "discord.feed_removed": "removed a Discord feed",
+  "discord.project_server_changed": "changed a project's Discord server",
 };
 
 function auditDetail(data: Record<string, unknown>) {
@@ -56,6 +57,8 @@ function auditDetail(data: Record<string, unknown>) {
   if (typeof data.role === "string" && !data.from) parts.push(roleLabel(data.role).toLowerCase());
   if (data.access === "PROJECTS" && !data.from) parts.push("projects only");
   if (typeof data.guildName === "string") parts.push(data.guildName);
+  if (typeof data.project === "string") parts.push(data.project);
+  if ("toServer" in data) parts.push(`${typeof data.fromServer === "string" ? data.fromServer : "no server"} → ${typeof data.toServer === "string" ? data.toServer : "no server"}`);
   if (typeof data.channel === "string") parts.push(`#${data.channel}`);
   return parts.join(" · ");
 }

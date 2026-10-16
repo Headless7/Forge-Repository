@@ -4,13 +4,13 @@ import { and, arrayContains, asc, eq, inArray, isNotNull, isNull, lte, ne, or, s
 import { itemDeadlineRecipients } from "@/lib/forum-meta";
 import { DISCORD_DIGEST_HOUR_UTC, DISCORD_EVENT_META, DISCORD_EVENTS, isDiscordEvent, type DiscordEventType } from "@/lib/discord";
 import { roleHas } from "@/lib/permissions";
-import { requireProject, requireStudio } from "../access";
+import { requireProject, requireStudio, type ProjectAccess } from "../access";
 import { hmac, safeEqual } from "../auth/crypto";
 import { now } from "../clock";
 import { db, type Executor } from "../db";
 import { boardColumns, boards, cardAssignees, cardReviewers, cards, deliverables, discordConnections, discordDeliveries, discordRoutes, forumItems, forums, projects, studios, users } from "../db/schema";
 import { appOrigin, env } from "../env";
-import { conflict, invalid, notFound } from "../errors";
+import { conflict, forbidden, invalid, notFound } from "../errors";
 import { audit } from "./activity";
 import type { Actor } from "./context";
 import { buildDiscordMessage, DISCORD_COLORS, discordTime, escapeMarkdown, eventSummary, feedButton, feedLabel, nameList, type DiscordMessage } from "./discord-message";
@@ -139,16 +139,17 @@ export async function completeDiscordConnect(input: { userId: string | null; coo
   const guild = token.data?.guild;
   if (!token.ok || !guild) throw invalid(`Discord didn't confirm which server Forge was added to${token.message ? ` (${token.message})` : ""}. Please try again.`);
   await db.transaction(async (tx) => {
-    const [previous] = await tx.select().from(discordConnections).where(eq(discordConnections.studioId, access.studioId));
-    // Feeds point at channels of the old server: they can't carry over.
-    if (previous && previous.guildId !== guild.id) await tx.delete(discordRoutes).where(eq(discordRoutes.studioId, access.studioId));
+    const others = await tx.select({ guildId: discordConnections.guildId }).from(discordConnections).where(eq(discordConnections.studioId, access.studioId));
+    // Adding a server never replaces another; connecting one again (or a lost one) just refreshes it.
     await tx
       .insert(discordConnections)
       .values({ studioId: access.studioId, guildId: guild.id, guildName: guild.name, guildIcon: guild.icon, connectedById: input.userId, connectedAt: now() })
       .onConflictDoUpdate({
-        target: discordConnections.studioId,
-        set: { guildId: guild.id, guildName: guild.name, guildIcon: guild.icon, connectedById: input.userId, connectedAt: now(), lostAt: null },
+        target: [discordConnections.studioId, discordConnections.guildId],
+        set: { guildName: guild.name, guildIcon: guild.icon, connectedById: input.userId, connectedAt: now(), lostAt: null },
       });
+    // The studio's first server: every project without one posts there, so one server just works.
+    if (!others.length) await tx.update(projects).set({ discordGuildId: guild.id }).where(and(eq(projects.studioId, access.studioId), isNull(projects.discordGuildId)));
     await audit(tx, { userId: input.userId!, ...meta }, { studioId: access.studioId, action: "discord.connected", targetType: "studio", targetId: access.studioId, data: { guildId: guild.id, guildName: guild.name } });
   });
   return { studioSlug: access.studioSlug, guildName: guild.name };
@@ -162,51 +163,95 @@ export async function studioSlugForConnectState(cookie: string | null | undefine
   return row?.slug ?? null;
 }
 
-/** Removes the connection and every feed; the bot leaves the server unless another studio still uses it. */
-export async function disconnectDiscord(actor: Actor, studioId: string) {
+/**
+ * Disconnects one server: its feeds are removed and the projects posting there have no server
+ * until an Admin picks another. The bot leaves the server unless another studio still uses it.
+ */
+export async function disconnectDiscord(actor: Actor, studioId: string, guildId: string) {
   const access = await requireStudio(actor.userId, studioId, "studio.update");
-  const [connection] = await db.select().from(discordConnections).where(eq(discordConnections.studioId, access.studioId));
+  const [connection] = await db.select().from(discordConnections).where(and(eq(discordConnections.studioId, access.studioId), eq(discordConnections.guildId, guildId)));
   if (!connection) return { ok: true as const };
   await db.transaction(async (tx) => {
-    await tx.delete(discordRoutes).where(eq(discordRoutes.studioId, access.studioId));
-    await tx.delete(discordConnections).where(eq(discordConnections.studioId, access.studioId));
-    await audit(tx, actor, { studioId: access.studioId, action: "discord.disconnected", targetType: "studio", targetId: access.studioId, data: { guildId: connection.guildId, guildName: connection.guildName } });
+    const feeds = await tx.delete(discordRoutes).where(and(eq(discordRoutes.studioId, access.studioId), eq(discordRoutes.guildId, guildId))).returning({ id: discordRoutes.id });
+    const moved = await tx
+      .update(projects)
+      .set({ discordGuildId: null })
+      .where(and(eq(projects.studioId, access.studioId), eq(projects.discordGuildId, guildId)))
+      .returning({ id: projects.id });
+    await tx.delete(discordConnections).where(and(eq(discordConnections.studioId, access.studioId), eq(discordConnections.guildId, guildId)));
+    await audit(tx, actor, {
+      studioId: access.studioId,
+      action: "discord.disconnected",
+      targetType: "studio",
+      targetId: access.studioId,
+      data: { guildId: connection.guildId, guildName: connection.guildName, feeds: feeds.length, projects: moved.length },
+    });
   });
   const [stillUsed] = await db.select({ studioId: discordConnections.studioId }).from(discordConnections).where(eq(discordConnections.guildId, connection.guildId)).limit(1);
   if (!stillUsed && discordConfigured()) await discordApi(`/users/@me/guilds/${connection.guildId}`, { method: "DELETE" });
   return { ok: true as const };
 }
 
+export interface DiscordServerDTO {
+  guildId: string;
+  guildName: string;
+  connectedAt: string;
+  connectedBy: string | null;
+  lost: boolean;
+  /** The projects posting here (listed for Admins and the Owner only). */
+  projects: Array<{ id: string; name: string; slug: string; archived: boolean }>;
+}
+
 export interface DiscordStatusDTO {
   configured: boolean;
   canConnect: boolean;
-  connection: { guildName: string; connectedAt: string; connectedBy: string | null; lost: boolean } | null;
+  /** The studio's connected servers, oldest first. */
+  servers: DiscordServerDTO[];
 }
 
 export async function discordStatus(actor: Actor, studioId: string): Promise<DiscordStatusDTO> {
   const access = await requireStudio(actor.userId, studioId);
-  const [row] = await db
+  const canConnect = roleHas(access.role, "studio.update");
+  const rows = await db
     .select({ c: discordConnections, by: users.displayName })
     .from(discordConnections)
     .leftJoin(users, eq(users.id, discordConnections.connectedById))
-    .where(eq(discordConnections.studioId, access.studioId));
+    .where(eq(discordConnections.studioId, access.studioId))
+    .orderBy(asc(discordConnections.connectedAt));
+  const using = canConnect
+    ? await db
+        .select({ id: projects.id, name: projects.name, slug: projects.slug, archivedAt: projects.archivedAt, guildId: projects.discordGuildId })
+        .from(projects)
+        .where(and(eq(projects.studioId, access.studioId), isNotNull(projects.discordGuildId)))
+        .orderBy(asc(projects.name))
+    : [];
   return {
     configured: discordConfigured(),
-    canConnect: roleHas(access.role, "studio.update"),
-    connection: row
-      ? {
-          guildName: row.c.guildName,
-          connectedAt: row.c.connectedAt.toISOString(),
-          connectedBy: row.by ?? null,
-          lost: Boolean(row.c.lostAt),
-        }
-      : null,
+    canConnect,
+    servers: rows.map(({ c, by }) => ({
+      guildId: c.guildId,
+      guildName: c.guildName,
+      connectedAt: c.connectedAt.toISOString(),
+      connectedBy: by ?? null,
+      lost: Boolean(c.lostAt),
+      projects: using.filter((p) => p.guildId === c.guildId).map((p) => ({ id: p.id, name: p.name, slug: p.slug, archived: Boolean(p.archivedAt) })),
+    })),
   };
 }
 
-async function activeConnection(ex: Executor, studioId: string) {
-  const [connection] = await ex.select().from(discordConnections).where(and(eq(discordConnections.studioId, studioId), isNull(discordConnections.lostAt)));
+async function activeConnection(ex: Executor, studioId: string, guildId: string | null) {
+  if (!guildId) return null;
+  const [connection] = await ex
+    .select()
+    .from(discordConnections)
+    .where(and(eq(discordConnections.studioId, studioId), eq(discordConnections.guildId, guildId), isNull(discordConnections.lostAt)));
   return connection ?? null;
+}
+
+/** The server a new project starts with: the studio's only server, when it has exactly one. */
+export async function defaultDiscordServer(ex: Executor, studioId: string): Promise<string | null> {
+  const rows = await ex.select({ guildId: discordConnections.guildId }).from(discordConnections).where(eq(discordConnections.studioId, studioId)).limit(2);
+  return rows.length === 1 ? rows[0]!.guildId : null;
 }
 
 async function markLost(guildId: string) {
@@ -221,16 +266,24 @@ export interface DiscordChannelDTO {
   category: string | null;
 }
 
-/** Text and announcement channels the bot can see, in Discord's order. */
-export async function listDiscordChannels(actor: Actor, projectId: string): Promise<DiscordChannelDTO[]> {
-  const access = await requireProject(actor.userId, projectId, "board.manage");
-  return channelsOf(access.studioId);
+/** The project's Discord server, ready to post to; or why it isn't. */
+async function projectServer(access: ProjectAccess) {
+  if (!discordConfigured()) throw invalid("Discord isn't set up on this Forge site.");
+  const guildId = access.project.discordGuildId;
+  if (!guildId) throw invalid("This project has no Discord server yet. A studio Admin or the Owner can choose one in its settings.");
+  const [connection] = await db.select().from(discordConnections).where(and(eq(discordConnections.studioId, access.studioId), eq(discordConnections.guildId, guildId)));
+  if (!connection) throw invalid("This project's Discord server isn't connected anymore. A studio Admin or the Owner can choose another.");
+  if (connection.lostAt) throw invalid(`Forge is no longer in ${connection.guildName}. An Admin can reconnect it in studio settings.`);
+  return connection;
 }
 
-async function channelsOf(studioId: string): Promise<DiscordChannelDTO[]> {
-  if (!discordConfigured()) throw invalid("Discord isn't set up on this Forge site.");
-  const connection = await activeConnection(db, studioId);
-  if (!connection) throw invalid("Connect a Discord server in studio settings first.");
+/** Text and announcement channels the bot can see in the project's server, in Discord's order. */
+export async function listDiscordChannels(actor: Actor, projectId: string): Promise<DiscordChannelDTO[]> {
+  const access = await requireProject(actor.userId, projectId, "board.manage");
+  return channelsOf(await projectServer(access));
+}
+
+async function channelsOf(connection: { guildId: string; guildName: string }): Promise<DiscordChannelDTO[]> {
   const res = await discordApi<Array<{ id: string; name: string; type: number; position: number; parent_id: string | null }>>(`/guilds/${connection.guildId}/channels`);
   if (!res.ok || !res.data) {
     if (res.code === 10004 || res.code === 50001 || res.status === 404) {
@@ -257,6 +310,11 @@ export interface DiscordFeedDTO {
   projectSlug: string;
   boardId: string | null;
   boardName: string | null;
+  /** The server the channel is in (its name: null if that server isn't connected anymore). */
+  guildId: string;
+  guildName: string | null;
+  /** The project posts to another server now: this feed waits until it switches back. */
+  paused: boolean;
   channelId: string;
   channelName: string;
   events: DiscordEventType[];
@@ -269,20 +327,32 @@ export interface DiscordFeedDTO {
 
 async function feedRows(where: ReturnType<typeof eq>) {
   const rows = await db
-    .select({ r: discordRoutes, projectName: projects.name, projectSlug: projects.slug, visibility: projects.visibility, boardName: boards.name })
+    .select({
+      r: discordRoutes,
+      projectName: projects.name,
+      projectSlug: projects.slug,
+      projectGuildId: projects.discordGuildId,
+      visibility: projects.visibility,
+      boardName: boards.name,
+      guildName: discordConnections.guildName,
+    })
     .from(discordRoutes)
     .innerJoin(projects, eq(projects.id, discordRoutes.projectId))
     .leftJoin(boards, eq(boards.id, discordRoutes.boardId))
+    .leftJoin(discordConnections, and(eq(discordConnections.studioId, discordRoutes.studioId), eq(discordConnections.guildId, discordRoutes.guildId)))
     .where(where)
     .orderBy(asc(projects.name), asc(discordRoutes.createdAt));
   return rows.map(
-    ({ r, projectName, projectSlug, visibility, boardName }): DiscordFeedDTO => ({
+    ({ r, projectName, projectSlug, projectGuildId, visibility, boardName, guildName }): DiscordFeedDTO => ({
       id: r.id,
       projectId: r.projectId,
       projectName,
       projectSlug,
       boardId: r.boardId,
       boardName: boardName ?? null,
+      guildId: r.guildId,
+      guildName: guildName ?? null,
+      paused: r.guildId !== projectGuildId,
       channelId: r.channelId,
       channelName: r.channelName,
       events: r.events.filter(isDiscordEvent),
@@ -299,6 +369,55 @@ async function feedRows(where: ReturnType<typeof eq>) {
 export async function listProjectFeeds(actor: Actor, projectId: string) {
   const access = await requireProject(actor.userId, projectId, "board.manage");
   return feedRows(eq(discordRoutes.projectId, access.project.id));
+}
+
+export interface ProjectDiscordDTO {
+  /** Where the project's feeds post (null: no server chosen). */
+  server: { guildId: string; guildName: string; lost: boolean } | null;
+  /** Admins and the Owner choose the project's server. */
+  canChooseServer: boolean;
+  feeds: DiscordFeedDTO[];
+}
+
+/** The project's Discord server and feeds, for its settings (Managers and above). */
+export async function projectDiscord(actor: Actor, projectId: string): Promise<ProjectDiscordDTO> {
+  const access = await requireProject(actor.userId, projectId, "board.manage");
+  const guildId = access.project.discordGuildId;
+  const [connection] = guildId
+    ? await db.select().from(discordConnections).where(and(eq(discordConnections.studioId, access.studioId), eq(discordConnections.guildId, guildId)))
+    : [];
+  return {
+    server: connection ? { guildId: connection.guildId, guildName: connection.guildName, lost: Boolean(connection.lostAt) } : null,
+    canChooseServer: roleHas(access.studioRole, "studio.update"),
+    feeds: await feedRows(eq(discordRoutes.projectId, access.project.id)),
+  };
+}
+
+/**
+ * Chooses the project's Discord server (Admins and the Owner): one of the studio's connected
+ * servers, or none. Feeds in other servers stay but pause until the project switches back.
+ */
+export async function setProjectDiscordServer(actor: Actor, input: { projectId: string; guildId: string | null }): Promise<ProjectDiscordDTO> {
+  const access = await requireProject(actor.userId, input.projectId);
+  if (!roleHas(access.studioRole, "studio.update")) throw forbidden("Only studio Admins and the Owner can choose a project's Discord server.");
+  if (access.project.archivedAt) throw conflict("This project is archived. Restore it to change its Discord server.");
+  const from = access.project.discordGuildId;
+  if (input.guildId === from) return projectDiscord(actor, input.projectId);
+  const connections = await db.select().from(discordConnections).where(eq(discordConnections.studioId, access.studioId));
+  const target = input.guildId ? connections.find((c) => c.guildId === input.guildId) : null;
+  if (input.guildId && !target) throw invalid("That Discord server isn't connected to this studio.");
+  if (target?.lostAt) throw invalid(`Forge is no longer in ${target.guildName}. Reconnect it in studio settings first.`);
+  await db.transaction(async (tx) => {
+    await tx.update(projects).set({ discordGuildId: input.guildId, updatedAt: now() }).where(eq(projects.id, access.project.id));
+    await audit(tx, actor, {
+      studioId: access.studioId,
+      action: "discord.project_server_changed",
+      targetType: "project",
+      targetId: access.project.id,
+      data: { project: access.project.name, fromServer: connections.find((c) => c.guildId === from)?.guildName ?? null, toServer: target?.guildName ?? null },
+    });
+  });
+  return projectDiscord(actor, input.projectId);
 }
 
 /** Every feed in the studio (Admins and the Owner, for the overview in studio settings). */
@@ -318,8 +437,10 @@ export async function saveDiscordFeed(
     const [board] = await db.select({ id: boards.id }).from(boards).where(and(eq(boards.id, input.boardId), eq(boards.projectId, access.project.id), isNull(boards.archivedAt)));
     if (!board) throw invalid("That board isn't in this project.");
   }
-  const channel = (await channelsOf(access.studioId)).find((c) => c.id === input.channelId);
-  if (!channel) throw invalid("That channel isn't in the connected Discord server (or Forge can't see it).");
+  // Always the project's current server: saving a paused feed with one of its channels resumes it there.
+  const server = await projectServer(access);
+  const channel = (await channelsOf(server)).find((c) => c.id === input.channelId);
+  if (!channel) throw invalid(`That channel isn't in ${server.guildName} (or Forge can't see it).`);
   const existing = input.feedId
     ? (await db.select().from(discordRoutes).where(and(eq(discordRoutes.id, input.feedId), eq(discordRoutes.projectId, access.project.id))))[0]
     : undefined;
@@ -343,7 +464,9 @@ export async function saveDiscordFeed(
     .limit(1);
   if (duplicate) throw conflict(`#${channel.name} already gets this ${input.boardId ? "board" : "project"}'s events.`);
   const confirmation = isPrivate && input.confirmPrivate && !confirmed ? { privateConfirmedAt: now(), privateConfirmedById: actor.userId } : {};
-  const values = { boardId: input.boardId, channelId: channel.id, channelName: channel.name, events, updatedAt: now(), lastError: null, lastErrorAt: null, ...confirmation };
+  // "Last posted" is about the channel: another channel (or server) starts fresh.
+  const moved = existing && existing.channelId !== channel.id ? { lastSentAt: null } : {};
+  const values = { boardId: input.boardId, guildId: server.guildId, channelId: channel.id, channelName: channel.name, events, updatedAt: now(), lastError: null, lastErrorAt: null, ...moved, ...confirmation };
   const id = await db.transaction(async (tx) => {
     const [row] = existing
       ? await tx.update(discordRoutes).set(values).where(eq(discordRoutes.id, existing.id)).returning({ id: discordRoutes.id })
@@ -373,8 +496,9 @@ export async function deleteDiscordFeed(actor: Actor, feedId: string) {
 /** Posts a test message now (not queued) and reports the outcome. */
 export async function testDiscordFeed(actor: Actor, feedId: string): Promise<{ ok: boolean; error: string | null }> {
   const { route, access } = await loadFeed(actor, feedId);
-  const connection = await activeConnection(db, access.studioId);
-  if (!connection) return { ok: false, error: "Discord isn't connected for this studio." };
+  if (route.guildId !== access.project.discordGuildId) return { ok: false, error: "This feed is paused: the project posts to another Discord server now." };
+  const connection = await activeConnection(db, access.studioId, route.guildId);
+  if (!connection) return { ok: false, error: "Forge can't reach this feed's Discord server. An Admin can reconnect it in studio settings." };
   const url = `${appOrigin()}/${access.studioSlug}/${access.project.slug}`;
   const [board] = route.boardId ? await db.select({ name: boards.name }).from(boards).where(eq(boards.id, route.boardId)) : [];
   const events = DISCORD_EVENTS.filter((e) => route.events.includes(e));
@@ -407,6 +531,11 @@ export interface DiscordEventPayload {
   at: string;
 }
 
+/** A feed posts only while its server is the project's server (others are paused)… */
+const liveFeedProject = and(eq(projects.id, discordRoutes.projectId), eq(projects.discordGuildId, discordRoutes.guildId));
+/** …and Forge can still reach that server. */
+const liveFeedConnection = and(eq(discordConnections.studioId, discordRoutes.studioId), eq(discordConnections.guildId, discordRoutes.guildId), isNull(discordConnections.lostAt));
+
 /**
  * Queues a feed message for every matching feed, inside the caller's transaction (so it's sent only
  * if the change commits, and exactly once per feed thanks to the dedupe key). Cheap when nothing
@@ -417,7 +546,8 @@ export async function queueDiscordEvent(tx: Executor, event: DiscordEventPayload
   const routes = await tx
     .select({ id: discordRoutes.id })
     .from(discordRoutes)
-    .innerJoin(discordConnections, and(eq(discordConnections.studioId, discordRoutes.studioId), isNull(discordConnections.lostAt)))
+    .innerJoin(projects, liveFeedProject)
+    .innerJoin(discordConnections, liveFeedConnection)
     .where(
       and(
         eq(discordRoutes.projectId, event.projectId),
@@ -452,7 +582,8 @@ export async function runDiscordDueDigests(at: Date = now()): Promise<number> {
   const routes = await db
     .select({ id: discordRoutes.id, projectId: discordRoutes.projectId, boardId: discordRoutes.boardId })
     .from(discordRoutes)
-    .innerJoin(discordConnections, and(eq(discordConnections.studioId, discordRoutes.studioId), isNull(discordConnections.lostAt)))
+    .innerJoin(projects, liveFeedProject)
+    .innerJoin(discordConnections, liveFeedConnection)
     .where(arrayContains(discordRoutes.events, ["DUE_DIGEST"]));
   if (!routes.length) return 0;
   const inserted = await db
@@ -673,12 +804,18 @@ export async function processDiscordDeliveries(limit = 50): Promise<{ sent: numb
     };
     try {
       const [row] = await db
-        .select({ route: discordRoutes, lostAt: discordConnections.lostAt })
+        .select({ route: discordRoutes, projectGuildId: projects.discordGuildId, connectedAt: discordConnections.connectedAt, lostAt: discordConnections.lostAt })
         .from(discordRoutes)
-        .innerJoin(discordConnections, eq(discordConnections.studioId, discordRoutes.studioId))
+        .innerJoin(projects, eq(projects.id, discordRoutes.projectId))
+        .leftJoin(discordConnections, and(eq(discordConnections.studioId, discordRoutes.studioId), eq(discordConnections.guildId, discordRoutes.guildId)))
         .where(eq(discordRoutes.id, delivery.routeId));
-      if (!row || row.lostAt) {
-        await finish(delivery.id, "SKIPPED", "Discord is no longer connected for this studio.");
+      if (!row || !row.connectedAt || row.lostAt) {
+        await finish(delivery.id, "SKIPPED", "Forge can't reach this feed's Discord server anymore.");
+        totals.skipped++;
+        continue;
+      }
+      if (row.projectGuildId !== row.route.guildId) {
+        await finish(delivery.id, "SKIPPED", "Paused: the project posts to another Discord server now.");
         totals.skipped++;
         continue;
       }

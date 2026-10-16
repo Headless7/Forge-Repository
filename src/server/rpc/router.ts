@@ -104,6 +104,8 @@ const pushEndpointSchema = z.string().url().max(2048).refine((v) => v.startsWith
 const text = (max: number) => z.string().max(max);
 /** A calendar day, "YYYY-MM-DD" (checked to be a real date by the service). */
 const dueDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Choose a valid due date.");
+/** A Discord id (a server, channel or user): a snowflake. */
+const discordIdSchema = z.string().regex(/^\d{5,25}$/, "Unknown Discord server.");
 
 export const appRouter = {
   // ── Board & columns ───────────────────────────────────────────────────────
@@ -1038,9 +1040,9 @@ export const appRouter = {
     handler: ({ actor }, i) => discord.discordStatus(actor, i.studioId),
   }),
   "discord.disconnect": proc({
-    input: z.object({ studioId: idSchema }),
+    input: z.object({ studioId: idSchema, guildId: discordIdSchema }),
     limit: { max: 10, windowMs: 60_000 },
-    handler: ({ actor }, i) => discord.disconnectDiscord(actor, i.studioId),
+    handler: ({ actor }, i) => discord.disconnectDiscord(actor, i.studioId, i.guildId),
   }),
   "discord.studioFeeds": proc({
     input: z.object({ studioId: idSchema }),
@@ -1051,9 +1053,14 @@ export const appRouter = {
     limit: { max: 30, windowMs: 60_000 },
     handler: ({ actor }, i) => discord.listDiscordChannels(actor, i.projectId),
   }),
-  "discord.feeds": proc({
+  "discord.project": proc({
     input: z.object({ projectId: idSchema }),
-    handler: ({ actor }, i) => discord.listProjectFeeds(actor, i.projectId),
+    handler: ({ actor }, i) => discord.projectDiscord(actor, i.projectId),
+  }),
+  "discord.setProjectServer": proc({
+    input: z.object({ projectId: idSchema, guildId: discordIdSchema.nullable() }),
+    limit: { max: 20, windowMs: 60_000 },
+    handler: ({ actor }, i) => discord.setProjectDiscordServer(actor, i),
   }),
   "discord.saveFeed": proc({
     input: z.object({
