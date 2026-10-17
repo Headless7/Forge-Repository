@@ -710,10 +710,10 @@ export async function removeItemAttachment(actor: Actor, input: { attachmentId: 
 
 // ── Deleting ────────────────────────────────────────────────────────────────
 
-/** Permanently deletes an item with its comments and files (admins; closing is the usual way to retire one). */
+/** Permanently deletes an item with its comments and files (its reporter or an admin; closing is the usual way to retire one). */
 export async function deleteItem(actor: Actor, input: { itemId: string }) {
   const ctx = await requireItem(actor.userId, input.itemId);
-  assertItem(ctx.perms, "canDelete", "Only admins can delete. Close it instead.");
+  assertItem(ctx.perms, "canDelete", `Only whoever reported this ${ctx.forum.itemLabel} or an Admin can delete it. Close it instead.`);
   await db.transaction(async (tx) => {
     const files = await tx.select().from(attachments).where(eq(attachments.itemId, ctx.item.id));
     await tx.delete(forumItems).where(eq(forumItems.id, ctx.item.id));

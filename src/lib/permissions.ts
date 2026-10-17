@@ -307,9 +307,11 @@ export function itemPermissions({ role, userId, item, readOnly }: ItemPermission
     canClose: has("item.edit") || (has("item.editOwn") && isReporter),
     canComment: has("comment.create"),
     canUpload: has("attachment.upload") && canEdit,
-    canDelete: has("item.delete"),
+    // Admins delete anything; whoever reported it can take their own report back.
+    canDelete: has("item.delete") || (has("item.editOwn") && isReporter),
     canManageTags: has("forum.manage"),
   };
   if (!readOnly) return base;
-  return { ...base, canEdit: false, canAssign: false, canSelfAssign: false, canVerify: false, canClose: false, canComment: false, canUpload: false, canManageTags: false };
+  // Read-only (archived): only Admins still delete.
+  return { ...base, canEdit: false, canAssign: false, canSelfAssign: false, canVerify: false, canClose: false, canComment: false, canUpload: false, canDelete: has("item.delete"), canManageTags: false };
 }

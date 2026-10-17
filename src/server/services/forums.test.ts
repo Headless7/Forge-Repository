@@ -261,4 +261,35 @@ describe("deleting", () => {
     await expectAppError(forums.getItem(f.member.actor, item.id), "NOT_FOUND");
     expect(await db.select().from(attachments).where(eq(attachments.id, image.id))).toHaveLength(0);
   });
+
+  it("lets whoever reported it delete their own report, whatever its state, with its files", async () => {
+    // Someone else is on it, and it's already been worked on: still the reporter's to take back.
+    const item = await report(f.member, { title: "Reported by mistake", assigneeId: f.member.id });
+    await forums.updateItem(f.manager.actor, { itemId: item.id, assigneeId: f.developer.id });
+    await forums.setItemStatus(f.developer.actor, { itemId: item.id, status: "FIXED" });
+    const image = await uploadToItem(f.member, item.id, { name: "mine.png", type: "image/png", buffer: await pngBuffer(64, 48) });
+    expect((await forums.getItem(f.member.actor, item.id)).permissions.canDelete).toBe(true);
+    // Nobody else below Admin: not another tester, not the assignee, not a Manager, not a Viewer.
+    for (const who of [f.member2, f.developer, f.manager, f.viewer]) {
+      expect((await forums.getItem(who.actor, item.id)).permissions.canDelete).toBe(false);
+      await expectAppError(forums.deleteItem(who.actor, { itemId: item.id }), "FORBIDDEN");
+    }
+    await forums.deleteItem(f.member.actor, { itemId: item.id });
+    await expectAppError(forums.getItem(f.member.actor, item.id), "NOT_FOUND");
+    expect(await db.select().from(attachments).where(eq(attachments.id, image.id))).toHaveLength(0);
+    // A Manager can delete what they reported themselves.
+    const own = await report(f.manager, { title: "Manager's own report" });
+    await forums.deleteItem(f.manager.actor, { itemId: own.id });
+    await expectAppError(forums.getItem(f.manager.actor, own.id), "NOT_FOUND");
+  });
+
+  it("in an archived forum, only Admins still delete", async () => {
+    const forum = await forums.createForum(f.manager.actor, { projectId: f.projectId, name: `Old playtest ${Date.now()}` });
+    const item = await report(f.member, { title: "Before archiving" }, forum.id);
+    await forums.updateForum(f.manager.actor, { forumId: forum.id, archived: true });
+    expect((await forums.getItem(f.member.actor, item.id)).permissions.canDelete).toBe(false);
+    await expectAppError(forums.deleteItem(f.member.actor, { itemId: item.id }), "FORBIDDEN");
+    await forums.deleteItem(f.admin.actor, { itemId: item.id });
+    await expectAppError(forums.getItem(f.admin.actor, item.id), "NOT_FOUND");
+  });
 });
