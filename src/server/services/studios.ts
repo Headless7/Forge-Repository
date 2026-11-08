@@ -12,6 +12,7 @@ import { AppError, conflict, forbidden, invalid, notFound } from "../errors";
 import { enforceSharedRateLimit } from "../rate-limit";
 import { announceAccessChange } from "../realtime/bus";
 import { audit } from "./activity";
+import { revokeMemberTokens } from "./api-tokens";
 import type { Actor } from "./context";
 import { sendEmail } from "./email";
 import { listMembersFor } from "./members-query";
@@ -217,6 +218,7 @@ export async function removeMember(actor: Actor, input: { studioId: string; user
   const [person] = await db.select({ email: users.email }).from(users).where(eq(users.id, input.userId));
   await db.transaction(async (tx) => {
     await tx.delete(studioMembers).where(eq(studioMembers.id, target.id));
+    await revokeMemberTokens(tx, actor, input.studioId, input.userId);
     const projectIds = (await tx.select({ id: projects.id }).from(projects).where(eq(projects.studioId, input.studioId))).map((p) => p.id);
     for (const projectId of projectIds) {
       await tx.delete(projectMembers).where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, input.userId)));

@@ -82,6 +82,8 @@ export const PERMISSIONS = [
   "members.invite",
   "members.manage",
   "audit.view",
+  /** Create, rotate and revoke the studio's API tokens (headless clients acting as a bot member). */
+  "tokens.manage",
   /** Producer dashboard: progress, risk, review health and workload (Managers and above). */
   "reports.view",
   "project.create",
@@ -166,6 +168,7 @@ const ADMIN: Permission[] = [
   "members.invite",
   "members.manage",
   "audit.view",
+  "tokens.manage",
   "project.create",
   "project.update",
   "card.delete",

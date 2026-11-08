@@ -12,6 +12,7 @@ import { formatBytes, formatDateTime } from "@/lib/utils";
 import { UserAvatar } from "../domain/avatar";
 import { StudioDiscord } from "../integrations/discord-settings";
 import { PROJECT_EMOJIS } from "../shell/create-project-dialog";
+import { ApiTokens } from "./api-tokens";
 import { ArchivedProjects } from "./archived-projects";
 import { useShell } from "../shell/shell-context";
 import { Button } from "../ui/button";
@@ -46,6 +47,10 @@ const AUDIT_TEXT: Record<string, string> = {
   "discord.feed_updated": "changed a Discord feed",
   "discord.feed_removed": "removed a Discord feed",
   "discord.project_server_changed": "changed a project's Discord server",
+  "api_token.created": "created an API token",
+  "api_token.rotated": "rotated an API token",
+  "api_token.revoked": "revoked an API token",
+  "api_token.rejected": "was called with a revoked or expired API token",
 };
 
 function auditDetail(data: Record<string, unknown>) {
@@ -60,6 +65,8 @@ function auditDetail(data: Record<string, unknown>) {
   if (typeof data.project === "string") parts.push(data.project);
   if ("toServer" in data) parts.push(`${typeof data.fromServer === "string" ? data.fromServer : "no server"} → ${typeof data.toServer === "string" ? data.toServer : "no server"}`);
   if (typeof data.channel === "string") parts.push(`#${data.channel}`);
+  if (typeof data.hint === "string") parts.push(`…${data.hint}`);
+  if (data.reason === "member_removed") parts.push("member removed");
   return parts.join(" · ");
 }
 
@@ -151,6 +158,8 @@ export function StudioSettings() {
         </section>
 
         <StudioDiscord studioId={studio.id} studioSlug={studio.slug} />
+
+        {can("tokens.manage") ? <ApiTokens /> : null}
 
         {studio.role === "OWNER" ? <ArchivedProjects studioId={studio.id} /> : null}
 

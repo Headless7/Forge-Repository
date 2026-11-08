@@ -275,3 +275,38 @@ export const userBoardPrefs = pgTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.boardId] })],
 );
+
+/**
+ * Scoped API tokens: a headless client (a scheduled bot) calls the RPC endpoint as the member the
+ * token belongs to, limited to an allowlist of procedures and a set of projects. Managed by studio
+ * admins; only the token's hash is stored and the raw value is shown once.
+ */
+export const apiTokens = pgTable(
+  "api_tokens",
+  {
+    id: pk(),
+    studioId: uuid()
+      .notNull()
+      .references(() => studios.id, { onDelete: "cascade" }),
+    /** The member the token acts as (the bot account). */
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text().notNull(),
+    /** SHA-256 of the raw token (`forge_…`), which only the holder keeps. */
+    tokenHash: text().notNull(),
+    /** Last characters of the token, so admins can tell tokens apart. */
+    hint: text().notNull(),
+    /** RPC procedures the token may call (subset of the token-eligible ones). */
+    procedures: text().array().notNull().default(sql`'{}'::text[]`),
+    /** Projects the token may touch; every call resolves to a project and is refused outside these. */
+    projectIds: uuid().array().notNull().default(sql`'{}'::uuid[]`),
+    createdById: uuid().references(() => users.id, { onDelete: "set null" }),
+    expiresAt: tsz().notNull(),
+    lastUsedAt: tsz(),
+    revokedAt: tsz(),
+    revokedById: uuid().references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("api_tokens_hash_uq").on(t.tokenHash), index("api_tokens_studio_idx").on(t.studioId), index("api_tokens_user_idx").on(t.userId)],
+);

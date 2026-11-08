@@ -41,7 +41,9 @@ import { BOARD_ICONS } from "@/lib/board-icons";
 import { FOLDER_NAME_MAX } from "@/lib/canvas-folders";
 import { DISCORD_EVENTS } from "@/lib/discord";
 import { COLUMN_ICONS } from "@/lib/column-icons";
+import { API_TOKEN_MAX_DAYS, API_TOKEN_PROCEDURE_NAMES } from "@/lib/api-tokens";
 import * as accounts from "../services/accounts";
+import * as apiTokens from "../services/api-tokens";
 import * as archive from "../services/archive";
 import { listAuditLog, listCardActivity, listItemActivity, listProjectActivity } from "../services/activity";
 import * as board from "../services/board";
@@ -773,6 +775,7 @@ export const appRouter = {
   }),
   "project.access": proc({
     input: z.object({ projectId: idSchema }),
+    scope: (i) => ({ projectId: i.projectId }),
     handler: ({ actor }, i) => projects.listProjectAccess(actor, i.projectId),
   }),
   "project.setMember": proc({
@@ -899,6 +902,33 @@ export const appRouter = {
   "platform.revokeKey": proc({
     input: z.object({ keyId: idSchema }),
     handler: ({ actor }, i) => platform.revokeActivationKey(actor, i),
+  }),
+
+  // ── API tokens (studio admins; never callable with a token) ────────────
+  "apiToken.list": proc({
+    input: z.object({ studioId: idSchema }),
+    handler: ({ actor }, i) => apiTokens.listApiTokens(actor, i.studioId),
+  }),
+  "apiToken.create": proc({
+    input: z.object({
+      studioId: idSchema,
+      userId: idSchema,
+      name: z.string().trim().min(1, "Name the token.").max(80),
+      procedures: z.array(z.enum(API_TOKEN_PROCEDURE_NAMES)).min(1, "Choose at least one procedure.").max(20),
+      projectIds: z.array(idSchema).min(1, "Choose at least one project.").max(50),
+      expiresInDays: z.number().int().min(1).max(API_TOKEN_MAX_DAYS),
+    }),
+    limit: { max: 20, windowMs: 60 * 60_000 },
+    handler: ({ actor }, i) => apiTokens.createApiToken(actor, i),
+  }),
+  "apiToken.rotate": proc({
+    input: z.object({ tokenId: idSchema }),
+    limit: { max: 20, windowMs: 60 * 60_000 },
+    handler: ({ actor }, i) => apiTokens.rotateApiToken(actor, i),
+  }),
+  "apiToken.revoke": proc({
+    input: z.object({ tokenId: idSchema }),
+    handler: ({ actor }, i) => apiTokens.revokeApiToken(actor, i),
   }),
 
   // ── Notifications ─────────────────────────────────────────────────────────
@@ -1136,10 +1166,12 @@ export const appRouter = {
   // ── Forums ──────────────────────────────────────────────────────────────────
   "forum.list": proc({
     input: z.object({ projectId: idSchema, includeArchived: z.boolean().optional() }),
+    scope: (i) => ({ projectId: i.projectId }),
     handler: ({ actor }, i) => forums.listForumsFor(actor, i.projectId, i.includeArchived),
   }),
   "forum.get": proc({
     input: z.union([z.object({ forumId: idSchema }), z.object({ projectId: idSchema, slug: z.string().min(1).max(60) })]),
+    scope: (i) => ("forumId" in i ? { forumId: i.forumId } : { projectId: i.projectId }),
     handler: async ({ actor }, i) => forums.getForumView(actor, "forumId" in i ? i.forumId : await forums.findForumIdBySlug(actor, i.projectId, i.slug)),
   }),
   "forum.create": proc({
@@ -1170,10 +1202,12 @@ export const appRouter = {
   }),
   "item.get": proc({
     input: z.union([z.object({ itemId: idSchema }), z.object({ forumId: idSchema, number: z.number().int().positive() })]),
+    scope: (i) => ("itemId" in i ? { itemId: i.itemId } : { forumId: i.forumId }),
     handler: async ({ actor }, i) => forums.getItem(actor, "itemId" in i ? i.itemId : await forums.findItemIdByNumber(actor, i.forumId, i.number)),
   }),
   "item.activity": proc({
     input: z.object({ itemId: idSchema }),
+    scope: (i) => ({ itemId: i.itemId }),
     handler: async ({ actor }, i) => {
       await requireItem(actor.userId, i.itemId);
       return listItemActivity(i.itemId);
@@ -1207,6 +1241,16 @@ export const appRouter = {
       dueAt: isoDateSchema.nullable().optional(),
     }),
     handler: ({ actor }, i) => forums.updateItem(actor, i),
+  }),
+  /**
+   * For API tokens: the one write a triage bot needs. Strict, so any other field (title, status…)
+   * is refused rather than ignored; the service applies the same permission checks as item.update.
+   */
+  "item.triage": proc({
+    input: z.strictObject({ itemId: idSchema, assigneeId: idSchema.nullable().optional(), tagIds: z.array(idSchema).max(30).optional() }),
+    limit: { max: 120, windowMs: 60_000 },
+    scope: (i) => ({ itemId: i.itemId }),
+    handler: ({ actor }, i) => forums.updateItem(actor, { itemId: i.itemId, assigneeId: i.assigneeId, tagIds: i.tagIds }),
   }),
   "item.setStatus": proc({
     input: z.object({ itemId: idSchema, status: itemStatusSchema, resolution: itemResolutionSchema.nullable().optional() }),

@@ -6,4 +6,6 @@ export interface Actor {
   /** Browser tab id, echoed on realtime events so the tab can ignore its own changes. */
   clientId?: string | null;
   sessionId?: string | null;
+  /** Set when the call was authenticated with an API token instead of a session. */
+  tokenId?: string | null;
 }
