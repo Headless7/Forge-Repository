@@ -61,7 +61,7 @@ tag management, token management, account and studio procedures) is refused with
 | `item.get` | `{ "itemId" }` or `{ "forumId", "number" }` | one item with `description`, `attachments`, `comments`, `tagIds`, `assigneeId` |
 | `item.activity` | `{ "itemId" }` | the item's history (who changed what, when) |
 | `project.access` | `{ "projectId" }` | the project's people: `userId`, `displayName`, `username`, roles, `hasAccess`; no emails |
-| `item.triage` | `{ "itemId", "assigneeId"?, "tagIds"? }` | the updated item. Strict: any other field is a `400` |
+| `item.triage` | `{ "itemId", "assigneeId"?, "tagIds"?, "dueAt"? }` | the updated item. `dueAt` is an ISO datetime with offset, or `null`. Strict: any other field is a `400` |
 
 ### Finding ids
 

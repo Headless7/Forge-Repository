@@ -1243,14 +1243,19 @@ export const appRouter = {
     handler: ({ actor }, i) => forums.updateItem(actor, i),
   }),
   /**
-   * For API tokens: the one write a triage bot needs. Strict, so any other field (title, status…)
+   * For API tokens: the one write a triage bot needs (assignee, tags, due date). Strict, so any other field (title, status…)
    * is refused rather than ignored; the service applies the same permission checks as item.update.
    */
   "item.triage": proc({
-    input: z.strictObject({ itemId: idSchema, assigneeId: idSchema.nullable().optional(), tagIds: z.array(idSchema).max(30).optional() }),
+    input: z.strictObject({
+      itemId: idSchema,
+      assigneeId: idSchema.nullable().optional(),
+      tagIds: z.array(idSchema).max(30).optional(),
+      dueAt: isoDateSchema.nullable().optional(),
+    }),
     limit: { max: 120, windowMs: 60_000 },
     scope: (i) => ({ itemId: i.itemId }),
-    handler: ({ actor }, i) => forums.updateItem(actor, { itemId: i.itemId, assigneeId: i.assigneeId, tagIds: i.tagIds }),
+    handler: ({ actor }, i) => forums.updateItem(actor, { itemId: i.itemId, assigneeId: i.assigneeId, tagIds: i.tagIds, dueAt: i.dueAt }),
   }),
   "item.setStatus": proc({
     input: z.object({ itemId: idSchema, status: itemStatusSchema, resolution: itemResolutionSchema.nullable().optional() }),

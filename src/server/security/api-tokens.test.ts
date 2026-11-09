@@ -154,6 +154,18 @@ describe("API tokens", () => {
     expect(after).toMatchObject({ title: "Spawn pad flickers", tagIds: [] });
   });
 
+  it("item.triage sets a due date with the assignee", async () => {
+    const { token } = await issue(f.admin);
+    const item = await forums.createItem(f.member.actor, { forumId: bugsForumId, title: "Portal ring spins backwards" });
+    const dueAt = "2030-01-02T12:00:00.000Z";
+    const res = await call("item.triage", { itemId: item.id, assigneeId: f.manager.id, dueAt }, { bearer: token, origin: null });
+    expect(res.status).toBe(200);
+    const after = await forums.getItem(f.owner.actor, item.id);
+    expect(after).toMatchObject({ assigneeId: f.manager.id, dueAt });
+    const activity = await listItemActivity(item.id);
+    expect(activity.find((a) => a.type === "item.due_changed")?.actorId).toBe(bot.id);
+  });
+
   it("procedures outside the allowlist fail with FORBIDDEN, ineligible ones too", async () => {
     const { token } = await issue(f.admin);
     const item = await forums.createItem(f.member.actor, { forumId: bugsForumId, title: "Door sound plays twice" });

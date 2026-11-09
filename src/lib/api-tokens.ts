@@ -14,7 +14,7 @@ export const API_TOKEN_PROCEDURES: Record<ApiTokenProcedure, { group: "read" | "
   "item.get": { group: "read", description: "One item with its description, attachments and comments." },
   "item.activity": { group: "read", description: "An item's history." },
   "project.access": { group: "read", description: "The project's people and their ids (no emails)." },
-  "item.triage": { group: "write", description: "Set an item's assignee and tags. Nothing else: no status, title or deletion." },
+  "item.triage": { group: "write", description: "Set an item's assignee, tags and due date. Nothing else: no status, title or deletion." },
 };
 
 export function isApiTokenProcedure(name: string): name is ApiTokenProcedure {
